@@ -1,0 +1,2171 @@
+```
+Pour DEPOTPRO, je recommande une architecture **React Native + TypeScript + Rust**, avec un moteur métier unique partagé entre le mobile et la version ordinateur.
+
+Le principe directeur du prompt sera le suivant : **on développe une nouvelle interface mobile, mais on ne crée pas un deuxième système de gestion**. Les ventes, les stocks, les achats, les comptes clients, les emballages et les règles de calcul restent sous la responsabilité du cœur métier Rust.
+
+Le prompt ci-dessous prévoit également une synchronisation hors ligne contrôlée : une vente réalisée sans Internet est enregistrée localement, puis transmise au serveur dès que la connexion revient. En cas de conflit entre plusieurs appareils, le système doit le détecter plutôt que modifier silencieusement les stocks.
+
+# MASTER PROMPT — DEPOTPRO MOBILE PREMIUM
+
+## Application mobile Android & iOS avec React Native + TypeScript + Rust
+
+**Version du cahier de développement :** DEPOTPRO MOBILE PREMIUM V1\
+**Projet parent :** DEPOTPRO PREMIUM V3\
+**Cible :** Android et iOS\
+**Architecture :** React Native + TypeScript + Rust + SQLite + API Axum\
+**Intégration :** version ordinateur DEPOTPRO React + TypeScript + Tauri\
+**Marché prioritaire :** Côte d'Ivoire, puis Afrique francophone\
+**Langue principale :** Français (fr-CI)\
+**Devise :** FCFA (XOF)\
+**Mode de fonctionnement :** Offline-first avec synchronisation multi-appareils
+
+---
+
+# PARTIE 1 — MISSION ET OBJECTIF
+
+Tu es un agent IA senior spécialisé en architecture logicielle, Rust, React Native, TypeScript, SQLite, Tauri, applications de gestion commerciale, synchronisation distribuée et développement mobile multiplateforme.
+
+Ta mission est de concevoir et développer **DEPOTPRO MOBILE PREMIUM**, une véritable application mobile professionnelle permettant aux propriétaires et employés de dépôts de boissons de gérer leurs activités depuis un smartphone Android ou iOS.
+
+Cette application mobile doit être le prolongement fonctionnel de DEPOTPRO PREMIUM Desktop.
+
+Elle ne doit pas être un projet indépendant, une simple démonstration graphique ou une application de consultation des données.
+
+Elle doit réellement permettre de gérer :
+
+- Les produits et les catalogues de boissons.
+- Les prix d'achat et de vente.
+- Les ventes au détail et en gros.
+- Les ventes par casier, carton, pack, bouteille et canette.
+- Les commandes mixtes.
+- Les bouteilles vides et les casiers plastiques retournables.
+- Les comptes clients et les crédits.
+- Les fournisseurs et les achats.
+- Les retours d'emballages aux fournisseurs.
+- Les stocks de boissons pleines et d'emballages vides.
+- La caisse, les paiements et les dépenses.
+- Les reçus, les bordereaux et les rapports.
+- La synchronisation avec la version ordinateur.
+
+L'application doit être suffisamment robuste pour être utilisée quotidiennement dans un véritable dépôt de boissons.
+
+## 1.1 Objectif commercial
+
+Construire un produit premium commercialisable sous forme de solution de gestion pour les dépôts de boissons en Côte d'Ivoire.
+
+L'application doit être conçue pour fonctionner aussi bien :
+
+- Dans un petit dépôt exploité par une seule personne.
+- Dans un dépôt avec plusieurs employés.
+- Dans un dépôt avec plusieurs téléphones et un ordinateur.
+- Dans une entreprise possédant plusieurs points de vente.
+- Dans une installation temporairement dépourvue de connexion Internet.
+
+## 1.2 Règle fondamentale
+
+**Un seul moteur métier, plusieurs interfaces.**
+
+React Native ne doit pas réimplémenter les règles métier déjà présentes ou prévues dans Rust.
+
+Le cœur Rust doit rester responsable des validations, calculs, transactions, mouvements de stock, soldes d'emballages, règles de crédit et opérations sensibles.
+
+React Native est responsable de l'interface mobile, de la présentation des informations, de la navigation et des interactions utilisateur.
+
+Le serveur Axum est responsable de la réception des opérations synchronisées, de leur validation côté serveur, de la cohérence globale et de la distribution des modifications aux autres appareils.
+
+---
+
+# PARTIE 2 — AUDIT OBLIGATOIRE DU PROJET EXISTANT
+
+## 2.1 Dépôt de référence
+
+Le projet parent est :
+
+`https://github.com/koffidominique/ss_depot_rust.git`
+
+La branche de référence indiquée est `main`.
+
+La version de référence précédemment identifiée est `3.0.0`.
+
+Ces informations sont à vérifier dans le dépôt avant tout développement. Ne suppose jamais que le dépôt est resté identique depuis le dernier audit.
+
+## 2.2 Première mission : comprendre l'existant
+
+Avant d'écrire du code, réalise un audit complet du dépôt.
+
+Examine :
+
+- L'organisation du workspace Rust.
+- Le crate `depotpro-core`.
+- Le crate `depotpro-server`.
+- Le module `src-tauri`.
+- Le frontend React et TypeScript.
+- Les clients HTTP et Tauri.
+- Les services métier.
+- Les modèles et DTO.
+- Les migrations SQLite.
+- Les composants et écrans existants.
+- Les mécanismes d'authentification.
+- Les tests unitaires et end-to-end.
+- Les scripts de compilation.
+- La configuration CI/CD.
+
+Identifie les fonctions métier déjà disponibles et celles qui restent à développer.
+
+Ne recrée pas une fonction qui existe déjà sans raison technique documentée.
+
+## 2.3 Protection du projet
+
+Avant toute modification :
+
+1. Inspecter `git status`.
+2. Vérifier les branches existantes.
+3. Identifier les fichiers modifiés et non suivis.
+4. Vérifier les migrations déjà appliquées.
+5. Identifier les bases de données et sauvegardes existantes.
+6. Vérifier les tests et compilations de référence.
+7. Établir un rapport de référence.
+
+Créer une branche de travail dédiée, par exemple :
+
+`feature/depotpro-mobile-premium`
+
+Ne jamais écraser les modifications utilisateur.
+
+Ne jamais supprimer une base SQLite existante.
+
+Ne jamais modifier directement une base de production pour réaliser un test.
+
+Ne jamais lancer une migration destructive sans stratégie de sauvegarde et de retour arrière.
+
+Le développement mobile doit être progressif et isolé de la version ordinateur jusqu'à validation de l'intégration.
+
+## 2.4 Architecture existante à rationaliser
+
+L'architecture cible du projet parent comprend :
+
+- React + TypeScript pour l'interface ordinateur.
+- Tauri 2 pour les applications Windows et macOS.
+- Rust pour les règles métier et les services locaux.
+- Axum pour l'API centrale.
+- SQLite pour les bases locales.
+- SQLx pour les accès SQL du backend lorsque cela est compatible avec l'architecture retenue.
+
+Le dépôt a précédemment été identifié comme contenant également un backend Node/Express historique.
+
+Ne conserve pas deux implémentations concurrentes des règles métier.
+
+Le backend Node/Express ne doit pas être livré comme serveur métier final. Toutefois, sa suppression ne peut intervenir qu'après migration complète des fonctionnalités nécessaires vers Rust, vérification de la parité et réussite des tests.
+
+Node.js peut rester présent comme outil de compilation du frontend, de gestion de dépendances ou d'outillage React Native. Il ne doit pas devenir un serveur métier concurrent.
+
+---
+
+# PARTIE 3 — ARCHITECTURE TECHNIQUE CIBLE
+
+## 3.1 Stack mobile obligatoire
+
+### Application mobile
+
+- React Native.
+- TypeScript strict.
+- React Native New Architecture.
+- Turbo Native Modules pour les connexions natives personnalisées.
+- React Navigation pour la navigation.
+- TanStack Query pour la gestion des requêtes et du cache.
+- Zustand pour les états d'interface.
+- Zod pour la validation des formulaires et contrats côté interface.
+- Une solution de stockage sécurisé native compatible Android et iOS.
+- Une solution de détection de connectivité réseau.
+
+Les versions des dépendances doivent être les versions stables et compatibles au démarrage du projet. Vérifie les documentations officielles et les notes de compatibilité avant de fixer les versions.
+
+Préférer une architecture React Native CLI ou un environnement Expo avec prebuild et modules natifs personnalisés si leur compatibilité est démontrée.
+
+Ne pas utiliser Expo Go comme environnement final lorsque l'application dépend de modules natifs Rust personnalisés.
+
+### Moteur métier
+
+Rust doit être utilisé pour :
+
+- Les règles de gestion.
+- Les calculs commerciaux.
+- Les validations.
+- La gestion des stocks.
+- Les mouvements d'emballages.
+- Les écritures de caisse.
+- Les opérations de crédit.
+- Les transactions métier.
+- La préparation des commandes de synchronisation.
+- La validation des commandes entrantes du serveur.
+
+### Serveur
+
+Axum est le seul serveur HTTP métier.
+
+Il fournit les services de :
+
+- Authentification.
+- Gestion des établissements et points de vente.
+- Synchronisation.
+- Gestion des utilisateurs et rôles.
+- Réception des opérations mobiles et ordinateur.
+- Distribution des modifications.
+- Gestion des conflits.
+- Historique des opérations.
+- Administration et supervision.
+
+### Base de données
+
+SQLite est utilisé pour les bases locales.
+
+Le serveur possède sa propre base centrale, distincte des fichiers SQLite de chaque appareil.
+
+Ne jamais tenter de synchroniser directement le même fichier SQLite entre plusieurs téléphones et ordinateurs.
+
+Chaque appareil possède sa propre base locale et communique avec le serveur central par API.
+
+## 3.2 Schéma général
+
+Construire l'architecture suivante :
+
+```
+                  DEPOTPRO PREMIUM
+                         |
+            +------------+------------+
+            |                         |
+      VERSION DESKTOP             VERSION MOBILE
+      React + TypeScript        React Native + TypeScript
+            |                         |
+         Tauri 2                Turbo Native Modules
+            |                         |
+            +------------+------------+
+                         |
+                  CŒUR MÉTIER RUST
+                    depotpro-core
+                         |
+             +-----------+-----------+
+             |                       |
+        Services locaux        Serveur Axum
+             |                       |
+       SQLite local            API HTTPS
+                                     |
+                              Base centrale
+                                     |
+                            Synchronisation
+                                     |
+                       +-------------+-------------+
+                       |                           |
+                  MOBILE A                     MOBILE B
+                  SQLite                       SQLite
+```
+
+Cette représentation est logique. L'implémentation réelle doit tenir compte des différences entre le runtime desktop, le runtime serveur et les bibliothèques mobiles.
+
+## 3.3 Intégration Rust / React Native
+
+Le cœur métier existant doit être réutilisé autant que possible.
+
+Étudie une bibliothèque Rust mobile compilée pour Android et iOS et exposant ses fonctions par une interface native typée.
+
+Approche privilégiée à évaluer :
+
+1. Extraire les fonctions métier réutilisables dans `depotpro-core`.
+2. Créer un crate d'interface mobile, par exemple `depotpro-mobile-ffi`.
+3. Compiler les bibliothèques Rust pour Android et iOS.
+4. Exposer une API native avec UniFFI ou une solution FFI maintenue et compatible.
+5. Créer une couche native Android en Kotlin.
+6. Créer une couche native iOS en Swift.
+7. Exposer ces fonctions à React Native sous forme de Turbo Native Module avec Codegen.
+8. Fournir des interfaces TypeScript stables aux écrans mobiles.
+
+Le module natif doit exposer des commandes clairement identifiées :
+
+- `initializeDatabase`
+- `authenticate`
+- `getDashboard`
+- `createSale`
+- `validateSale`
+- `createMixedOrder`
+- `registerPackagingReturn`
+- `createPurchaseOrder`
+- `receivePurchase`
+- `getInventory`
+- `getCustomerAccount`
+- `getSupplierAccount`
+- `recordPayment`
+- `getPendingOperations`
+- `startSynchronization`
+- `getSynchronizationStatus`
+
+Les noms définitifs doivent être définis dans un contrat d'API documenté.
+
+**Attention :** ne sélectionne pas automatiquement un binding Rust/React Native uniquement parce qu'il existe. Certains générateurs spécialisés peuvent être encore expérimentaux. Vérifie leur maturité, leur maintenance, leur compatibilité avec la New Architecture et leur comportement réel sur Android et iOS.
+
+Réalise un prototype de faisabilité avant de verrouiller cette architecture.
+
+Le prototype doit démontrer :
+
+- L'appel d'une fonction Rust depuis TypeScript.
+- La transmission d'un DTO.
+- La gestion d'une erreur Rust.
+- Une opération SQLite locale.
+- Une transaction avec rollback.
+- La compilation sur Android.
+- La compilation sur iOS.
+- Une exécution qui ne bloque pas le thread graphique.
+
+Si une approche native présente un risque important, documente une alternative avant de poursuivre.
+
+## 3.4 Accès à SQLite
+
+L'application doit avoir un propriétaire clairement identifié pour ses données locales.
+
+Architecture recommandée :
+
+- Le module Rust mobile possède les accès critiques à SQLite.
+- React Native utilise des fonctions natives typées pour lire et écrire les données métier.
+- Les transactions sensibles sont effectuées côté Rust.
+- Le serveur Axum possède sa propre couche de persistance.
+- Les migrations SQL sont versionnées et partagées autant que possible.
+
+Le backend serveur peut conserver SQLx.
+
+Pour la partie mobile, évalue la faisabilité de réutiliser SQLx ou d'utiliser un adaptateur SQLite natif Rust tel que `rusqlite`.
+
+Le choix doit être fondé sur un test réel de compilation, de transactions, de performances et de maintenance sur les deux plateformes.
+
+Il est acceptable d'avoir plusieurs adaptateurs de stockage si les règles métier restent communes et que les contrats sont testés.
+
+Ne laisse jamais les écrans effectuer directement des mises à jour critiques de stock ou de comptes d'emballages.
+
+---
+
+# PARTIE 4 — FONCTIONNEMENT OFFLINE-FIRST
+
+## 4.1 Principe
+
+L'application doit rester utilisable même sans connexion Internet.
+
+La connexion réseau améliore la coordination avec le serveur, mais ne doit pas être une condition obligatoire pour enregistrer une opération locale autorisée.
+
+Les fonctionnalités suivantes doivent fonctionner hors ligne :
+
+- Consultation des produits synchronisés.
+- Consultation des prix disponibles.
+- Consultation du stock local connu.
+- Création d'une vente.
+- Création d'une commande mixte.
+- Enregistrement d'un retour d'emballage.
+- Enregistrement d'un paiement.
+- Création d'une commande fournisseur.
+- Réception d'un achat selon les autorisations locales.
+- Consultation des comptes locaux.
+- Consultation des reçus déjà créés.
+- Consultation des rapports calculables à partir des données locales.
+
+Une opération réalisée hors ligne doit être enregistrée durablement avant de confirmer son succès à l'utilisateur.
+
+## 4.2 Base locale
+
+La base locale SQLite doit conserver :
+
+- Les données de l'établissement.
+- Les produits et variantes.
+- Les prix synchronisés.
+- Les fournisseurs.
+- Les clients.
+- Les utilisateurs et permissions locales nécessaires.
+- Les stocks connus.
+- Les ventes.
+- Les lignes de vente.
+- Les achats.
+- Les paiements.
+- Les mouvements de caisse.
+- Les mouvements d'emballages.
+- Les comptes partenaires.
+- Les documents commerciaux.
+- Les opérations en attente.
+- Les curseurs de synchronisation.
+- Les métadonnées de réplication.
+
+Chaque appareil doit être identifié avec un identifiant stable.
+
+Prévoir notamment :
+
+- `tenant_id`
+- `branch_id`
+- `device_id`
+- `user_id`
+- `operation_id`
+- `local_sequence`
+- `server_sequence`
+- `schema_version`
+
+Les données locales doivent être conservées après fermeture et redémarrage de l'application.
+
+## 4.3 File d'attente des opérations
+
+Créer une table `sync_outbox`.
+
+Chaque opération enregistrée localement doit disposer de :
+
+- Un identifiant UUID unique.
+- Un type de commande.
+- Son payload.
+- L'identifiant du point de vente.
+- L'identifiant de l'appareil.
+- L'identifiant de l'utilisateur.
+- Un numéro de séquence locale.
+- La date de création.
+- La version du schéma.
+- Un statut.
+- Un compteur de tentatives.
+- La dernière erreur éventuelle.
+- Un identifiant d'idempotence.
+
+Statuts possibles :
+
+- `PENDING`
+- `SYNCING`
+- `SYNCED`
+- `CONFLICT`
+- `FAILED`
+- `CANCELLED`
+
+Ne supprime pas une opération en attente simplement parce qu'une tentative de synchronisation a échoué.
+
+Les opérations doivent être réessayées avec backoff exponentiel et une légère variation aléatoire.
+
+Éviter les tentatives infinies rapides qui saturent la batterie et le réseau.
+
+## 4.4 Synchronisation montante
+
+Lorsqu'une connexion est disponible :
+
+1. Vérifier l'authentification.
+2. Vérifier l'identité du terminal.
+3. Récupérer les opérations en attente.
+4. Les classer dans leur ordre de dépendance.
+5. Transmettre les opérations au serveur.
+6. Vérifier la réponse pour chaque opération.
+7. Marquer comme synchronisées uniquement celles confirmées.
+8. Enregistrer les conflits.
+9. Conserver les opérations rejetées pour diagnostic ou correction.
+10. Mettre à jour les indicateurs de synchronisation.
+
+La transmission doit être idempotente.
+
+Si un téléphone renvoie une vente déjà acceptée à cause d'une coupure réseau, le serveur doit reconnaître l'identifiant de l'opération et empêcher une seconde écriture.
+
+## 4.5 Synchronisation descendante
+
+Le téléphone doit récupérer les mises à jour du serveur :
+
+- Nouveaux produits.
+- Modifications de prix.
+- Nouveaux clients.
+- Modifications de fournisseurs.
+- Modifications de permissions.
+- Mouvements validés sur les autres appareils.
+- Ajustements de stock.
+- Modifications des référentiels.
+- Décisions de résolution des conflits.
+
+Utiliser un curseur de synchronisation serveur.
+
+Ne pas récupérer l'intégralité de la base à chaque synchronisation.
+
+Prévoir :
+
+- Pagination.
+- Synchronisation incrémentale.
+- Tombstones pour les suppressions logiques.
+- Versionnement du schéma.
+- Reprise après interruption.
+- Réinitialisation complète contrôlée si nécessaire.
+
+## 4.6 Synchronisation automatique
+
+Déclencher la synchronisation :
+
+- Au démarrage de l'application.
+- Au retour au premier plan.
+- Lors du rétablissement du réseau.
+- Après certaines opérations importantes.
+- Lors d'une action manuelle de l'utilisateur.
+- En tâche de fond lorsque le système mobile l'autorise.
+
+Ne promets jamais une synchronisation en arrière-plan parfaitement permanente : Android et iOS peuvent suspendre les applications.
+
+L'interface doit clairement indiquer :
+
+- En ligne.
+- Hors ligne.
+- Synchronisation en cours.
+- Opérations en attente.
+- Conflits à résoudre.
+- Dernière synchronisation réussie.
+
+## 4.7 Gestion des conflits
+
+La gestion des conflits est une fonctionnalité critique.
+
+Ne pas utiliser une stratégie générale de type « dernière modification gagnante » pour les stocks, les paiements ou les comptes d'emballages.
+
+Les politiques doivent distinguer :
+
+**Données de référence :**
+
+Pour certains champs descriptifs, une stratégie versionnée de résolution peut être admise.
+
+**Opérations financières et commerciales :**
+
+Les ventes, paiements, retours et mouvements doivent être conservés comme des faits immuables.
+
+**Stock :**
+
+Le serveur central doit vérifier les mouvements concurrents et les quantités réellement disponibles selon les règles de l'établissement.
+
+**Crédits et emballages :**
+
+Le serveur doit valider les mouvements et produire les soldes globaux.
+
+Lorsqu'un conflit intervient :
+
+- Conserver l'opération locale.
+- Ne pas l'effacer.
+- Afficher le type de conflit.
+- Expliquer ce qui a été accepté ou rejeté.
+- Proposer une résolution contrôlée selon les droits.
+- Conserver une trace d'audit.
+- Ne jamais modifier silencieusement les documents historiques.
+
+### Attention aux ventes hors ligne
+
+Si deux téléphones vendent simultanément la dernière quantité disponible alors qu'ils sont déconnectés, aucun système ne peut garantir que les deux ventes seront compatibles avec le stock central sans mécanisme de réservation ou de quotas.
+
+L'application doit donc :
+
+- Afficher le dernier stock connu et son heure de mise à jour.
+- Identifier les opérations réalisées hors ligne.
+- Appliquer une politique de vente hors ligne configurable.
+- Permettre des quotas de stock réservés par appareil si nécessaire.
+- Refuser ou signaler les conflits selon les règles de l'établissement.
+- Présenter les opérations non encore confirmées par le serveur comme telles.
+
+Ne pas afficher un stock global parfaitement garanti lorsqu'il ne l'est pas.
+
+---
+
+# PARTIE 5 — MODÈLE MÉTIER DU DÉPÔT DE BOISSONS
+
+Cette partie est obligatoire. Elle doit être partagée entre mobile et ordinateur.
+
+## 5.1 Catalogue de produits
+
+Chaque produit doit pouvoir être configuré avec :
+
+- Nom commercial.
+- Marque.
+- Catégorie.
+- Référence interne.
+- Code-barres éventuel.
+- Contenance.
+- Type de contenant.
+- Matière : verre, PET, aluminium ou autre.
+- Statut : actif, archivé.
+- Description.
+- Photo facultative.
+
+Les variantes doivent être distinguées.
+
+Exemples de variantes :
+
+- Beaufort 33 cl.
+- Beaufort 50 cl.
+- Bock 65 cl.
+- Coca-Cola 33 cl.
+- Eau 1,5 L.
+- Vin 75 cl.
+
+Ne considère jamais deux contenants comme physiquement compatibles uniquement parce qu'ils ont le même volume.
+
+## 5.2 Gestion des unités commerciales
+
+Prévoir les unités :
+
+- Casier.
+- Carton.
+- Bouteille.
+- Pack.
+- Canette.
+- Unité.
+- Demi-casier.
+- Fraction commerciale configurable.
+
+Les quantités physiques de bouteilles et de canettes doivent rester entières.
+
+Ne jamais créer une fraction physique de bouteille.
+
+Une demi-casier B24 correspond à 12 bouteilles lorsque ce format est configuré avec une capacité de 24.
+
+Une demi-casier B12 correspond à 6 bouteilles.
+
+La quantité est toujours calculée depuis la capacité réelle configurée.
+
+## 5.3 Séparer les différents types d'emballages
+
+Le système doit distinguer trois éléments :
+
+1. Le stock de boissons pleines.
+2. Le stock de bouteilles vides réutilisables.
+3. Le stock de casiers plastiques réutilisables.
+
+Les emballages jetables doivent constituer une catégorie distincte.
+
+Exemples :
+
+- Bouteilles PET.
+- Canettes.
+- Packs sous film.
+- Cartons jetables.
+
+Ne crée pas automatiquement de dette d'emballage pour ces produits jetables.
+
+La réutilisation et le retour doivent être configurés par produit ou option d'emballage.
+
+## 5.4 Gestion physique des casiers
+
+Prévoir une table `crate_types`.
+
+Exemples de références à configurer :
+
+- B24-33
+- B12-50
+- B12-60
+- B12-65
+- B12-75
+- B12-100
+- B20-50
+- B6-150
+
+Ces références sont des exemples de configuration, pas des normes universelles.
+
+Chaque type de casier doit avoir :
+
+- Un code.
+- Un nom.
+- Une capacité.
+- Le nombre de compartiments.
+- Les dimensions si connues.
+- Le statut réutilisable ou jetable.
+- Un profil physique.
+- Un groupe de compatibilité.
+- Une valeur de remplacement éventuelle.
+- Une valeur de consigne éventuelle, uniquement si réellement applicable.
+
+L'administrateur doit pouvoir créer et modifier des formats.
+
+La compatibilité physique doit être explicitement vérifiée et configurée.
+
+## 5.5 Gestion des commandes mixtes
+
+L'application doit permettre de composer un casier avec plusieurs références de boissons, lorsque leurs emballages sont compatibles.
+
+Exemple :
+
+Un client commande :
+
+- 6 bouteilles de Drogba 50 cl.
+- 6 bouteilles de Beaufort 50 cl.
+
+Si les deux références utilisent réellement le même profil physique de casier B12-50 et que le mélange est autorisé, elles peuvent occuper les 12 emplacements d'un même casier.
+
+Le système doit enregistrer :
+
+- La référence exacte de chaque boisson.
+- La quantité par référence.
+- Le type de casier.
+- La quantité totale d'emplacements utilisés.
+- Les bouteilles vides attendues.
+- Les bouteilles vides reçues.
+- Le casier plastique attendu.
+- Le casier plastique reçu.
+
+Autres exemples :
+
+- 4 + 4 + 4 bouteilles compatibles.
+- 12 bouteilles d'une même référence.
+- 6 bouteilles d'une référence et 6 d'une autre.
+- Demi-casier lorsque la fraction est autorisée.
+
+Interdire :
+
+- Un dépassement de capacité.
+- Le mélange de groupes incompatibles.
+- Les quantités fractionnaires de bouteilles.
+- Une compatibilité déduite uniquement du volume.
+- La validation d'un casier si son remplissage physique est incohérent.
+
+## 5.6 Retours partiels d'emballages
+
+Exemple :
+
+Un client reçoit un casier mixte de 12 bouteilles :
+
+- 6 bouteilles Drogba.
+- 6 bouteilles Beaufort.
+
+Il retourne :
+
+- 6 bouteilles Drogba vides.
+- 4 bouteilles Beaufort vides.
+- 1 casier plastique.
+
+Le système enregistre :
+
+- 10 bouteilles vides reçues.
+- 2 bouteilles Beaufort encore dues.
+- 1 casier plastique reçu.
+- Le statut du retour comme partiel.
+
+Ne transforme jamais automatiquement les deux éléments manquants en frais.
+
+Une valeur financière doit être enregistrée uniquement si le dépôt a configuré une règle réelle de facturation ou de garantie.
+
+## 5.7 Gestion des comptes emballages
+
+Créer un véritable registre des mouvements d'emballages.
+
+Les soldes doivent être consultables :
+
+- Par client.
+- Par fournisseur.
+- Par type de casier.
+- Par référence de bouteille.
+- Par point de vente.
+- Par document commercial.
+
+Les mouvements doivent être historisés.
+
+Exemple de compte client :
+
+| Mouvement                  | B24-33 | B12-50 |
+| -------------------------- | ------ | ------ |
+| Emballages remis au client | 2      | 3      |
+| Emballages récupérés       | 2      | 2      |
+| Solde physique attendu     | 0      | 1      |
+
+La même logique s'applique aux bouteilles vides par référence exacte.
+
+Un solde positif ou négatif doit être interprétable sans ambiguïté.
+
+Prévoir un registre immuable avec :
+
+- Type de mouvement.
+- Partenaire.
+- Produit ou profil de bouteille.
+- Type de casier.
+- Quantité.
+- Sens du mouvement.
+- Document source.
+- Date.
+- Utilisateur.
+- Appareil.
+- Motif.
+
+Toute correction doit être faite par une écriture inverse ou corrective, et non par modification arbitraire d'un ancien mouvement.
+
+---
+
+# PARTIE 6 — MODULES ET ÉCRANS MOBILES
+
+L'interface doit être pensée pour les petits écrans et l'utilisation intensive au comptoir.
+
+Les boutons doivent être suffisamment grands, les formulaires courts et les informations essentielles immédiatement visibles.
+
+## 6.1 Navigation principale
+
+Prévoir une navigation mobile simple avec cinq entrées principales :
+
+1. Accueil.
+2. Ventes.
+3. Stock.
+4. Clients.
+5. Menu.
+
+Le menu donne accès aux achats, fournisseurs, caisse, rapports, catalogue et paramètres.
+
+La navigation doit être fluide et persistante.
+
+## 6.2 Écran de connexion
+
+Créer :
+
+- Logo DEPOTPRO.
+- Nom de l'établissement.
+- Connexion utilisateur.
+- Code PIN ou méthode sécurisée autorisée.
+- Mot de passe si activé.
+- Sélection du point de vente selon les droits.
+- Informations de connexion.
+- Indicateur de synchronisation.
+
+Les sessions doivent avoir une durée de vie définie et des mécanismes de révocation.
+
+## 6.3 Tableau de bord
+
+Afficher :
+
+- Chiffre d'affaires du jour.
+- Nombre de ventes.
+- Encaissements.
+- Dépenses.
+- Crédits accordés.
+- Créances clients.
+- Dettes fournisseurs.
+- Valeur indicative du stock.
+- Alertes de rupture.
+- Alertes de stock bas.
+- Alertes d'emballages.
+- Activité récente.
+- État de synchronisation.
+
+Les indicateurs doivent distinguer les données locales non synchronisées des données confirmées par le serveur.
+
+## 6.4 Écran de vente rapide
+
+Créer une interface POS adaptée au téléphone :
+
+- Recherche de produit.
+- Recherche par marque.
+- Recherche par catégorie.
+- Filtre par contenance.
+- Filtre par type de contenant.
+- Produits favoris.
+- Panier.
+- Modification des quantités.
+- Sélection du client.
+- Sélection du tarif applicable.
+- Calcul du total.
+- Remise autorisée.
+- Paiement.
+- Validation.
+
+Prévoir une expérience utilisable d'une seule main.
+
+Les calculs financiers doivent utiliser des valeurs entières en FCFA ou un type monétaire exact.
+
+Ne pas utiliser `Number` et `Math.round()` comme mécanisme de comptabilité.
+
+Les règles de prix et de calcul sont exécutées par Rust.
+
+## 6.5 Écran commande mixte
+
+Créer un assistant de composition.
+
+Étapes :
+
+1. Sélection du groupe de casier.
+2. Affichage de la capacité.
+3. Sélection des produits compatibles.
+4. Saisie des quantités.
+5. Barre de progression du remplissage.
+6. Vérification de la capacité.
+7. Composition finale.
+8. Calcul du montant.
+9. Enregistrement des emballages attendus.
+
+Afficher clairement :
+
+`12 / 12 bouteilles`
+
+Chaque ligne doit afficher la quantité, la référence et le prix appliqué.
+
+## 6.6 Écran paiement
+
+Prévoir :
+
+- Espèces.
+- Paiement mobile configuré.
+- Virement.
+- Chèque.
+- Paiement mixte.
+- Paiement partiel.
+- Paiement à crédit.
+
+Ne considère pas qu'un paiement mobile est réellement encaissé uniquement parce que l'utilisateur a sélectionné un opérateur.
+
+Une intégration de paiement doit utiliser une API ou une confirmation validée.
+
+Le paiement doit être enregistré avec :
+
+- Montant.
+- Moyen.
+- Référence éventuelle.
+- Date.
+- Utilisateur.
+- Document associé.
+
+## 6.7 Écran reçu client
+
+Générer un reçu contenant :
+
+- Informations du dépôt.
+- Numéro du reçu.
+- Date et heure.
+- Client.
+- Lignes de boissons.
+- Quantités.
+- Prix unitaires.
+- Totaux.
+- Remises autorisées.
+- Paiement reçu.
+- Solde éventuel.
+- Mentions utiles.
+
+Ajouter une section distincte pour les emballages :
+
+- Casiers attendus.
+- Casiers reçus.
+- Bouteilles vides attendues.
+- Bouteilles vides reçues.
+- Quantités manquantes.
+- Quantités restant à restituer.
+
+Permettre :
+
+- Export PDF.
+- Partage par WhatsApp.
+- Partage par e-mail.
+- Impression sur une imprimante compatible.
+
+Un reçu commercial ne doit pas être présenté comme une facture normalisée si les conditions légales applicables ne sont pas remplies.
+
+## 6.8 Écran clients
+
+Prévoir :
+
+- Liste des clients.
+- Recherche.
+- Création.
+- Modification.
+- Archivage logique.
+- Historique des achats.
+- Paiements.
+- Crédits.
+- Solde.
+- Compte des emballages.
+- Historique des retours.
+- Dernier achat.
+
+La fiche client doit proposer une vue séparée :
+
+**Compte financier**
+
+- Total des achats.
+- Total payé.
+- Créances.
+- Historique des règlements.
+
+**Compte emballages**
+
+- Casiers attendus.
+- Casiers retournés.
+- Bouteilles attendues.
+- Bouteilles retournées.
+- Soldes par référence.
+
+Ne pas fusionner ces deux comptes.
+
+## 6.9 Écran fournisseurs
+
+Afficher :
+
+- Liste des fournisseurs.
+- Contacts.
+- Historique des achats.
+- Prix négociés.
+- Dettes.
+- Paiements.
+- Emballages remis.
+- Emballages récupérés.
+- Solde emballages.
+- Historique des retours.
+
+## 6.10 Écran achats
+
+Prévoir :
+
+- Création d'un bon de commande fournisseur.
+- Sélection du fournisseur.
+- Sélection des produits.
+- Quantités.
+- Prix d'achat.
+- Frais éventuels.
+- Montant prévisionnel.
+- Emballages vides remis.
+- Emballages attendus en retour.
+- Validation.
+- Réception partielle ou totale.
+
+Différencier :
+
+- Le montant des boissons achetées.
+- Le montant des emballages.
+- Les éventuels frais ou garanties réels.
+- Le montant payé.
+- Le solde fournisseur.
+- Les emballages restant dus.
+
+Ne pas mélanger les montants financiers et les quantités physiques.
+
+## 6.11 Réception fournisseur
+
+L'application doit permettre de réceptionner une commande en contrôlant :
+
+- Quantité commandée.
+- Quantité reçue.
+- Quantité manquante.
+- Produit endommagé.
+- Prix réellement facturé.
+- Casier plastique remis au fournisseur.
+- Bouteilles vides remises par profil.
+- Écart d'emballage.
+- Paiement effectué.
+- Solde restant.
+
+Une réception partielle ne doit pas valider automatiquement les quantités non reçues.
+
+## 6.12 Écran stock
+
+Prévoir des vues séparées :
+
+**Stock de boissons pleines**
+
+- Quantité par référence.
+- Quantité par unité.
+- Valeur de stock.
+- Alertes.
+
+**Stock de bouteilles vides**
+
+- Quantité par référence.
+- Profil physique.
+- Disponibilité.
+
+**Stock de casiers plastiques**
+
+- Quantité par type.
+- Capacité.
+- Compatibilité.
+
+**Stock d'emballages jetables**
+
+- Packs.
+- Cartons.
+- Films.
+- Autres unités.
+
+Prévoir inventaire physique, correction encadrée, historique et justification.
+
+## 6.13 Caisse et finances
+
+Prévoir :
+
+- Ouverture de caisse.
+- Fond de caisse.
+- Encaissements.
+- Décaissements.
+- Dépenses.
+- Paiements fournisseurs.
+- Remboursements.
+- Clôture.
+- Écart de caisse.
+- Historique.
+
+Les écritures de caisse doivent être traçables et ne doivent pas être modifiées silencieusement.
+
+## 6.14 Rapports
+
+Créer des vues adaptées aux mobiles :
+
+- Ventes du jour.
+- Ventes par période.
+- Ventes par produit.
+- Ventes par employé.
+- Achats.
+- Marge estimée.
+- Encaissements.
+- Dépenses.
+- Crédits clients.
+- Dettes fournisseurs.
+- État des emballages.
+- Ruptures de stock.
+- Valeur du stock.
+
+Permettre les filtres de dates et l'export.
+
+Les indicateurs de bénéfice doivent être clairement différenciés du chiffre d'affaires et du total encaissé.
+
+## 6.15 Synchronisation et appareils
+
+Créer un écran dédié à la synchronisation :
+
+- État de connexion.
+- Nom de l'appareil.
+- Dernière synchronisation.
+- Nombre d'opérations en attente.
+- Nombre d'opérations synchronisées.
+- Conflits.
+- Erreurs.
+- Bouton synchroniser maintenant.
+- Historique.
+
+Permettre à l'administrateur de consulter les appareils autorisés et de révoquer un appareil perdu.
+
+---
+
+# PARTIE 7 — MODÈLE DE DONNÉES ET STRUCTURE SQLITE
+
+Avant de créer les migrations, examine les tables existantes.
+
+Ne recrée pas les mêmes entités sous des noms différents.
+
+Adapter le schéma existant au besoin.
+
+Les entités suivantes doivent être présentes fonctionnellement, même si leur organisation exacte varie.
+
+## 7.1 Organisation
+
+- `tenants`
+- `branches`
+- `users`
+- `roles`
+- `permissions`
+- `user_branch_access`
+- `devices`
+
+## 7.2 Catalogue
+
+- `brands`
+- `product_categories`
+- `products`
+- `product_variants`
+- `bottle_profiles`
+- `crate_types`
+- `crate_compatibility_groups`
+- `product_packaging_options`
+- `packaging_units`
+- `price_lists`
+- `price_history`
+
+## 7.3 Partenaires
+
+- `customers`
+- `suppliers`
+- `customer_accounts`
+- `supplier_accounts`
+
+## 7.4 Ventes
+
+- `sales`
+- `sale_lines`
+- `mixed_case_groups`
+- `mixed_case_lines`
+- `payments`
+- `receipts`
+- `customer_credits`
+
+## 7.5 Achats
+
+- `purchase_orders`
+- `purchase_order_lines`
+- `purchase_receipts`
+- `purchase_receipt_lines`
+- `supplier_returns`
+
+## 7.6 Stock
+
+- `stock_movements`
+- `stock_balances`
+- `inventory_counts`
+- `inventory_adjustments`
+
+## 7.7 Emballages
+
+- `packaging_operations`
+- `packaging_operation_lines`
+- `partner_packaging_ledger`
+- `packaging_balances`
+- `packaging_return_documents`
+
+## 7.8 Caisse
+
+- `cash_sessions`
+- `cash_transactions`
+- `expenses`
+- `cash_movements`
+
+## 7.9 Synchronisation
+
+- `sync_outbox`
+- `sync_inbox`
+- `sync_cursors`
+- `sync_conflicts`
+- `sync_operations`
+- `idempotency_keys`
+- `audit_logs`
+
+Ces noms sont indicatifs. Le modèle final doit être validé à partir de l'existant.
+
+## 7.10 Contraintes de données
+
+Appliquer :
+
+- Clés primaires stables.
+- Clés étrangères.
+- Index adaptés aux recherches.
+- Contraintes CHECK.
+- Transactions.
+- Validations de quantité entière.
+- Contrôles de cohérence.
+- Dates normalisées.
+- Montants FCFA sans arrondis flottants.
+- Suppression logique des entités historiques.
+- Historique des prix.
+- Historique immuable des mouvements.
+
+Les quantités doivent être représentées par des entiers adaptés.
+
+Les montants doivent être conservés en unité monétaire minimale pertinente, ici le FCFA entier.
+
+Ne jamais utiliser de nombres flottants pour les écritures comptables.
+
+## 7.11 Migrations
+
+Créer un système de migrations versionné.
+
+Chaque migration doit être :
+
+- Identifiée.
+- Ordonnée.
+- Testée.
+- Réversible lorsque cela est raisonnablement possible.
+- Compatible avec les données existantes.
+
+Tester les migrations :
+
+1. Sur une base neuve.
+2. Sur une copie d'une ancienne base.
+3. Sur une base contenant ventes et achats.
+4. Sur une base contenant des mouvements d'emballages.
+5. Sur une base contenant des opérations synchronisées.
+
+Ne pas effacer les anciennes données pour simplifier la migration.
+
+---
+
+# PARTIE 8 — API AXUM ET CONTRATS DE SYNCHRONISATION
+
+## 8.1 API centrale
+
+Créer ou compléter une API versionnée :
+
+`/api/v1`
+
+Prévoir notamment :
+
+```
+POST   /api/v1/auth/login
+POST   /api/v1/auth/refresh
+POST   /api/v1/auth/logout
+
+GET    /api/v1/bootstrap
+GET    /api/v1/sync/status
+POST   /api/v1/sync/push
+GET    /api/v1/sync/pull
+
+GET    /api/v1/devices
+POST   /api/v1/devices/register
+POST   /api/v1/devices/revoke
+
+GET    /api/v1/products
+GET    /api/v1/customers
+GET    /api/v1/suppliers
+GET    /api/v1/inventory
+
+POST   /api/v1/conflicts/{id}/resolve
+GET    /api/v1/conflicts
+```
+
+Adapter les routes aux conventions déjà présentes.
+
+## 8.2 Format d'une opération
+
+Chaque opération envoyée doit posséder une enveloppe normalisée.
+
+Exemple conceptuel :
+
+```
+{
+  "operation_id": "UUID",
+  "tenant_id": "UUID",
+  "branch_id": "UUID",
+  "device_id": "UUID",
+  "user_id": "UUID",
+  "local_sequence": 125,
+  "schema_version": 1,
+  "command_type": "SALE_CREATE",
+  "occurred_at": "2026-11-18T10:30:00Z",
+  "base_revision": 42,
+  "idempotency_key": "UUID",
+  "payload": {}
+}
+```
+
+Le payload doit être fortement typé et versionné.
+
+Ne pas accepter aveuglément des JSON arbitraires.
+
+Les validations de sécurité et de cohérence doivent être effectuées côté serveur même si une validation a déjà été faite localement.
+
+## 8.3 Traitement serveur
+
+Pour chaque opération :
+
+1. Vérifier l'authentification.
+2. Vérifier l'autorisation.
+3. Vérifier l'établissement.
+4. Vérifier le point de vente.
+5. Vérifier l'appareil.
+6. Contrôler l'identifiant d'idempotence.
+7. Valider la version du schéma.
+8. Revalider les règles métier.
+9. Détecter les conflits.
+10. Exécuter une transaction atomique.
+11. Écrire les mouvements nécessaires.
+12. Écrire le journal d'audit.
+13. Enregistrer l'accusé de réception.
+14. Retourner le résultat.
+
+Une même opération ne doit jamais produire deux fois ses effets comptables ou physiques.
+
+## 8.4 Centralisation des règles
+
+Le serveur ne doit pas introduire une deuxième logique métier différente de `depotpro-core`.
+
+Les commandes doivent passer par les services communs.
+
+Les adaptateurs de persistance peuvent différer, mais les règles doivent être partagées et testées.
+
+---
+
+# PARTIE 9 — AUTHENTIFICATION, DROITS ET SÉCURITÉ
+
+Prévoir les rôles :
+
+- Propriétaire.
+- Administrateur.
+- Gérant.
+- Caissier.
+- Magasinier.
+- Comptable.
+- Consultation seule.
+
+Les droits doivent être configurables par établissement et éventuellement par point de vente.
+
+Prévoir :
+
+- Accès par session.
+- Durée de session.
+- Expiration.
+- Renouvellement sécurisé.
+- Révocation des appareils.
+- Verrouillage automatique.
+- Protection par PIN si activée.
+- Journal d'activité.
+- Contrôle des permissions à chaque commande sensible.
+
+Les secrets ne doivent jamais être stockés en clair dans SQLite ou AsyncStorage.
+
+Utiliser le stockage sécurisé adapté aux plateformes, fondé sur Keychain et Android Keystore.
+
+Les communications réseau doivent utiliser HTTPS.
+
+Ne pas considérer un identifiant d'appareil comme une preuve d'identité suffisante.
+
+Gérer les tentatives de connexion et les risques de brute force.
+
+Ne pas enregistrer de tokens, mots de passe ou données sensibles dans les journaux de débogage.
+
+Prévoir une procédure de révocation lorsqu'un téléphone est perdu ou volé.
+
+## 9.1 Protection des données locales
+
+Évaluer le chiffrement de la base SQLite et des sauvegardes.
+
+Ne jamais remplacer le moteur SQLite existant par SQLCipher sans démontrer la compatibilité, les migrations, les performances, les licences et la restauration sur Android, iOS, Windows et macOS.
+
+La sécurité doit être cohérente entre les appareils.
+
+---
+
+# PARTIE 10 — DESIGN ET EXPÉRIENCE UTILISATEUR
+
+L'interface doit être premium, professionnelle, moderne et rapide.
+
+## 10.1 Direction artistique
+
+Créer une identité graphique cohérente avec DEPOTPRO PREMIUM Desktop.
+
+Prévoir :
+
+- Thème clair.
+- Thème sombre.
+- Couleurs cohérentes.
+- Hiérarchie visuelle nette.
+- Cartes épurées.
+- Typographie lisible.
+- Icônes homogènes.
+- États de chargement.
+- États vides.
+- Messages d'erreur compréhensibles.
+- Retours visuels après chaque action.
+
+Ne pas reproduire mécaniquement les grands tableaux de la version ordinateur.
+
+Adapter chaque écran à l'ergonomie mobile.
+
+## 10.2 Responsive mobile
+
+Tester au minimum :
+
+- Petits écrans Android.
+- Écrans Android standards.
+- Grands écrans.
+- iPhone de différentes tailles.
+- Orientation prise en charge.
+- Claviers virtuels.
+- Zones système et safe areas.
+
+Les formulaires doivent rester utilisables lorsque le clavier apparaît.
+
+## 10.3 Animations
+
+Prévoir des animations fluides mais discrètes :
+
+- Transitions entre écrans.
+- Ouverture des menus.
+- Ajout au panier.
+- Confirmation de vente.
+- Chargement.
+- Changements de statut.
+- Messages de synchronisation.
+
+Ne pas ralentir les opérations de caisse avec des animations inutiles.
+
+Respecter les préférences de réduction des mouvements du système.
+
+## 10.4 Accessibilité
+
+Prévoir :
+
+- Contrastes suffisants.
+- Textes lisibles.
+- Cibles tactiles adéquates.
+- Labels d'accessibilité.
+- Support des lecteurs d'écran.
+- Messages d'erreur explicites.
+- Navigation clavier lorsque pertinente.
+- Indicateurs qui ne reposent pas uniquement sur les couleurs.
+
+---
+
+# PARTIE 11 — CONNEXION AVEC LA VERSION ORDINATEUR
+
+L'application mobile doit s'intégrer naturellement à DEPOTPRO Desktop.
+
+## 11.1 Scénario de fonctionnement
+
+Exemple :
+
+Le gérant ouvre DEPOTPRO sur son ordinateur.
+
+Un caissier ouvre DEPOTPRO Mobile sur son téléphone.
+
+Les deux appareils utilisent :
+
+- Le même compte établissement.
+- Le même point de vente lorsque leurs droits le permettent.
+- Le même catalogue.
+- Les mêmes prix autorisés.
+- Les mêmes clients.
+- Les mêmes fournisseurs.
+- Le même système de comptes d'emballages.
+
+Le caissier réalise une vente sur son téléphone.
+
+La vente est enregistrée sur son SQLite local.
+
+Lorsqu'une connexion est disponible, elle est envoyée à Axum.
+
+Le serveur valide la vente et met à jour les données centrales.
+
+L'ordinateur récupère la modification lors de sa synchronisation.
+
+Le résultat doit être identique à celui qui aurait été produit par une vente créée sur l'ordinateur avec les mêmes informations et règles métier.
+
+## 11.2 Parité des fonctionnalités
+
+La version mobile ne doit pas disposer de règles de calcul différentes.
+
+Les mêmes règles doivent s'appliquer à :
+
+- Quantités.
+- Prix.
+- Remises.
+- Totaux.
+- Paiements.
+- Soldes clients.
+- Soldes fournisseurs.
+- Stocks.
+- Retours d'emballages.
+- Commandes mixtes.
+- Documents.
+
+La différence entre les deux plateformes doit être principalement ergonomique.
+
+## 11.3 Gestion des points de vente
+
+Prévoir la notion de :
+
+- Établissement.
+- Point de vente.
+- Entrepôt éventuel.
+- Utilisateur.
+- Appareil.
+
+Un utilisateur peut avoir accès à plusieurs points de vente selon ses permissions.
+
+Ne pas mélanger les stocks de deux établissements.
+
+Les transferts doivent être réalisés par des opérations métier traçables.
+
+---
+
+# PARTIE 12 — TESTS ET VALIDATION OBLIGATOIRES
+
+Aucun module critique ne doit être considéré comme terminé sans tests automatisés.
+
+## 12.1 Tests du moteur métier Rust
+
+Tester :
+
+- Vente simple.
+- Vente avec plusieurs lignes.
+- Vente à crédit.
+- Paiement partiel.
+- Remise.
+- Calcul exact.
+- Stock insuffisant.
+- Double soumission.
+- Retour d'emballage.
+- Commande mixte.
+- Achat.
+- Réception partielle.
+- Retours fournisseur.
+- Écritures de caisse.
+- Historique des prix.
+- Reprise après erreur transactionnelle.
+
+## 12.2 Tests des emballages
+
+Scénarios obligatoires :
+
+**Scénario A :**
+
+Un client achète un B24 de 33 cl.
+
+Le système attend 24 bouteilles vides et un casier plastique selon les règles configurées.
+
+**Scénario B :**
+
+Un client achète un demi-B24.
+
+Le système calcule 12 bouteilles.
+
+**Scénario C :**
+
+Un client achète un demi-B12.
+
+Le système calcule 6 bouteilles.
+
+**Scénario D :**
+
+Un client compose un B12 mixte :
+
+- 6 Drogba 50 cl.
+- 6 Beaufort 50 cl.
+
+Le mélange n'est accepté que si les profils physiques sont compatibles et que le mélange est autorisé.
+
+**Scénario E :**
+
+Le client retourne seulement 10 bouteilles sur 12.
+
+Le système conserve les deux bouteilles restantes dans son compte.
+
+**Scénario F :**
+
+Le client retourne le casier plastique sans toutes les bouteilles.
+
+Le casier et les bouteilles doivent être soldés séparément.
+
+**Scénario G :**
+
+Deux références de même volume ont des profils physiques incompatibles.
+
+Le mélange doit être refusé.
+
+**Scénario H :**
+
+Vente de packs PET et de canettes jetables.
+
+Aucune dette d'emballage réutilisable ne doit être créée par défaut.
+
+## 12.3 Tests de synchronisation
+
+Tester :
+
+- Vente créée hors ligne.
+- Fermeture et redémarrage de l'application.
+- Reconnexion.
+- Envoi d'une opération.
+- Réponse serveur perdue.
+- Réémission de la même opération.
+- Absence de double écriture.
+- Téléphone et ordinateur connectés simultanément.
+- Modification d'un prix sur ordinateur.
+- Réception du nouveau prix sur mobile.
+- Conflit de stock.
+- Conflit de permissions.
+- Rejet serveur.
+- Reprise après interruption.
+- Perte temporaire du réseau.
+- Synchronisation de gros volumes.
+- Mise à jour de schéma.
+
+## 12.4 Tests SQLite
+
+Tester :
+
+- Création de base.
+- Migrations.
+- Transaction réussie.
+- Rollback.
+- Verrouillage.
+- Reprise après fermeture brutale.
+- Intégrité des clés étrangères.
+- Conservation des données.
+- Sauvegarde.
+- Restauration.
+- Mise à niveau depuis une ancienne version.
+
+## 12.5 Tests multi-appareils
+
+Scénario réel obligatoire :
+
+1. Créer une vente sur le téléphone A hors ligne.
+2. Créer une autre opération sur l'ordinateur.
+3. Reconnecter le téléphone A.
+4. Synchroniser.
+5. Vérifier le résultat sur l'ordinateur.
+6. Vérifier les soldes clients.
+7. Vérifier les stocks.
+8. Vérifier les emballages.
+9. Vérifier les historiques.
+10. Confirmer qu'aucune opération n'a été perdue ou dupliquée.
+
+## 12.6 Tests visuels
+
+Contrôler :
+
+- Débordements.
+- Boutons inaccessibles.
+- Clavier masquant les champs.
+- Erreurs de navigation.
+- Temps d'ouverture.
+- Fluidité.
+- Lisibilité.
+- Mode sombre.
+- Mode clair.
+- Rotation ou redimensionnement lorsque pris en charge.
+
+Utiliser des tests adaptés à React Native et à ses composants natifs, par exemple React Native Testing Library et un outil E2E maintenu tel que Maestro ou Detox après vérification de compatibilité.
+
+---
+
+# PARTIE 13 — DÉFAUTS EXISTANTS À AUDITER ET À CORRIGER
+
+Les problèmes suivants ont été identifiés lors d'un audit précédent du projet parent. Ils doivent être revérifiés dans le dépôt actuel avant intervention.
+
+1. Validation incorrecte possible de lignes de retour de vente dupliquées.
+2. Validation incorrecte possible de lignes de réception d'achat dupliquées.
+3. Utilisation de `pool.begin()` alors que certaines transactions critiques nécessitent une stratégie explicite de verrouillage et de sérialisation, notamment sur SQLite.
+4. Risques d'overflow dans les calculs Rust.
+5. Usage de calculs JavaScript flottants dans certains flux de vente.
+6. Migrations de données à formaliser.
+7. Données de démonstration potentiellement insérées au premier démarrage.
+8. Fichiers de données SQLite à protéger dans `.gitignore`.
+9. Vérification de sauvegarde susceptible de modifier les fichiers contrôlés.
+10. Sessions d'authentification Rust à vérifier concernant leur expiration.
+11. Risques de concurrence sur la gestion des PIN.
+12. Vérification stricte de l'origine des requêtes.
+13. Contrôle de la configuration des proxys.
+14. Chiffrement des bases et sauvegardes à étudier.
+15. Backend Node/Express historique à migrer avant retrait.
+16. Commandes de développement Tauri à découpler des anciens serveurs.
+17. Configuration Tauri CLI à vérifier.
+18. Formatting Rust et CI à stabiliser.
+19. Sélecteurs Playwright ambigus à corriger.
+20. Tests Rust et E2E incomplets à reprendre.
+
+Ne suppose pas que ces problèmes sont toujours présents.
+
+Ne considère pas non plus qu'ils ont été corrigés.
+
+Fais un état réel, puis corrige les problèmes qui affectent la stabilité ou la sécurité de la version mobile et de l'application partagée.
+
+---
+
+# PARTIE 14 — PLAN DE DÉVELOPPEMENT OBLIGATOIRE
+
+Tu dois travailler par lots indépendants et validables.
+
+Ne commence pas tous les modules simultanément.
+
+## LOT 0 — Audit et état initial
+
+Livrables :
+
+- Rapport d'architecture.
+- Inventaire des fonctions métier.
+- État des tests.
+- État des migrations.
+- Liste des risques.
+- Plan de protection des données.
+
+Critère de validation : compréhension complète du projet parent.
+
+## LOT 1 — Prototype Rust / React Native
+
+Créer une application de test minimale.
+
+Démontrer :
+
+- Compilation Android.
+- Compilation iOS.
+- Appel Rust depuis TypeScript.
+- Transfert de DTO.
+- Erreur Rust correctement remontée.
+- Accès SQLite.
+- Transaction.
+- Interface non bloquée.
+
+Critère de validation : faisabilité technique démontrée avant construction des écrans métier.
+
+## LOT 2 — Architecture commune
+
+Formaliser :
+
+- Crates Rust.
+- Domain services.
+- Adaptateurs de stockage.
+- DTO.
+- Contrats API.
+- Couche native.
+- Permissions.
+
+Créer les documents d'architecture et les tests de parité.
+
+Critère de validation : les règles métier sont communes et l'architecture ne contient pas de serveur métier concurrent.
+
+## LOT 3 — Base locale et migrations
+
+Créer :
+
+- Base SQLite mobile.
+- Migrations.
+- Index.
+- Tables de synchronisation.
+- Sauvegarde locale.
+- Restauration.
+- Gestion des erreurs.
+
+Critère de validation : fonctionnement après fermeture, redémarrage et migration.
+
+## LOT 4 — Authentification et établissement
+
+Créer :
+
+- Connexion.
+- Sessions.
+- Sélection établissement.
+- Sélection point de vente.
+- Appareil.
+- Permissions.
+- Déconnexion.
+- Révocation.
+
+Critère de validation : contrôle réel des droits côté Rust et serveur.
+
+## LOT 5 — Synchronisation
+
+Créer :
+
+- Outbox.
+- Inbox.
+- Push.
+- Pull.
+- Curseurs.
+- Idempotence.
+- Gestion des erreurs.
+- Gestion des conflits.
+- Interface de synchronisation.
+
+Critère de validation : démonstration complète de synchronisation avec le serveur et l'ordinateur.
+
+## LOT 6 — Catalogue et prix
+
+Créer :
+
+- Produits.
+- Variantes.
+- Marques.
+- Contenances.
+- Profils de bouteilles.
+- Types de casiers.
+- Compatibilités.
+- Prix.
+- Historique.
+
+Critère de validation : catalogue identique dans ses données métier sur mobile et ordinateur.
+
+## LOT 7 — Ventes et caisse
+
+Créer :
+
+- POS.
+- Panier.
+- Vente rapide.
+- Commandes mixtes.
+- Paiements.
+- Crédit.
+- Reçu.
+- Historique.
+
+Critère de validation : opérations commerciales correctes en ligne et hors ligne.
+
+## LOT 8 — Clients et emballages
+
+Créer :
+
+- Fiches clients.
+- Comptes financiers.
+- Comptes emballages.
+- Retours.
+- Retours partiels.
+- Relevés.
+
+Critère de validation : cohérence entre quantités physiques, mouvements et soldes.
+
+## LOT 9 — Achats et fournisseurs
+
+Créer :
+
+- Fournisseurs.
+- Bons de commande.
+- Réceptions.
+- Paiements.
+- Retours d'emballages.
+- Comptes fournisseurs.
+
+Critère de validation : réception partielle et retour fournisseur entièrement traçables.
+
+## LOT 10 — Stock, finances et rapports
+
+Créer :
+
+- Stocks.
+- Inventaires.
+- Ajustements.
+- Dépenses.
+- Caisse.
+- Rapports.
+- Alertes.
+
+Critère de validation : totaux et mouvements cohérents avec les opérations enregistrées.
+
+## LOT 11 — Design Premium
+
+Finaliser :
+
+- Thème clair.
+- Thème sombre.
+- Animations.
+- Icônes.
+- Responsive.
+- Accessibilité.
+- États de chargement.
+- États hors ligne.
+- Messages d'erreur.
+
+Critère de validation : expérience fluide sur les appareils de référence.
+
+## LOT 12 — Intégration ordinateur
+
+Tester la circulation des données entre :
+
+- Mobile Android.
+- Mobile iOS.
+- Desktop Windows.
+- Desktop macOS.
+- Serveur central.
+
+Critère de validation : parité métier et absence de perte ou duplication des opérations.
+
+## LOT 13 — Sécurité, CI et production
+
+Effectuer :
+
+- Tests de sécurité.
+- Tests de performance.
+- Tests de restauration.
+- Tests de charge raisonnables.
+- Build Android.
+- Build iOS.
+- CI Rust.
+- CI React Native.
+- Tests de synchronisation.
+- Documentation.
+- Préparation de la distribution.
+
+Critère de validation : version candidate installable et testable en conditions réelles.
+
+---
+
+# PARTIE 15 — LIVRABLES OBLIGATOIRES
+
+À la fin du projet, fournir :
+
+1. Le code source complet React Native.
+2. Le code Rust partagé et son interface native.
+3. Les adaptations du serveur Axum.
+4. Les migrations SQLite.
+5. Les contrats d'API.
+6. Les composants d'interface.
+7. Les écrans mobiles.
+8. Le système de synchronisation.
+9. Les tests unitaires.
+10. Les tests d'intégration.
+11. Les tests E2E.
+12. Les scripts de compilation.
+13. Les configurations Android.
+14. Les configurations iOS.
+15. Le guide d'installation.
+16. Le guide de développement.
+17. Le guide de synchronisation.
+18. Le guide de sauvegarde et restauration.
+19. Le guide de déploiement serveur.
+20. Le rapport de parité avec DEPOTPRO Desktop.
+
+Produire également :
+
+- Un diagramme d'architecture.
+- Un diagramme des flux de synchronisation.
+- Un diagramme de données.
+- Une documentation des règles métier.
+- Un tableau des fonctionnalités disponibles par plateforme.
+
+## 15.1 Rapport de fin de lot
+
+À la fin de chaque lot, rédiger un rapport comprenant :
+
+- Travaux réalisés.
+- Fichiers créés.
+- Fichiers modifiés.
+- Décisions techniques.
+- Tests exécutés.
+- Résultats.
+- Problèmes rencontrés.
+- Risques restants.
+- Prochaine étape.
+
+Ne jamais déclarer un lot terminé si les critères de validation ne sont pas satisfaits.
+
+---
+
+# PARTIE 16 — RÈGLES STRICTES DE DÉVELOPPEMENT
+
+Respecter impérativement les règles suivantes :
+
+1. Ne jamais réécrire entièrement le projet existant sans justification.
+2. Ne jamais supprimer une fonction existante sans remplacement validé.
+3. Ne jamais introduire de deuxième moteur métier.
+4. Ne jamais ajouter un serveur Node/Express au produit final.
+5. Ne jamais contourner les validations Rust.
+6. Ne jamais enregistrer les écritures critiques uniquement dans le cache React.
+7. Ne jamais confirmer une vente avant qu'elle soit durablement enregistrée localement.
+8. Ne jamais considérer une synchronisation comme réussie sans accusé de réception.
+9. Ne jamais dupliquer une opération à cause d'une nouvelle tentative.
+10. Ne jamais écraser un mouvement d'emballage historique.
+11. Ne jamais mélanger les bouteilles, casiers, marchandises et paiements.
+12. Ne jamais inventer un prix ou une consigne.
+13. Ne jamais supposer une compatibilité physique d'emballage.
+14. Ne jamais autoriser des quantités physiques fractionnaires.
+15. Ne jamais utiliser les nombres flottants pour les montants financiers.
+16. Ne jamais supprimer les anciennes données lors d'une migration.
+17. Ne jamais livrer de données de démonstration en production.
+18. Ne jamais mettre de secrets dans le dépôt.
+19. Ne jamais désactiver un test pour faire passer artificiellement la CI.
+20. Ne jamais masquer un conflit de synchronisation.
+21. Ne jamais afficher un stock global comme garanti si plusieurs appareils sont déconnectés.
+22. Ne jamais affirmer qu'un build fonctionne sans l'avoir exécuté.
+23. Ne jamais effectuer une opération destructive sans sauvegarde.
+24. Ne jamais modifier les API publiques sans documenter leur compatibilité.
+25. Toujours documenter les décisions qui changent l'architecture.
+
+Tout changement important doit être réalisé dans une branche contrôlée et validé par des tests.
+
+Les lots doivent faire l'objet de commits cohérents. Aucun push ou déploiement sur un environnement réel ne doit être effectué sans autorisation.
+
+---
+
+# PARTIE 17 — CRITÈRES FINAUX D'ACCEPTATION
+
+DEPOTPRO MOBILE PREMIUM sera considéré comme prêt à être testé en production pilote uniquement si les conditions suivantes sont réunies :
+
+### Application mobile
+
+- Installation et démarrage Android.
+- Installation et démarrage iOS.
+- Interface premium.
+- Navigation fonctionnelle.
+- Authentification.
+- Gestion des droits.
+- SQLite local opérationnel.
+
+### Métier
+
+- Vente simple.
+- Vente mixte.
+- Vente à crédit.
+- Paiement.
+- Reçu.
+- Compte client.
+- Compte emballages.
+- Achat fournisseur.
+- Réception partielle.
+- Stock.
+- Caisse.
+- Rapports.
+
+### Hors ligne
+
+- Création de ventes sans réseau.
+- Fermeture et redémarrage sans perte de données.
+- Conservation des opérations en attente.
+- Reconnexion.
+- Synchronisation correcte.
+- Gestion explicite des conflits.
+- Absence de doublons.
+
+### Intégration
+
+- Mobile vers serveur.
+- Serveur vers mobile.
+- Desktop vers serveur.
+- Serveur vers desktop.
+- Cohérence des documents.
+- Cohérence des prix.
+- Cohérence des stocks.
+- Cohérence des comptes clients.
+- Cohérence des comptes fournisseurs.
+- Cohérence des emballages.
+
+### Fiabilité
+
+- Migrations testées.
+- Sauvegardes vérifiées.
+- Restauration testée.
+- Erreurs de synchronisation gérées.
+- Journaux d'audit.
+- Tests automatisés réussis.
+- Builds de production exécutés.
+
+---
+
+# INSTRUCTION FINALE À L'AGENT IA
+
+Tu dois construire DEPOTPRO MOBILE PREMIUM comme un véritable produit logiciel commercialisable, et non comme une simple interface mobile ajoutée à un logiciel existant.
+
+La priorité absolue est la cohérence du moteur métier, la fiabilité des données, la sécurité des opérations et la synchronisation entre les appareils.
+
+L'ergonomie, le design premium et les animations doivent venir renforcer cette fiabilité, jamais la compromettre.
+
+Commence par l'audit du dépôt et l'étude de faisabilité du pont React Native / Rust.
+
+Ne commence pas par concevoir toutes les pages.
+
+Démontre d'abord que l'application mobile peut :
+
+1. Appeler le moteur Rust.
+2. Lire et écrire dans sa base SQLite locale.
+3. Enregistrer une vente hors ligne.
+4. Conserver cette vente après redémarrage.
+5. La synchroniser avec Axum.
+6. La rendre visible dans DEPOTPRO Desktop.
+7. Garantir qu'une nouvelle tentative de synchronisation ne duplique pas la vente.
+
+Une fois cette chaîne validée, développe progressivement les autres modules.
+
+
+```
+
+enregistrer ce texte dns un fichiear [prompt.md](http://prompt.md)  et suivre les instructions des implementations des fonctionnlités lot opr lot a. 
+
+```
+**Résultat attendu : DEPOTPRO PREMIUM doit devenir une seule solution de gestion, disponible sur ordinateur et smartphone, partageant les mêmes règles métier Rust, les mêmes données métier et un système de synchronisation fiable.**
+
+## **Choix techniques à retenir**
+
+Trois décisions sont particulièrement importantes pour la réussite de ce projet :
+
+1\. **React Native New Architecture et Turbo Native Modules** : ils permettent de connecter l'interface TypeScript au code natif Android/iOS. React Native documente officiellement ce mécanisme.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://reactnative.dev\&sz=32)
+
+React Native+2
+
+
+
+2\. **SQLite local** : chaque téléphone possède sa propre base persistante. Le serveur central reçoit les opérations et distribue les changements ; on ne partage pas un fichier SQLite entre appareils.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://docs.expo.dev\&sz=32)
+
+Expo documentation+1
+
+
+
+3\. **Pont Rust à valider avant le développement complet** : certains outils de liaison Rust/React Native sont encore en phase précoce. Il faut donc démontrer la compilation et l'exécution sur Android et iOS avant d'engager toute l'application sur une bibliothèque particulière.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://jhugman.github.io\&sz=32)
+
+uniffi-bindgen for React Native+1
+
+
+
+**Ma recommandation :** commence par faire exécuter à ton agent le LOT 0 et le LOT 1. La réussite du prototype Rust + React Native + SQLite + synchronisation est le véritable feu vert pour développer tout DEPOTPRO MOBILE.
+```

@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">DEPOTPRO</string>
+    <string name="depotpro_subtitle">Gestion Dépôt Boissons · Côte d\'Ivoire</string>
+    <string name="tab_home">Accueil</string>
+    <string name="tab_sales">Ventes</string>
+    <string name="tab_stock">Stock</string>
+    <string name="tab_customers">Clients</string>
+    <string name="tab_menu">Menu</string>
+    <string name="status_offline">Hors ligne</string>
+    <string name="status_online">En ligne</string>
+    <string name="status_syncing">Synchronisation...</string>
+</resources>
