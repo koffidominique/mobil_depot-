@@ -87,7 +87,7 @@ npm run ios
 
 ## 7. Limites connues
 
-- Le serveur parent `ss_depot_rust` n'expose pas encore `/api/v1/sync/*` (voir `docs/AUDIT_PARENT_REPO.md`). Tant que l'URL serveur est vide, l'application reste 100 % locale et l'écran Synchronisation l'indique explicitement.
+- Le serveur parent `ss_depot_rust` n'expose pas encore `/api/v1/sync/*` (voir `docs/AUDIT_PARENT_REPO.md`). Un adaptateur Axum prêt à intégrer est fourni dans `server/` avec le contrat `docs/API_SYNC_V1.md`. Tant que l'URL serveur est vide, l'application reste 100 % locale et l'écran Synchronisation l'indique explicitement.
 - Le pont iOS utilise actuellement un module `RCTBridgeModule` compatible avec la New Architecture via la couche d'interopérabilité ; le fichier de spécification TurboModule est déjà en place côté TypeScript et l'interface native générée pourra remplacer ce pont sans toucher au code métier.
-- Les écrans « Achats, Fournisseurs, Caisse, Rapports, Catalogue » sont présents dans le menu ; les commandes Rust correspondantes existent et sont progressivement câblées dans l'UI.
+- Les écrans « Achats, Fournisseurs, Caisse, Rapports, Catalogue, Reçus » sont câblés sur les commandes Rust correspondantes ; la confirmation des paiements Mobile Money et l'impression/partage des reçus restent à brancher sur des services natifs.
 - `npm run rust:test` nécessite un toolchain Rust absent de l'environnement de cette session ; la syntaxe des fichiers Rust a été validée par analyseur tree-sitter et la syntaxe/types TypeScript par `tsc --noEmit`.

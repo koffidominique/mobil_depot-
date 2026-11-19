@@ -80,3 +80,20 @@ Limites de l'environnement d'audit : ni `cargo`, ni JDK/Gradle n'étant install�
 | P2 | CI/CD Android (wrapper Gradle absent du dépôt, JDK + Android SDK à provisionner) | Ce dépôt | À faire |
 | P2 | Cible iOS et modules natifs partagés | Ce dépôt | Non démarré |
 | P2 | Forcer HTTPS (le manifeste autorise aujourd'hui le trafic en clair pour les serveurs de développement) | Ce dépôt | À faire avant production |
+
+## 7. Ré-audit du 2026-11-19 (branche `arena/76d0c3ee-mobil-depot`)
+
+Vérification demandée par la PARTIE 2 avant tout nouveau développement :
+
+| Élément | Commande | Résultat |
+| --- | --- | --- |
+| HEAD parent | `git ls-remote … refs/heads/main` | `cb78d3ca234b78862fbc01500156a6dc92e698cc` — **inchangé** depuis le premier audit |
+| Version | `grep '^version' Cargo.toml` | `3.0.0` — confirmée |
+| Crates | `ls crates` | `depotpro-core`, `depotpro-server` (Tauri 2 conservé) |
+| Migrations | `ls migrations/sqlite` | `0001`–`0005`, aucune migration destructive ajoutée |
+| Routes `/api/v1/sync/*` | `grep -rn` dans `crates/` et `src-tauri/` | **Toujours absentes** |
+| CI | `.github/workflows` | 15 définitions de jobs détectées |
+
+Le dépôt mobile ayant été vidé puis réinitialisé sur `prompt.md` (commit `abc33a1`), l'implémentation React Native + Rust validée précédemment a été restaurée depuis l'historique Git (`bace6f3`) plutôt que réécrite, conformément à la règle « ne jamais réécrire entièrement le projet existant sans justification ». Le dossier `legacy/android-compose` n'a volontairement pas été restauré : la stack retenue est React Native + Rust, et l'ancien code reste consultable dans l'historique.
+
+L'écart bloquant de synchronisation est désormais traité côté mobile par un **contrat cible exécutable** : `server/` fournit un routeur Axum `/api/v1` avec DTO typés, idempotence et accusés explicites. Son implémentation doit être branchée dans le dépôt parent sur `depotpro-core` ; aucun serveur métier concurrent n'est introduit.
