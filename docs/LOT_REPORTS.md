@@ -214,3 +214,13 @@
 - **Interface** : `SyncIndicator` six états, last sync/politique/non confirmés dans `SyncScreen` et `StockScreen`, `PosScreen` distingue vente locale et confirmation serveur.
 - **Vérifications exécutées** : tsc OK, Jest 4 suites/17 tests, ESLint OK, codegen OK, tree-sitter Rust OK, `git diff --check` OK.
 - **Non exécuté** : `cargo test` (toolchain absente), builds natifs. Le parent n'expose toujours pas `/api/v1/sync/*`.
+
+
+## LOT 27 — PARTIE 5 : modèle métier du dépôt de boissons
+
+- **Catalogue et formats** : migration additive `MIGRATION_4` ; catégorie, description, photo, retournabilité par produit ; nom, compartiments, dimensions, consigne et profil physique par casier ; `updateCrateType` pour les administrateurs avec audit.
+- **Attentes d'emballages** : `packaging_expectations` alimenté dans la transaction de vente, retours partiels suivis avec `received_qty` et statut `PARTIAL`/`RETURNED`, jetables exclus de toute dette.
+- **Registre immuable** : `getPackagingAccount` affiche soldes et mouvements (utilisateur, appareil, document, motif) ; `correctPackagingMovement` ajoute une écriture inverse sans toucher à l'ancien mouvement.
+- **Interface** : `StatementScreen` affiche le compte emballages ; `CatalogScreen` permet de configurer les nouveaux champs ; le contrat TypeScript est couvert par `__tests__/part5-model.test.ts`.
+- **Vérifications exécutées** : tsc OK, Jest 5 suites/20 tests, ESLint OK, tree-sitter Rust OK, codegen OK, `git diff --check` OK.
+- **Non exécuté** : `cargo test` et builds natifs (toolchains absentes).
