@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Banner, Card, Row, Screen, useColors } from '../components/ui';
 import { formatFcfa, formatQuantity } from '../core/format';
-import { useInventory, usePackagingStock } from '../hooks/useCore';
+import { useInventory, usePackagingStock, useSyncStatus } from '../hooks/useCore';
+import { formatLastSync } from '../core/offline';
 
 const TABS = [
   { id: 'full', label: 'Pleines' },
@@ -17,12 +18,28 @@ export function StockScreen() {
   const c = useColors();
   const inventory = useInventory();
   const packaging = usePackagingStock();
+  const syncStatus = useSyncStatus();
   const [tab, setTab] = useState<TabId>('full');
   const full = inventory.data?.full_drinks ?? [];
 
   return (
     <Screen title="Stock" subtitle="Quatre stocks séparés, jamais de dette sur les jetables">
       <Banner message={inventory.error?.message ?? null} />
+      <Card>
+        <Row
+          label="Dernier stock connu du serveur"
+          value={formatLastSync(syncStatus.data?.last_sync_at ?? null)}
+        />
+        <Row label="Politique hors ligne" value={syncStatus.data?.offline_policy ?? 'ALLOW_WITH_WARNING'} />
+        <Row
+          label="Ventes locales non confirmées"
+          value={String(syncStatus.data?.unconfirmed_offline_sales ?? 0)}
+        />
+        <Text style={{ color: c.subtitle }}>
+          Stock indicatif hors ligne : une vente simultanée sur un autre appareil peut créer un conflit
+          de stock, jamais masqué.
+        </Text>
+      </Card>
       <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
         {TABS.map((item) => (
           <Pressable key={item.id} onPress={() => setTab(item.id)}>

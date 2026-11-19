@@ -5,7 +5,7 @@ import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../c
 import { depot } from '../core/client';
 import { formatFcfa } from '../core/format';
 import type { CartLineInput, CommercialUnit, InventoryItem, PaymentInput, SaleResult } from '../core/types';
-import { useCustomers, useInventory } from '../hooks/useCore';
+import { useConnectivity, useCustomers, useInventory } from '../hooks/useCore';
 import { useAppStore } from '../store/useAppStore';
 
 const UNITS: CommercialUnit[] = ['BOTTLE', 'CASE', 'CARTON', 'PACK', 'CAN', 'UNIT'];
@@ -29,6 +29,7 @@ export function PosScreen() {
   const selectedCustomerId = useAppStore((state) => state.selectedCustomerId);
   const setCustomer = useAppStore((state) => state.setCustomer);
   const notify = useAppStore((state) => state.notify);
+  const online = useConnectivity();
   const [search, setSearch] = useState('');
   const [tier, setTier] = useState<'RETAIL' | 'WHOLESALE'>('RETAIL');
   const [method, setMethod] = useState<PaymentInput['method']>('CASH');
@@ -66,7 +67,7 @@ export function PosScreen() {
         mixed_cases: [],
         discount_fcfa: Number.parseInt(discount, 10) || 0,
         payments,
-        is_online: true,
+        is_online: online,
       };
       await depot.validateSale(input);
       return depot.createSale(input);
@@ -75,7 +76,11 @@ export function PosScreen() {
       setReceipt(result.receipt_number);
       setError(null);
       clearCart();
-      notify(`Vente ${result.receipt_number} enregistrée durablement hors ligne.`);
+      notify(
+        online
+          ? `Vente ${result.receipt_number} enregistrée durablement.`
+          : `Vente ${result.receipt_number} enregistrée localement, non encore confirmée par le serveur.`,
+      );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory'] }),

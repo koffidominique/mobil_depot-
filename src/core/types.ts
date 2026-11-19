@@ -165,6 +165,11 @@ export interface SyncStatus {
   failed: number;
   server_sequence: number;
   server_url: string;
+  last_sync_at: number | null;
+  branch_id: string;
+  device_id: string;
+  offline_policy: string;
+  unconfirmed_offline_sales: number;
 }
 
 export interface SyncOperation {
@@ -191,6 +196,29 @@ export interface SyncAcknowledgement {
   server_sequence?: number | null;
   conflict_type?: string | null;
   message?: string | null;
+}
+
+/** Événement descendant du serveur Axum : versionné, paginé, tombstonable. */
+export interface SyncUpdate {
+  server_sequence: number;
+  entity_type: string;
+  entity_id: string;
+  version: number;
+  payload: Record<string, unknown>;
+  tombstone: boolean;
+  schema_version?: number;
+  tenant_id?: string;
+  branch_id?: string;
+}
+
+export interface PushBatch {
+  operations: SyncOperation[];
+  server_sequence: number;
+  server_url: string;
+  branch_id: string;
+  device_id: string;
+  has_more: boolean;
+  next_after_sequence: number;
 }
 
 export interface CrateTypeInfo {

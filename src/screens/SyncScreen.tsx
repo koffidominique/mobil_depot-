@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
+import { formatLastSync } from '../core/offline';
+import { SyncIndicator } from '../components/SyncIndicator';
 import { depot } from '../core/client';
 import { useConflicts, useSyncStatus, useSynchronization } from '../hooks/useCore';
 import { useAppStore } from '../store/useAppStore';
@@ -21,6 +23,20 @@ export function SyncScreen() {
   const [restorePath, setRestorePath] = useState('');
   const [ioMessage, setIoMessage] = useState<string | null>(null);
   const conflicts = useConflicts();
+
+  const resolve = useMutation({
+    mutationFn: (input: { conflictId: string; resolution: 'ACKNOWLEDGE_SERVER' | 'ESCALATE' }) =>
+      depot.resolveConflict(input.conflictId, input.resolution),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['conflicts'] }),
+        queryClient.invalidateQueries({ queryKey: ['sync-status'] }),
+      ]);
+      notify('Décision enregistrée et auditée : aucune opération historique n’a été modifiée.');
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+  const canResolve = ['OWNER', 'ADMIN', 'MANAGER'].includes(session?.role ?? '');
 
   const saveServer = useMutation({
     mutationFn: () => depot.configureSyncServer(serverUrl),
@@ -58,6 +74,7 @@ export function SyncScreen() {
   return (
     <Screen title="Synchronisation" subtitle="Outbox locale idempotente · conflits jamais masqués">
       <Banner message={error} />
+      <SyncIndicator />
       <Banner tone="info" message={sync.data?.message ?? null} />
       <Card>
         <Row label="Appareil" value={session?.device_id ?? '—'} />
@@ -68,6 +85,12 @@ export function SyncScreen() {
         <Row label="Échecs" value={String(status.data?.failed ?? 0)} />
         <Row label="Conflits ouverts" value={String(status.data?.conflicts ?? 0)} />
         <Row label="Curseur serveur" value={String(status.data?.server_sequence ?? 0)} />
+        <Row label="Dernière sync réussie" value={formatLastSync(status.data?.last_sync_at ?? null)} />
+        <Row label="Politique hors ligne" value={status.data?.offline_policy ?? 'ALLOW_WITH_WARNING'} />
+        <Row
+          label="Ventes hors ligne non confirmées"
+          value={String(status.data?.unconfirmed_offline_sales ?? 0)}
+        />
       </Card>
 
       <Card>
@@ -108,9 +131,30 @@ export function SyncScreen() {
       <Card>
         <Text style={{ color: c.text, fontWeight: '700' }}>Conflits ouverts</Text>
         {(conflicts.data?.conflicts ?? []).map((conflict) => (
-          <Text key={conflict.conflict_id} style={{ color: c.danger }}>
-            {conflict.conflict_type} · {conflict.server_reason}
-          </Text>
+          <View key={conflict.conflict_id} style={{ gap: 6 }}>
+            <Text style={{ color: c.danger }}>
+              {conflict.conflict_type} · {conflict.server_reason}
+            </Text>
+            <Text style={{ color: c.subtitle }}>
+              Opération conservée : {conflict.operation_id} · statut {conflict.status}
+            </Text>
+            {conflict.status === 'OPEN' && canResolve ? (
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Pressable onPress={() => resolve.mutate({
+                  conflictId: conflict.conflict_id,
+                  resolution: 'ACKNOWLEDGE_SERVER',
+                })}>
+                  <Text style={{ color: c.primary, fontWeight: '700' }}>Accepter le serveur</Text>
+                </Pressable>
+                <Pressable onPress={() => resolve.mutate({
+                  conflictId: conflict.conflict_id,
+                  resolution: 'ESCALATE',
+                })}>
+                  <Text style={{ color: c.primary, fontWeight: '700' }}>Escalader</Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
         ))}
         {(conflicts.data?.conflicts.length ?? 0) === 0 ? (
           <Text style={{ color: c.subtitle }}>Aucun conflit masqué.</Text>

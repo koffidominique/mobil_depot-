@@ -504,5 +504,8 @@ mod tests {
     fn sync_backoff_is_bounded() {
         assert!(backoff_ms(50, 0) == backoff_ms(10, 0));
         assert!(backoff_ms(1, 0) < backoff_ms(2, 0));
+        let first = backoff_ms(0, 1_700_000_000_000);
+        let delay = first - 1_700_000_000_000;
+        assert!(delay >= 3_000 && delay <= 3_750, "retard avec jitter borné");
     }
 }

@@ -170,6 +170,23 @@ pub const MIGRATION_2: &str = r#"
         CREATE INDEX IF NOT EXISTS idx_price_history_variant ON price_history(variant_id, changed_at);
         "#;
 
+/// Migration 3 : état de réplication, tombstones et quotas hors ligne par appareil.
+pub const MIGRATION_3: &str = r#"
+        CREATE TABLE IF NOT EXISTS replication_state (
+          entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, version INTEGER NOT NULL,
+          tombstone INTEGER NOT NULL DEFAULT 0, last_sequence INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL, PRIMARY KEY (entity_type, entity_id)
+        );
+        CREATE TABLE IF NOT EXISTS device_stock_quotas (
+          branch_id TEXT NOT NULL, variant_id TEXT NOT NULL, device_id TEXT NOT NULL,
+          reserved_qty INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          PRIMARY KEY (branch_id, variant_id, device_id)
+        );
+        ALTER TABLE sync_conflicts ADD COLUMN resolution TEXT;
+        ALTER TABLE sync_conflicts ADD COLUMN resolved_by TEXT;
+        ALTER TABLE sync_conflicts ADD COLUMN resolved_at INTEGER;
+        "#;
+
 /// Applique les migrations ordonnées et enregistre leur version dans la base locale.
 pub fn migrate(conn: &Connection) -> CoreResult<()> {
     conn.execute_batch(
@@ -179,7 +196,7 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 2] = [(1, MIGRATION_1), (2, MIGRATION_2)];
+    let migrations: [(i64, &str); 3] = [(1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3)];
     for (version, sql) in migrations {
         if version <= current {
             continue;

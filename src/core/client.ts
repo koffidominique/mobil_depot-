@@ -18,6 +18,8 @@ import type {
   PaymentInput,
   CartLineInput,
   SyncAcknowledgement,
+  SyncUpdate,
+  PushBatch,
   CrateTypeInfo,
   PurchaseOrderRecord,
   SaleReceipt,
@@ -219,10 +221,8 @@ export const depot = {
       source_path: sourcePath,
     }),
   getPendingOperations: () => call<{ operations: SyncOperation[] }>('getPendingOperations'),
-  startSynchronization: () =>
-    call<{ operations: SyncOperation[]; server_sequence: number; server_url: string }>(
-      'startSynchronization',
-    ),
+  startSynchronization: (afterSequence = 0, limit = 50) =>
+    call<PushBatch>('startSynchronization', { after_sequence: afterSequence, limit }),
   getSynchronizationStatus: () => call<SyncStatus>('getSynchronizationStatus'),
   configureSyncServer: (serverUrl: string) =>
     call<{ server_url: string; https_only: boolean }>('configureSyncServer', { server_url: serverUrl }),
@@ -231,4 +231,20 @@ export const depot = {
       results,
       server_sequence: serverSequence,
     }),
+  applySyncUpdates: (updates: SyncUpdate[], serverSequence: number) =>
+    call<{ applied: number; skipped: number; server_sequence: number }>('applySyncUpdates', {
+      updates,
+      server_sequence: serverSequence,
+    }),
+  resolveConflict: (conflictId: string, resolution: 'ACKNOWLEDGE_SERVER' | 'ESCALATE') =>
+    call<{ conflict_id: string; status: string; operation_kept: boolean }>('resolveConflict', {
+      conflict_id: conflictId,
+      resolution,
+    }),
+  configureDeviceQuota: (input: {
+    branch_id: string;
+    variant_id: string;
+    device_id: string;
+    reserved_qty: number;
+  }) => call<{ reserved_qty: number }>('configureDeviceQuota', input),
 };

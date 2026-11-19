@@ -686,11 +686,24 @@ pub fn get_supplier_account(conn: &Connection, payload: &Value) -> CoreResult<Va
 
 pub fn get_pending_operations(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
+    let limit = field_i64_or(payload, "limit", 50).clamp(1, 200);
+    let after = field_i64_or(payload, "after_sequence", 0);
     let mut stmt = conn.prepare(
-        "SELECT operation_id, tenant_id, branch_id, device_id, user_id, local_sequence, schema_version, command_type, summary, payload_json, base_revision, idempotency_key, status, attempt_count, server_sequence FROM sync_outbox WHERE status IN ('PENDING','FAILED') AND next_retry_at <= ?1 ORDER BY local_sequence LIMIT 50",
+        "SELECT operation_id, tenant_id, branch_id, device_id, user_id, local_sequence, schema_version, command_type, summary, payload_json, base_revision, idempotency_key, status, attempt_count, server_sequence
+         FROM sync_outbox
+         WHERE status IN ('PENDING','FAILED') AND next_retry_at <= ?1 AND local_sequence > ?2
+         ORDER BY CASE command_type
+             WHEN 'saveProductVariant' THEN 0 WHEN 'createCrateType' THEN 0
+             WHEN 'updateVariantPrices' THEN 0 WHEN 'archiveProductVariant' THEN 0
+             WHEN 'createPurchaseOrder' THEN 1 WHEN 'receivePurchase' THEN 2
+             WHEN 'createMixedOrder' THEN 3 WHEN 'createSale' THEN 3
+             WHEN 'registerPackagingReturn' THEN 4 WHEN 'recordPayment' THEN 4
+             WHEN 'openCashSession' THEN 4 WHEN 'recordCashMovement' THEN 4
+             WHEN 'closeCashSession' THEN 4 ELSE 5 END,
+             local_sequence ASC LIMIT ?3",
     )?;
     let now = now_ms();
-    let items: Vec<Value> = stmt.query_map(params![now], |r| Ok(json!({
+    let items: Vec<Value> = stmt.query_map(params![now, after, limit], |r| Ok(json!({
         "operation_id": r.get::<_, String>(0)?, "tenant_id": r.get::<_, String>(1)?,
         "branch_id": r.get::<_, String>(2)?, "device_id": r.get::<_, String>(3)?,
         "user_id": r.get::<_, String>(4)?, "local_sequence": r.get::<_, i64>(5)?,
@@ -719,7 +732,17 @@ pub fn start_synchronization(conn: &mut Connection, payload: &Value) -> CoreResu
         params![a.branch_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    Ok(json!({"operations": ops, "server_sequence": cursor.0, "server_url": cursor.1}))
+    let last_sequence = ops.last().and_then(|op| op.get("local_sequence").and_then(Value::as_i64)).unwrap_or(0);
+    let limit = field_i64_or(payload, "limit", 50).clamp(1, 200);
+    Ok(json!({
+        "operations": ops,
+        "server_sequence": cursor.0,
+        "server_url": cursor.1,
+        "branch_id": a.branch_id,
+        "device_id": a.device_id,
+        "has_more": ops.len() as i64 == limit,
+        "next_after_sequence": last_sequence
+    }))
 }
 
 pub fn configure_sync_server(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
@@ -741,11 +764,25 @@ pub fn get_synchronization_status(conn: &Connection, payload: &Value) -> CoreRes
         "SELECT SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END), SUM(CASE WHEN status='SYNCING' THEN 1 ELSE 0 END), SUM(CASE WHEN status='SYNCED' THEN 1 ELSE 0 END), SUM(CASE WHEN status='CONFLICT' THEN 1 ELSE 0 END), SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) FROM sync_outbox",
         [], |r| Ok((r.get::<_, i64>(0)?.unwrap_or(0), r.get::<_, i64>(1)?.unwrap_or(0), r.get::<_, i64>(2)?.unwrap_or(0), r.get::<_, i64>(3)?.unwrap_or(0), r.get::<_, i64>(4)?.unwrap_or(0))),
     )?;
-    let cursor: (i64, String) = conn.query_row(
-        "SELECT server_sequence, server_url FROM sync_cursors WHERE branch_id = ?1", params![a.branch_id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    ).unwrap_or((0, String::new()));
-    Ok(json!({"pending": counts.0, "syncing": counts.1, "synced": counts.2, "conflicts": counts.3, "failed": counts.4, "server_sequence": cursor.0, "server_url": cursor.1}))
+    let cursor: (i64, String, Option<i64>) = conn.query_row(
+        "SELECT server_sequence, server_url, last_sync_at FROM sync_cursors WHERE branch_id = ?1",
+        params![a.branch_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).unwrap_or((0, String::new(), None));
+    let unconfirmed: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sales WHERE is_offline = 1 AND sync_status = 'PENDING'",
+        [], |r| r.get(0),
+    ).unwrap_or(0);
+    let policy: String = conn.query_row(
+        "SELECT offline_policy FROM tenants WHERE id = ?1", params![a.tenant_id], |r| r.get(0),
+    ).unwrap_or_else(|_| "ALLOW_WITH_WARNING".to_string());
+    Ok(json!({
+        "pending": counts.0, "syncing": counts.1, "synced": counts.2,
+        "conflicts": counts.3, "failed": counts.4,
+        "server_sequence": cursor.0, "server_url": cursor.1,
+        "last_sync_at": cursor.2, "branch_id": a.branch_id, "device_id": a.device_id,
+        "offline_policy": policy, "unconfirmed_offline_sales": unconfirmed
+    }))
 }
 
 pub fn apply_sync_ack(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
@@ -755,7 +792,10 @@ pub fn apply_sync_ack(conn: &mut Connection, payload: &Value) -> CoreResult<Valu
     for ack in field_array(payload, "results")? {
         let op_id = field_str(ack, "operation_id")?;
         let status = field_str(ack, "status")?;
-        let next_retry = backoff_ms(0, now);
+        let attempt: i64 = conn.query_row(
+            "SELECT attempt_count FROM sync_outbox WHERE operation_id = ?1", params![op_id], |r| r.get(0),
+        ).unwrap_or(0);
+        let next_retry = backoff_ms(attempt, now);
         match status {
             "ACCEPTED" => {
                 tx.execute(
@@ -790,6 +830,231 @@ pub fn apply_sync_ack(conn: &mut Connection, payload: &Value) -> CoreResult<Valu
     }
     tx.commit()?;
     Ok(json!({"applied": field_array(payload, "results")?.len()}))
+}
+
+/// Version du contrat de réplication descendante. Une version supérieure est refusée
+/// sans écriture partielle : la migration doit d'abord être appliquée sur l'appareil.
+pub const PULL_SCHEMA_VERSION: i64 = 1;
+
+fn apply_remote_entity(
+    tx: &Connection,
+    entity_type: &str,
+    entity_id: &str,
+    version: i64,
+    data: &Value,
+    tenant_id: &str,
+    branch_id: &str,
+    tombstone: bool,
+) -> CoreResult<()> {
+    match entity_type {
+        "product_variant" => {
+            if tombstone {
+                tx.execute("UPDATE product_variants SET is_active = 0 WHERE id = ?1", params![entity_id])?;
+            } else {
+                tx.execute(
+                    "INSERT INTO product_variants (id, tenant_id, name, brand, sku, barcode, volume_label, container_type, material, bottle_profile_id, crate_type_id, pack_size, retail_case_fcfa, wholesale_case_fcfa, retail_bottle_fcfa, price_revision, is_active)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,1)
+                     ON CONFLICT(id) DO UPDATE SET name=excluded.name, brand=excluded.brand, sku=excluded.sku,
+                     barcode=excluded.barcode, volume_label=excluded.volume_label, container_type=excluded.container_type,
+                     material=excluded.material, bottle_profile_id=excluded.bottle_profile_id,
+                     crate_type_id=excluded.crate_type_id, pack_size=excluded.pack_size,
+                     retail_case_fcfa=excluded.retail_case_fcfa, wholesale_case_fcfa=excluded.wholesale_case_fcfa,
+                     retail_bottle_fcfa=excluded.retail_bottle_fcfa, price_revision=excluded.price_revision, is_active=1",
+                    params![
+                        entity_id, field_str_opt(data, "tenant_id").unwrap_or(tenant_id), field_str(data, "name")?,
+                        field_str(data, "brand")?, field_str(data, "sku")?,
+                        field_str_opt(data, "barcode"), field_str(data, "volume_label")?,
+                        field_str(data, "container_type")?, field_str(data, "material")?,
+                        field_str_opt(data, "bottle_profile_id"), field_str_opt(data, "crate_type_id"),
+                        field_i64_or(data, "pack_size", 1), field_i64_or(data, "retail_case_fcfa", 0),
+                        field_i64_or(data, "wholesale_case_fcfa", 0), field_i64_or(data, "retail_bottle_fcfa", 0),
+                        version
+                    ],
+                )?;
+            }
+        }
+        "customer" => {
+            if tombstone {
+                tx.execute("UPDATE customers SET is_archived = 1 WHERE id = ?1", params![entity_id])?;
+            } else {
+                tx.execute(
+                    "INSERT INTO customers (id, tenant_id, name, phone, neighborhood, customer_type, default_price_tier, credit_limit_fcfa, financial_balance_fcfa, is_archived)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0)
+                     ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone,
+                     neighborhood=excluded.neighborhood, customer_type=excluded.customer_type,
+                     default_price_tier=excluded.default_price_tier, credit_limit_fcfa=excluded.credit_limit_fcfa,
+                     financial_balance_fcfa=excluded.financial_balance_fcfa, is_archived=0",
+                    params![
+                        entity_id, field_str_opt(data, "tenant_id").unwrap_or(tenant_id), field_str(data, "name")?,
+                        field_str(data, "phone")?, field_str(data, "neighborhood")?,
+                        field_str(data, "customer_type")?, field_str(data, "default_price_tier")?,
+                        field_i64_or(data, "credit_limit_fcfa", 0), field_i64_or(data, "financial_balance_fcfa", 0)
+                    ],
+                )?;
+            }
+        }
+        "supplier" => {
+            if tombstone {
+                tx.execute("UPDATE suppliers SET is_archived = 1 WHERE id = ?1", params![entity_id])?;
+            } else {
+                tx.execute(
+                    "INSERT INTO suppliers (id, tenant_id, name, phone, contact_name, city, financial_debt_fcfa, is_archived)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,0)
+                     ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone,
+                     contact_name=excluded.contact_name, city=excluded.city,
+                     financial_debt_fcfa=excluded.financial_debt_fcfa, is_archived=0",
+                    params![
+                        entity_id, field_str_opt(data, "tenant_id").unwrap_or(tenant_id), field_str(data, "name")?,
+                        field_str(data, "phone")?, field_str(data, "contact_name")?,
+                        field_str(data, "city")?, field_i64_or(data, "financial_debt_fcfa", 0)
+                    ],
+                )?;
+            }
+        }
+        "stock_balance" | "stock_adjustment" => {
+            let qty = if tombstone { 0 } else { field_i64(data, "full_units_qty")? };
+            tx.execute(
+                "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units, server_revision)
+                 VALUES (?1,?2,?3,?4,?5)
+                 ON CONFLICT(branch_id, variant_id) DO UPDATE SET full_units_qty=excluded.full_units_qty,
+                 server_revision=excluded.server_revision",
+                params![branch_id, entity_id, qty, field_i64_or(data, "min_alert_units", 12), version],
+            )?;
+        }
+        "conflict_resolution" => {
+            let conflict_id = field_str(data, "conflict_id")?;
+            let resolution = field_str(data, "resolution")?;
+            tx.execute(
+                "UPDATE sync_conflicts SET status = ?1, resolution = ?2, resolved_at = ?3 WHERE id = ?4",
+                params![resolution, resolution, now_ms(), conflict_id],
+            )?;
+        }
+        other => return Err(CoreError::new("UNSUPPORTED_ENTITY_TYPE", format!("Type d'entité non réplicable : {other}"))),
+    }
+    Ok(())
+}
+
+/// Applique les mises à jour descendantes de façon atomique et versionnée.
+/// Un événement déjà appliqué est ignoré ; un curseur n'avance qu'après commit.
+pub fn apply_sync_updates(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let updates = field_array(payload, "updates")?.clone();
+    let tx = conn.unchecked_transaction()?;
+    let now = now_ms();
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    let mut max_sequence = 0i64;
+    for update in &updates {
+        let sequence = field_i64(update, "server_sequence")?;
+        let entity_type = field_str(update, "entity_type")?;
+        let entity_id = field_str(update, "entity_id")?;
+        let version = field_i64(update, "version")?;
+        let schema = field_i64_or(update, "schema_version", PULL_SCHEMA_VERSION);
+        if schema > PULL_SCHEMA_VERSION {
+            return Err(CoreError::new("PULL_SCHEMA_UNSUPPORTED", "Version du schéma de réplication non prise en charge."));
+        }
+        if let Some(tenant) = field_str_opt(update, "tenant_id") {
+            if tenant != a.tenant_id {
+                return Err(CoreError::new("TENANT_MISMATCH", "Événement reçu pour un autre établissement."));
+            }
+        }
+        if let Some(branch) = field_str_opt(update, "branch_id") {
+            if branch != a.branch_id {
+                return Err(CoreError::new("BRANCH_MISMATCH", "Événement reçu pour un autre point de vente."));
+            }
+        }
+        let current: Option<(i64, i64)> = tx.query_row(
+            "SELECT version, last_sequence FROM replication_state WHERE entity_type = ?1 AND entity_id = ?2",
+            params![entity_type, entity_id], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?;
+        if let Some((known_version, known_sequence)) = current {
+            if version <= known_version || sequence <= known_sequence {
+                skipped += 1;
+                continue;
+            }
+        }
+        let data = update.get("payload").unwrap_or(update);
+        apply_remote_entity(
+            &tx, entity_type, entity_id, version, data,
+            &a.tenant_id, &a.branch_id, field_bool(update, "tombstone", false),
+        )?;
+        tx.execute(
+            "INSERT INTO replication_state (entity_type, entity_id, version, tombstone, last_sequence, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(entity_type, entity_id) DO UPDATE SET version=excluded.version,
+             tombstone=excluded.tombstone, last_sequence=excluded.last_sequence, updated_at=excluded.updated_at",
+            params![entity_type, entity_id, version, if field_bool(update, "tombstone", false) { 1 } else { 0 }, sequence, now],
+        )?;
+        applied += 1;
+        max_sequence = max_sequence.max(sequence);
+    }
+    if let Some(cursor) = payload.get("server_sequence").and_then(Value::as_i64) {
+        max_sequence = max_sequence.max(cursor);
+    }
+    if max_sequence > 0 {
+        tx.execute(
+            "UPDATE sync_cursors SET server_sequence = MAX(server_sequence, ?1), last_sync_at = ?2 WHERE branch_id = ?3",
+            params![max_sequence, now, a.branch_id],
+        )?;
+    }
+    tx.commit()?;
+    Ok(json!({"applied": applied, "skipped": skipped, "server_sequence": max_sequence}))
+}
+
+/// Résolution contrôlée : jamais de suppression d'opération ni de réécriture historique.
+pub fn resolve_conflict(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    if !matches!(a.role.as_str(), "OWNER" | "ADMIN" | "MANAGER") {
+        return Err(CoreError::new("ROLE_FORBIDDEN", "Seuls OWNER, ADMIN et MANAGER peuvent résoudre un conflit."));
+    }
+    let conflict_id = field_str(payload, "conflict_id")?;
+    let resolution = field_str(payload, "resolution")?;
+    if !matches!(resolution, "ACKNOWLEDGE_SERVER" | "ESCALATE") {
+        return Err(CoreError::new("INVALID_RESOLUTION", "Résolution inconnue."));
+    }
+    let status = if resolution == "ESCALATE" { "ESCALATED" } else { "RESOLVED" };
+    let tx = conn.unchecked_transaction()?;
+    let existing: Option<String> = tx.query_row(
+        "SELECT status FROM sync_conflicts WHERE id = ?1", params![conflict_id], |r| r.get(0),
+    ).optional()?;
+    let existing = existing.ok_or_else(|| CoreError::new("CONFLICT_NOT_FOUND", "Conflit introuvable."))?;
+    if existing != "OPEN" {
+        return Err(CoreError::new("CONFLICT_ALREADY_RESOLVED", "Ce conflit a déjà été traité."));
+    }
+    let rows = tx.execute(
+        "UPDATE sync_conflicts SET status = ?1, resolution = ?2, resolved_by = ?3, resolved_at = ?4 WHERE id = ?5",
+        params![status, resolution, a.user_id, now_ms(), conflict_id],
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "RESOLVE_CONFLICT", &format!("{conflict_id}: {resolution}"))?;
+    tx.commit()?;
+    if rows == 0 {
+        return Err(CoreError::new("CONFLICT_NOT_FOUND", "Conflit introuvable."));
+    }
+    Ok(json!({"conflict_id": conflict_id, "status": status, "operation_kept": true}))
+}
+
+/// Quota de stock réservé par appareil : la vente hors ligne ne peut pas dépasser
+/// la part attribuée, sans jamais garantir un stock global hors ligne.
+pub fn configure_device_quota(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    if !matches!(a.role.as_str(), "OWNER" | "ADMIN" | "MANAGER") {
+        return Err(CoreError::new("ROLE_FORBIDDEN", "Seuls OWNER, ADMIN et MANAGER peuvent configurer les quotas."));
+    }
+    let branch_id = field_str(payload, "branch_id")?;
+    let variant_id = field_str(payload, "variant_id")?;
+    let device_id = field_str(payload, "device_id")?;
+    let reserved = field_i64(payload, "reserved_qty")?;
+    if reserved < 0 {
+        return Err(CoreError::new("INVALID_QUOTA", "Le quota doit être positif ou nul."));
+    }
+    conn.execute(
+        "INSERT INTO device_stock_quotas (branch_id, variant_id, device_id, reserved_qty, updated_at)
+         VALUES (?1,?2,?3,?4,?5)
+         ON CONFLICT(branch_id, variant_id, device_id) DO UPDATE SET reserved_qty=excluded.reserved_qty, updated_at=excluded.updated_at",
+        params![branch_id, variant_id, device_id, reserved, now_ms()],
+    )?;
+    db::audit(conn, &a.branch_id, &a.user_id, "CONFIGURE_DEVICE_QUOTA", &format!("{variant_id}/{device_id}: {reserved}"))?;
+    Ok(json!({"branch_id": branch_id, "variant_id": variant_id, "device_id": device_id, "reserved_qty": reserved}))
 }
 
 // ---- LOT 6/9/10 : catalogue, achats, caisse et rapports locaux ----
@@ -1377,6 +1642,9 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "getSynchronizationStatus" | "get_synchronization_status" => get_synchronization_status(conn, payload),
         "configureSyncServer" | "configure_sync_server" => configure_sync_server(conn, payload),
         "applySyncAcknowledgements" | "apply_sync_acknowledgements" => apply_sync_ack(conn, payload),
+        "applySyncUpdates" | "apply_sync_updates" => apply_sync_updates(conn, payload),
+        "resolveConflict" | "resolve_conflict" => resolve_conflict(conn, payload),
+        "configureDeviceQuota" | "configure_device_quota" => configure_device_quota(conn, payload),
         "getCrateTypes" | "get_crate_types" => get_crate_types(conn, payload),
         "getPurchaseOrders" | "get_purchase_orders" => get_purchase_orders(conn, payload),
         "getSaleReceipt" | "get_sale_receipt" => get_sale_receipt(conn, payload),

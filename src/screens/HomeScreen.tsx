@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { useDashboard, useSales } from '../hooks/useCore';
 import { formatFcfa, formatTimestamp } from '../core/format';
 import { Banner, Card, Metric, Row, Screen } from '../components/ui';
+import { SyncIndicator } from '../components/SyncIndicator';
 
 export function HomeScreen() {
   const dashboard = useDashboard();
@@ -14,6 +15,7 @@ export function HomeScreen() {
       subtitle={dashboard.data ? `Point de vente ${dashboard.data.branch_id}` : 'Chargement du tableau de bord…'}
     >
       <Banner message={dashboard.error?.message ?? null} />
+      <SyncIndicator />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
         <Metric
           label="CA du jour"
