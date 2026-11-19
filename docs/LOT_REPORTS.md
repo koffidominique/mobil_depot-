@@ -193,3 +193,12 @@
 - **Vérifications** : `./scripts/codegen.sh` OK, `npx tsc --noEmit` OK, `npx jest --runInBand` 2 suites/8 tests, tree-sitter Rust OK, `git diff --check` OK.
 - **Non exécuté** : `cargo test`, builds Gradle/Xcode, leurs toolchains étant absentes. La cible Xcode devra être vérifiée sur macOS avec les bibliothèques Rust statiques.
 - **Prochaine étape** : PARTIE 4 — vérifier et consolider authentification, session, établissement, POS et identifiant d'appareil.
+
+
+## LOT 25 — PARTIE 3 : prototype de faisabilité exécutable
+
+- `rust/tests/ffi_prototype.rs` : appel réel à l'ABI C (`depot_execute`, `depot_free`, `depot_version`), DTO JSON, enveloppe d'erreur Rust, base SQLite temporaire, migrations `schema_meta`, rollback transactionnel vérifié sur une vente au casier incompatible puis commit de la même vente corrigée.
+- `__tests__/part3-prototype.test.ts` : rejet Zod avant appel natif (PIN invalide, quantité fractionnaire), DTO valide transmis en snake_case, erreur Rust convertie en `CoreError` avec son code. `validateInterface` est devenue asynchrone pour renvoyer une promesse rejetée.
+- `docs/FFI_AND_PROTOTYPE.md` mis à jour avec ces éléments de preuve et la limite restante.
+- **Vérifications exécutées ici** : `npx tsc --noEmit` OK, `npx jest --runInBand` 3 suites/12 tests OK, ESLint OK, tree-sitter Rust OK, `git diff --check` OK.
+- **Non exécuté ici** : `cargo test` et les builds natifs (toolchains absentes) ; le test Rust est validé syntaxiquement seulement.
