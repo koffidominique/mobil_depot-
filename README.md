@@ -28,6 +28,7 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - [Diagrammes et parité plateformes](docs/DIAGRAMS.md)
 - [Aperçu web et mocks](docs/WEB_PREVIEW.md)
 - [Sécurité, sessions et permissions](docs/PART9_SECURITY.md)
+- [Design, responsive et accessibilité](docs/PART10_UX.md)
 - [Cahier de développement](prompt.md)
 
 ## Règles non négociables

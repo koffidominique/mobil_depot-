@@ -284,3 +284,13 @@
 - **Secrets** : Keychain/Android Keystore, HTTPS obligatoire (`assertHttpsUrl`), aucun PIN/jeton dans les journaux (`audit_security`).
 - **Vérifications** : tsc OK, Jest 11 suites/37 tests, ESLint OK, codegen OK, bundle OK, tree-sitter Rust OK, `git diff --check` OK, aperçu web toujours fonctionnel.
 - **Non exécuté** : `cargo test` (toolchain absente) ; CI ubuntu-latest.
+
+
+## LOT 34 — PARTIE 10 : design, responsive et accessibilité
+
+- **Système partagé** : `ui.tsx` enrichi (Screen responsive, Metric accessible, champs 48 px, boutons animés, Banner avec pictogramme, Row 44 px, LoadingState, EmptyState, ActionRow), `FeedbackToast` monté globalement dans App.tsx.
+- **Responsive** : `src/core/design.ts` (1/2/3 colonnes, padding adaptatif, paysage compact), `useResponsive` basé sur `useWindowDimensions`, clavier et safe area pris en charge.
+- **Animations** : `AnimatedPressable` (90 ms, scale 0,98) et `useReducedMotion` basé sur les préférences système ; aucune animation sur la validation de caisse.
+- **Accessibilité** : libellés/rôles/états sur les composants partagés, cibles ≥ 44 px, messages non colorés uniquement, contraste AA vérifié par calcul sur les deux thèmes.
+- **Vérifications** : tsc OK, web:typecheck OK, ESLint OK, Jest 12 suites/39 tests OK, codegen OK, bundle OK, aperçu web JSDOM OK, `git diff --check` OK.
+- **Non exécuté** : matrice d'appareils réels (petits/Android standards/grands/iPhone/orientation/claviers) — SDK absents ; documenté dans `docs/PART10_UX.md`.
