@@ -103,8 +103,10 @@ async function call<T>(command: string, payload: object = {}): Promise<T> {
 }
 
 export const depot = {
-  initializeDatabase: (path: string) =>
-    call<{ database: string; schema_version: number }>('initializeDatabase', { path }),
+  initializeDatabase: (path: string, seedDemo = true) =>
+    call<{ database: string; schema_version: number; seeded_demo: boolean }>('initializeDatabase', {
+      path, seed_demo: seedDemo,
+    }),
 
   renewSession: (token: string) =>
     call<AuthSession & { token: string }>('renewSession', { token }),

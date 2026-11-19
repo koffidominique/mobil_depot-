@@ -21,10 +21,18 @@ pub fn pin_hash(pin: &str) -> String {
 }
 
 pub fn open(path: &str) -> CoreResult<Connection> {
+    open_with_seed(path, true)
+}
+
+/// Les données de démonstration sont optionnelles : un déploiement réel appelle
+/// `initializeDatabase` avec `seed_demo: false` avant de créer ses propres users.
+pub fn open_with_seed(path: &str, seed_demo: bool) -> CoreResult<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")?;
     migrate(&conn)?;
-    seed(&mut conn)?;
+    if seed_demo {
+        seed(&mut conn)?;
+    }
     Ok(conn)
 }
 

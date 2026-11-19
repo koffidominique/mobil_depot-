@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -694,6 +695,37 @@ pub fn api_router(kernel: SharedKernel) -> Router {
     sync_router(kernel)
 }
 
+/// Origines web autorisées, séparées par des virgules. Une liste vide interdit
+/// toute requête hostile depuis un navigateur ; les clients natifs n'envoient
+/// pas d'en-tête `Origin` et restent acceptés avec un jeton valide.
+pub fn origin_is_allowed(origin: &str, allowlist: &str) -> bool {
+    allowlist
+        .split(',')
+        .map(str::trim)
+        .any(|allowed| !allowed.is_empty() && allowed == origin)
+}
+
+async fn origin_guard(request: Request, next: Next) -> Response {
+    if let Some(origin) = request.headers().get(header::ORIGIN).and_then(|value| value.to_str().ok()) {
+        let allowlist = std::env::var("DEPOTPRO_ALLOWED_ORIGINS").unwrap_or_default();
+        if !origin_is_allowed(origin, &allowlist) {
+            return (StatusCode::FORBIDDEN, "ORIGIN_FORBIDDEN").into_response();
+        }
+    }
+    next.run(request).await
+}
+
+/// Les en-têtes de proxy ne sont pris en compte qu'après configuration explicite d'un
+/// proxy inverse de confiance, sinon un client peut usurper son adresse IP.
+async fn sanitize_proxy_headers(mut request: Request, next: Next) -> Response {
+    if std::env::var("DEPOTPRO_TRUST_PROXY").as_deref() != Ok("1") {
+        for name in ["x-forwarded-for", "x-forwarded-proto", "x-forwarded-host"] {
+            while request.headers_mut().remove(name).is_some() {}
+        }
+    }
+    next.run(request).await
+}
+
 pub fn sync_router(kernel: SharedKernel) -> Router {
     Router::new()
         .route("/api/v1/sync/push", post(push))
@@ -703,6 +735,8 @@ pub fn sync_router(kernel: SharedKernel) -> Router {
         .route("/api/v1/devices/revoke/:device_id", post(revoke_device))
         .route("/api/v1/conflicts", get(conflicts))
         .route("/api/v1/conflicts/:conflict_id/resolve", post(resolve_conflict))
+        .layer(middleware::from_fn(origin_guard))
+        .layer(middleware::from_fn(sanitize_proxy_headers))
         .with_state(kernel)
 }
 

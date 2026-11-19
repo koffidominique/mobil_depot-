@@ -46,3 +46,11 @@ export function toJsonInteger(value: bigint): number {
   }
   return Number(value);
 }
+
+/** Quantité entière saisie dans un champ texte : aucun passage par un flottant. */
+export function parseIntegerQuantity(input: string): bigint {
+  if (!/^\d+$/.test(input.trim())) {
+    throw new Error('QUANTITE_INVALIDE');
+  }
+  return BigInt(input.trim());
+}

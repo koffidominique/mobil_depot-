@@ -5,7 +5,7 @@ mod commands;
 mod db;
 mod domain;
 
-use domain::{field_str, field_str_opt, CoreError, CoreResult};
+use domain::{field_bool, field_str, field_str_opt, CoreError, CoreResult};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::ffi::{CStr, CString};
@@ -26,13 +26,16 @@ fn execute_inner(input: &str) -> CoreResult<String> {
 
     if command == "initialize_database" || command == "initializeDatabase" {
         let path = field_str(&payload, "path")?;
-        let conn = db::open(path)?;
+        let seed_demo = field_bool(&payload, "seed_demo", true);
+        let conn = db::open_with_seed(path, seed_demo)?;
         let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
         *guard = Some(conn);
         let mut path_guard = DB_PATH.get_or_init(|| Mutex::new(String::new())).lock()
             .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?;
         *path_guard = path.to_string();
-        return Ok(json!({"ok": true, "data": {"database": path, "schema_version": 9}}).to_string());
+        return Ok(json!({"ok": true, "data": {
+            "database": path, "schema_version": 9, "seeded_demo": seed_demo
+        }}).to_string());
     }
 
     if command == "backupDatabase" || command == "backup_database" {

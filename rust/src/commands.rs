@@ -335,7 +335,7 @@ pub fn validate_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
 
 pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let now = now_ms();
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let enriched = prepare_sale(&tx, payload)?;
     let result = validate_sale_rules(&enriched)?;
     let a = actor(&tx, payload)?;
@@ -640,7 +640,7 @@ fn record_sale_packaging_expectations(
 
 pub fn register_packaging_return(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let partner_type = field_str(payload, "partner_type")?;
     let partner_id = field_str(payload, "partner_id")?;
     let item_kind = field_str(payload, "item_kind")?;
@@ -710,15 +710,19 @@ pub fn create_purchase_order(conn: &mut Connection, payload: &Value) -> CoreResu
     if !can_manage_purchases(&a.role) {
         return Err(CoreError::new("ROLE_FORBIDDEN", "Rôle non autorisé à créer un achat."));
     }
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let lines = field_array(payload, "lines")?;
     if lines.is_empty() {
         return Err(CoreError::new("EMPTY_ORDER", "Ajoutez au moins une ligne."));
     }
     let mut total = 0i64;
     let mut order_lines: Vec<(String, i64, i64)> = Vec::new();
+    let mut seen_variants = std::collections::HashSet::new();
     for line in lines {
         let variant = field_str(line, "variant_id")?;
+        if !seen_variants.insert(variant.to_string()) {
+            return Err(CoreError::new("DUPLICATE_ORDER_LINE", "Variante en double dans la commande."));
+        }
         let qty = field_i64(line, "quantity")?;
         if qty <= 0 {
             return Err(CoreError::new("INVALID_QUANTITY", "Quantité commandée positive requise."));
@@ -757,7 +761,7 @@ pub fn receive_purchase(conn: &mut Connection, payload: &Value) -> CoreResult<Va
     if !can_manage_purchases(&a.role) {
         return Err(CoreError::new("ROLE_FORBIDDEN", "Rôle non autorisé à réceptionner un achat."));
     }
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let order_id = field_str(payload, "order_id")?;
     let supplier: String = tx.query_row(
         "SELECT supplier_id FROM purchase_orders WHERE id = ?1",
@@ -765,7 +769,12 @@ pub fn receive_purchase(conn: &mut Connection, payload: &Value) -> CoreResult<Va
     )?;
     let receipt_id = new_id("prec");
     let mut received_total = 0i64;
+    let mut seen_variants = std::collections::HashSet::new();
     for line in field_array(payload, "lines")? {
+        let variant_line = field_str(line, "variant_id")?;
+        if !seen_variants.insert(variant_line.to_string()) {
+            return Err(CoreError::new("DUPLICATE_RECEPTION_LINE", "Variante en double dans la réception."));
+        }
         let qty = field_i64(line, "quantity")?;
         let damaged = field_i64_or(line, "damaged_qty", 0);
         if qty < 0 || damaged < 0 || damaged > qty {
@@ -882,7 +891,7 @@ pub fn record_supplier_return(conn: &mut Connection, payload: &Value) -> CoreRes
     if lines.is_empty() {
         return Err(CoreError::new("EMPTY_RETURN", "Au moins une ligne de retour est requise."));
     }
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let supplier_exists: i64 = tx.query_row(
         "SELECT COUNT(*) FROM suppliers WHERE id=?1", params![supplier], |r| r.get(0),
     )?;
@@ -985,7 +994,7 @@ pub fn get_purchase_variance(conn: &Connection, payload: &Value) -> CoreResult<V
 
 pub fn record_payment(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let partner_type = field_str(payload, "partner_type")?;
     let partner_id = field_str(payload, "partner_id")?;
     let amount = field_i64(payload, "amount_fcfa")?;
@@ -1214,7 +1223,7 @@ pub fn record_inventory_count(conn: &mut Connection, payload: &Value) -> CoreRes
     if reason.len() < 3 {
         return Err(CoreError::new("REASON_REQUIRED", "Un motif d'inventaire est obligatoire."));
     }
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let current: i64 = tx.query_row(
         "SELECT full_units_qty FROM stock_balances WHERE branch_id=?1 AND variant_id=?2",
         params![a.branch_id, variant_id], |r| r.get(0),
@@ -1377,12 +1386,12 @@ pub fn get_synchronization_status(conn: &Connection, payload: &Value) -> CoreRes
 
 pub fn apply_sync_ack(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let _ = actor(conn, payload)?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = now_ms();
     for ack in field_array(payload, "results")? {
         let op_id = field_str(ack, "operation_id")?;
         let status = field_str(ack, "status")?;
-        let attempt: i64 = conn.query_row(
+        let attempt: i64 = tx.query_row(
             "SELECT attempt_count FROM sync_outbox WHERE operation_id = ?1", params![op_id], |r| r.get(0),
         ).unwrap_or(0);
         let next_retry = backoff_ms(attempt, now);
@@ -1529,7 +1538,7 @@ fn apply_remote_entity(
 pub fn apply_sync_updates(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
     let updates = field_array(payload, "updates")?.clone();
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now = now_ms();
     let mut applied = 0usize;
     let mut skipped = 0usize;
@@ -1603,7 +1612,7 @@ pub fn resolve_conflict(conn: &mut Connection, payload: &Value) -> CoreResult<Va
         return Err(CoreError::new("INVALID_RESOLUTION", "Résolution inconnue."));
     }
     let status = if resolution == "ESCALATE" { "ESCALATED" } else { "RESOLVED" };
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing: Option<String> = tx.query_row(
         "SELECT status FROM sync_conflicts WHERE id = ?1", params![conflict_id], |r| r.get(0),
     ).optional()?;
@@ -1755,7 +1764,7 @@ pub fn correct_packaging_movement(conn: &mut Connection, payload: &Value) -> Cor
     }
     let movement_id = field_str(payload, "movement_id")?;
     let reason = field_str(payload, "reason")?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let original: Option<(String, String, String, String, i64, String)> = tx.query_row(
         "SELECT partner_type, partner_id, item_kind, ref_id, qty, direction
          FROM partner_packaging_ledger WHERE id=?1",
@@ -1883,7 +1892,7 @@ pub fn open_cash_session(conn: &mut Connection, payload: &Value) -> CoreResult<V
     if existing.get("session_id").and_then(Value::as_str).is_some() {
         return Ok(existing);
     }
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let session_id = new_id("cash");
     tx.execute(
         "INSERT INTO cash_sessions (id, branch_id, opened_by, opening_float_fcfa, expected_closing_fcfa, status, opened_at) VALUES (?1,?2,?3,?4,?4,'OPEN',?5)",
@@ -1919,7 +1928,7 @@ pub fn record_cash_movement(conn: &mut Connection, payload: &Value) -> CoreResul
     } else {
         checked_sub(expected_before, amount, "caisse")?
     };
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute(
         "INSERT INTO cash_movements (id, session_id, branch_id, movement_type, signed_amount_fcfa, label, occurred_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
         params![new_id("cmv"), session_id, a.branch_id, kind, signed, label, now_ms()],
@@ -1947,7 +1956,7 @@ pub fn close_cash_session(conn: &mut Connection, payload: &Value) -> CoreResult<
     if counted < 0 { return Err(CoreError::new("INVALID_COUNT", "Le montant compté ne peut pas être négatif.")); }
     let expected = field_i64(&session, "expected_closing_fcfa")?;
     let variance = checked_sub(counted, expected, "écart de caisse")?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute(
         "UPDATE cash_sessions SET status = 'CLOSED', counted_fcfa = ?1 WHERE id = ?2",
         params![counted, session_id],
@@ -2141,7 +2150,7 @@ pub fn save_product_variant(conn: &mut Connection, payload: &Value) -> CoreResul
     let category = field_str_opt(payload, "category").map(str::to_string);
     let description = field_str_opt(payload, "description").map(str::to_string);
     let photo_path = field_str_opt(payload, "photo_path").map(str::to_string);
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let variant_id = match field_str_opt(payload, "variant_id").map(str::to_string) {
         Some(id) => {
             let exists: i64 = tx.query_row(
@@ -2203,7 +2212,7 @@ pub fn update_variant_prices(conn: &mut Connection, payload: &Value) -> CoreResu
         "SELECT retail_case_fcfa, wholesale_case_fcfa, retail_bottle_fcfa, price_revision FROM product_variants WHERE id = ?1",
         params![variant_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute(
         "INSERT INTO price_history (id, variant_id, retail_case_fcfa, wholesale_case_fcfa, retail_bottle_fcfa, changed_at, changed_by) VALUES (?1,?2,?3,?4,?5,?6,?7)",
         params![new_id("price"), variant_id, old.0, old.1, old.2, now_ms(), a.user_id],
@@ -2226,7 +2235,7 @@ pub fn archive_product_variant(conn: &mut Connection, payload: &Value) -> CoreRe
     let a = actor(conn, payload)?;
     assert_catalog_role(&a.role)?;
     let variant_id = field_str(payload, "variant_id")?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("UPDATE product_variants SET is_active = 0 WHERE id = ?1", params![variant_id])?;
     db::enqueue(
         &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "CATALOG_VARIANT_ARCHIVE",
@@ -2262,7 +2271,7 @@ pub fn create_crate_type(conn: &mut Connection, payload: &Value) -> CoreResult<V
     }
     let is_reusable = if field_bool(payload, "is_reusable", true) { 1 } else { 0 };
     let physical_profile = field_str_opt(payload, "physical_profile_id").map(str::to_string);
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let exists: i64 = tx.query_row("SELECT COUNT(*) FROM crate_types WHERE code = ?1", params![code], |r| r.get(0))?;
     if exists > 0 {
         return Err(CoreError::new("CRATE_CODE_EXISTS", "Ce format de casier existe déjà."));
@@ -2294,7 +2303,7 @@ pub fn update_crate_type(conn: &mut Connection, payload: &Value) -> CoreResult<V
     let a = actor(conn, payload)?;
     assert_catalog_role(&a.role)?;
     let crate_id = field_str(payload, "crate_type_id")?;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let current: (i64, String) = tx.query_row(
         "SELECT capacity, compatibility_group_id FROM crate_types WHERE id = ?1",
         params![crate_id], |r| Ok((r.get(0)?, r.get(1)?)),
@@ -2477,7 +2486,7 @@ pub fn renew_session(conn: &mut Connection, payload: &Value) -> CoreResult<Value
     let settings = security_settings(conn, db::TENANT_ID, &branch)?;
     let next = new_id("tok");
     let next_expiry = now_ms() + settings.session_duration_ms;
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute(
         "UPDATE sessions SET revoked=1, revoked_at=?2, revocation_reason='ROTATED' WHERE token=?1",
         params![token, now_ms()],
@@ -2606,7 +2615,7 @@ pub fn revoke_device(conn: &mut Connection, payload: &Value) -> CoreResult<Value
     assert_permission(conn, &a, "security.admin")?;
     let device_id = field_str(payload, "device_id")?;
     let reason = field_str_opt(payload, "reason").unwrap_or("LOST_DEVICE");
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute(
         "UPDATE devices SET is_authorized=0, revoked_at=?2 WHERE id=?1",
         params![device_id, now_ms()],
@@ -2681,7 +2690,7 @@ pub fn create_stock_transfer(conn: &mut Connection, payload: &Value) -> CoreResu
         return Err(CoreError::new("EMPTY_TRANSFER", "Au moins une ligne est requise."));
     }
     let id = new_id("xfer");
-    let tx = conn.unchecked_transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     for line in &lines {
         let variant = field_str(line, "variant_id")?;
         let qty = field_i64(line, "qty")?;

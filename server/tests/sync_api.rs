@@ -9,7 +9,7 @@ use depotpro_sync_adapter::contracts::{
     SessionTokens,
 };
 use depotpro_sync_adapter::{
-    sync_router, ApplyOutcome, Identity, SyncKernel, SyncOperationEnvelope, SyncUpdate,
+    origin_is_allowed, sync_router, ApplyOutcome, Identity, SyncKernel, SyncOperationEnvelope, SyncUpdate,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -341,4 +341,13 @@ async fn auth_bootstrap_catalog_and_inventory_routes_are_typed_and_scoped() {
         "GET", "/api/v1/products?branch_id=branch_other", None, "valid",
     )).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+
+#[test]
+fn explicit_browser_origins_are_rejected_unless_allowlisted() {
+    assert!(!origin_is_allowed("https://evil.example", ""));
+    assert!(!origin_is_allowed("https://evil.example", "https://good.example"));
+    assert!(origin_is_allowed("https://good.example", "https://good.example, https://other.example"));
+    assert!(!origin_is_allowed("https://good.example.evil.test", "https://good.example"));
 }

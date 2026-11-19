@@ -4,7 +4,7 @@ import { Pressable, Share, Text, View } from 'react-native';
 import RNFS from 'react-native-fs';
 import { ActionRow, Banner, Card, EmptyState, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
 import { depot } from '../core/client';
-import { formatTimestamp } from '../core/format';
+import { formatTimestamp, parseIntegerQuantity, toJsonInteger } from '../core/format';
 import type { BranchInfo } from '../core/types';
 import { useAppStore } from '../store/useAppStore';
 
@@ -50,10 +50,19 @@ export function DesktopScreen() {
   );
 
   const transfer = useMutation({
-    mutationFn: () => depot.createStockTransfer({
-      from_branch_id: from, to_branch_id: to, reason,
-      lines: [{ variant_id: variantId, qty: Number(qty) }],
-    }),
+    mutationFn: () => {
+      let quantity: number;
+      try {
+        quantity = toJsonInteger(parseIntegerQuantity(qty));
+      } catch {
+        setError('Quantité entière requise pour le transfert.');
+        throw new Error('QUANTITE_INVALIDE');
+      }
+      return depot.createStockTransfer({
+        from_branch_id: from, to_branch_id: to, reason,
+        lines: [{ variant_id: variantId, qty: quantity }],
+      });
+    },
     onSuccess: async (result) => {
       setError(null);
       notify(`Transfert ${result.transfer_id} enregistré.`);
