@@ -143,3 +143,19 @@
 - **Synchronisation avec l'ordinateur** : le contrat `/api/v1` et l'adaptateur Axum restent la brique cible ; l'intégration du `SyncKernel` dans `ss_depot_rust` demeure hors de ce dépôt et n'est pas annoncée comme terminée.
 - **Vérifications** : `npx tsc --noEmit` sans erreur, `npx jest --runInBand` 3/3, `npx eslint . --ext .ts,.tsx --quiet` sans erreur, tree-sitter Rust sans nœud d'erreur, `git diff --check` OK.
 - **Limites** : `cargo test` non exécutable ici (toolchain absente) ; les tests de catalogage ajoutés dans `commands.rs` sont validés syntaxiquement seulement. Le pilotage multi-établissements et les quotas de stock par appareil restent à implémenter côté serveur central.
+
+## LOT 21 — PARTIE 1 : exécution effective des fonctionnalités
+
+- **Objectif** : ne pas seulement déclarer les fonctionnalités implémentées, mais exécuter tout ce qui est exécutable dans cet environnement et consigner les résultats.
+- **Bundles React Native réellement produits** :
+  - `npx react-native bundle --platform android --dev false --entry-file index.js --bundle-output /tmp/depot-bundle/index.android.bundle …` → **succès**, bundle Android de 2,0 Mo.
+  - Même commande avec `--platform ios` → **succès**, bundle iOS de 2,0 Mo.
+  - Ces bundles prouvent que tout le code TypeScript/React Native (navigation, écrans, moteur via TurboModule) se transforme et se résout correctement. Ils ne prouvent pas le fonctionnement du moteur Rust natif ni le démarrage sur appareil.
+- **Deux défauts réels trouvés puis corrigés grâce à cette exécution** :
+  1. `index.js` importait `react-native-gesture-handler`, requis par React Navigation, mais la dépendance n'était pas déclarée → ajout de `react-native-gesture-handler@^3.5.0`.
+  2. Zod 4 publie `export * as core …`, non transformé par le preset Babel de RN 0.88 → ajout de `@babel/plugin-transform-export-namespace-from@^7.29.7` dans `babel.config.js` et `package.json`.
+- **Scénarios Partie 1 exécutés par Jest** (`__tests__/part1-flows.test.ts`, TurboModule simulé) : catalogue + mise à jour des prix + archivage ; vente avec les six unités commerciales ; commande mixte 6+6 ; retours emballages client et fournisseur ; lecture des stocks d'emballages ; ouverture/encaissement/dépense/clôture de caisse ; bordereau partenaire ; application d'accusés de synchronisation `ACCEPTED`/`CONFLICT`.
+- **Résultat** : `npx jest --runInBand` → **2 suites, 8 tests réussis**. Les tests affirment les commandes envoyées, les payloads entiers FCFA, la présence du jeton d'authentification et l'absence de nombre décimal dans les payloads de vente.
+- **Autres vérifications** : `npx tsc --noEmit` sans erreur, `npx eslint . --ext .ts,.tsx --quiet` sans erreur, `git diff --check` OK.
+- **CI** : `npm run bundle:check` ajouté au job TypeScript de `.github/workflows/mobile.yml` pour reproduire l'exécution du bundle Android sur GitHub.
+- **Limite explicite** : ces tests simulés exécutent le **contrat** entre l'interface et Rust. Le moteur Rust lui-même n'a pas pu être exécuté (`cargo` absent, téléchargement de toolchain bloqué), non plus que l'application sur Android/iOS (JDK/SDK/Xcode absents). Aucun build natif n'est déclaré réussi.
