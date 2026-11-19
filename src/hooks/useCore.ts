@@ -70,8 +70,11 @@ export function useCashSession() {
   return useQuery({ queryKey: ['cash-session'], queryFn: () => depot.getCashSession() });
 }
 
-export function useReports() {
-  return useQuery({ queryKey: ['reports'], queryFn: () => depot.getReports() });
+export function useReports(fromMs?: number, toMs?: number) {
+  return useQuery({
+    queryKey: ['reports', fromMs ?? null, toMs ?? null],
+    queryFn: () => depot.getReports(fromMs, toMs),
+  });
 }
 
 export function useConflicts() {

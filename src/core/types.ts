@@ -287,6 +287,8 @@ export interface CashSession {
 }
 
 export interface SalesReport {
+  from_ms: number;
+  to_ms: number;
   revenue_fcfa: number;
   cash_collected_fcfa: number;
   credits_fcfa: number;

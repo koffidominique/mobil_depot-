@@ -8,7 +8,7 @@ cd "$ROOT"
 mkdir -p "$OUT/generated"
 
 node node_modules/@react-native/codegen/lib/cli/combine/combine-js-to-schema-cli.js \
-  "$OUT/schema.json" src/specs/NativeDepotCore.ts --libraryName DepotCoreSpec
+  "$OUT/schema.json" src/specs/NativeDepotCore.ts src/specs/NativeReceiptPrinter.ts --libraryName DepotCoreSpec
 
 node node_modules/@react-native/codegen/lib/cli/generators/generate-all.js \
   "$OUT/schema.json" DepotCoreSpec "$OUT/generated" com.depotpro.mobile
@@ -18,4 +18,9 @@ if ! grep -q 'executeCommand(String request, Promise promise)' "$JAVA"; then
   echo "Codegen invalide : executeCommand(String, Promise) absent" >&2
   exit 1
 fi
-echo "Codegen OK : $JAVA"
+PRINTER_JAVA="$OUT/generated/java/com/depotpro/mobile/NativeReceiptPrinterSpec.java"
+if ! grep -q 'printPdf(String filePath, Promise promise)' "$PRINTER_JAVA"; then
+  echo "Codegen invalide : printPdf(String, Promise) absent" >&2
+  exit 1
+fi
+echo "Codegen OK : $JAVA et $PRINTER_JAVA"

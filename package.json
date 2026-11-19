@@ -13,7 +13,9 @@
     "rust:test": "cargo test --manifest-path rust/Cargo.toml",
     "rust:android": "bash scripts/build-rust-android.sh",
     "rust:ios": "bash scripts/build-rust-ios.sh",
-    "bundle:check": "react-native bundle --platform android --dev false --entry-file index.js --bundle-output /tmp/depotpro-android.bundle --assets-dest /tmp/depotpro-assets"
+    "bundle:check": "react-native bundle --platform android --dev false --entry-file index.js --bundle-output /tmp/depotpro-android.bundle --assets-dest /tmp/depotpro-assets",
+    "verify:toolchains": "bash scripts/verify-toolchains.sh",
+    "codegen": "bash scripts/codegen.sh"
   },
   "dependencies": {
     "@react-native-community/netinfo": "^12.0.1",

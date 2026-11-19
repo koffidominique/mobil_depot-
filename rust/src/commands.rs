@@ -511,6 +511,7 @@ pub fn create_purchase_order(conn: &mut Connection, payload: &Value) -> CoreResu
         return Err(CoreError::new("EMPTY_ORDER", "Ajoutez au moins une ligne."));
     }
     let mut total = 0i64;
+    let mut order_lines: Vec<(String, i64, i64)> = Vec::new();
     for line in lines {
         let variant = field_str(line, "variant_id")?;
         let qty = field_i64(line, "quantity")?;
@@ -523,6 +524,7 @@ pub fn create_purchase_order(conn: &mut Connection, payload: &Value) -> CoreResu
             |r| r.get(0),
         )?;
         total = checked_add(total, checked_mul(price, qty, "bon de commande")?, "total commande")?;
+        order_lines.push((variant.to_string(), qty, price));
     }
     let order_id = new_id("po");
     let reference = format!("BC-{}", &order_id[order_id.len() - 6..]);
@@ -530,6 +532,12 @@ pub fn create_purchase_order(conn: &mut Connection, payload: &Value) -> CoreResu
         "INSERT INTO purchase_orders (id, branch_id, supplier_id, reference, total_fcfa, status, created_at) VALUES (?1,?2,?3,?4,?5,'ORDERED',?6)",
         params![order_id, a.branch_id, field_str(payload, "supplier_id")?, reference, total, now_ms()],
     )?;
+    for (variant, qty, price) in &order_lines {
+        tx.execute(
+            "INSERT INTO purchase_order_lines (id, order_id, variant_id, ordered_qty, unit_price_fcfa) VALUES (?1,?2,?3,?4,?5)",
+            params![new_id("pol"), order_id, variant, qty, price],
+        )?;
+    }
     db::enqueue(
         &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "PURCHASE_ORDER_CREATE",
         &format!("{reference} ({total} FCFA)"), &json!({"order_id": order_id, "total_fcfa": total}).to_string(),
@@ -548,48 +556,102 @@ pub fn receive_purchase(conn: &mut Connection, payload: &Value) -> CoreResult<Va
     let order_id = field_str(payload, "order_id")?;
     let supplier: String = tx.query_row(
         "SELECT supplier_id FROM purchase_orders WHERE id = ?1",
-        params![order_id],
-        |r| r.get(0),
+        params![order_id], |r| r.get(0),
     )?;
+    let receipt_id = new_id("prec");
     let mut received_total = 0i64;
     for line in field_array(payload, "lines")? {
         let qty = field_i64(line, "quantity")?;
-        if qty <= 0 {
-            continue;
+        let damaged = field_i64_or(line, "damaged_qty", 0);
+        if qty < 0 || damaged < 0 || damaged > qty {
+            return Err(CoreError::new("INVALID_RECEPTION_QTY", "Quantités reçues/endommagées incohérentes."));
         }
         let variant = field_str(line, "variant_id")?;
-        let price: i64 = tx.query_row(
+        let ordered_price: i64 = tx.query_row(
             "SELECT wholesale_case_fcfa FROM product_variants WHERE id = ?1",
-            params![variant],
-            |r| r.get(0),
+            params![variant], |r| r.get(0),
         )?;
+        let price = field_i64_or(line, "unit_price_fcfa", ordered_price);
+        if price < 0 {
+            return Err(CoreError::new("INVALID_UNIT_PRICE", "Prix facturé invalide."));
+        }
+        let good_qty = qty - damaged;
+        let reason = field_str_opt(line, "reason").unwrap_or("Réception fournisseur");
         received_total = checked_add(received_total, checked_mul(price, qty, "réception")?, "total réception")?;
-        let current: i64 = tx.query_row(
-            "SELECT full_units_qty FROM stock_balances WHERE branch_id = ?1 AND variant_id = ?2",
-            params![a.branch_id, variant],
-            |r| r.get(0),
-        ).optional()?.unwrap_or(0);
-        let pack_size: i64 = tx.query_row(
-            "SELECT pack_size FROM product_variants WHERE id = ?1",
-            params![variant],
-            |r| r.get(0),
-        )?;
         tx.execute(
-            "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units, server_revision) VALUES (?1,?2,?3,12,1) ON CONFLICT(branch_id,variant_id) DO UPDATE SET full_units_qty = excluded.full_units_qty",
-            params![a.branch_id, variant, current + checked_mul(pack_size, qty, "réception stock")?],
+            "INSERT INTO purchase_reception_lines (id, receipt_id, order_id, variant_id, received_qty, damaged_qty, unit_price_fcfa, reason)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![new_id("prl"), receipt_id, order_id, variant, qty, damaged, price, reason],
         )?;
+        if good_qty > 0 {
+            let current: i64 = tx.query_row(
+                "SELECT full_units_qty FROM stock_balances WHERE branch_id = ?1 AND variant_id = ?2",
+                params![a.branch_id, variant], |r| r.get(0),
+            ).optional()?.unwrap_or(0);
+            let pack_size: i64 = tx.query_row(
+                "SELECT pack_size FROM product_variants WHERE id = ?1", params![variant], |r| r.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units, server_revision)
+                 VALUES (?1,?2,?3,12,1)
+                 ON CONFLICT(branch_id,variant_id) DO UPDATE SET full_units_qty=excluded.full_units_qty,
+                 server_revision=server_revision+1",
+                params![a.branch_id, variant, current + checked_mul(pack_size, good_qty, "réception stock")?],
+            )?;
+            tx.execute(
+                "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+                 VALUES (?1,?2,?3,'PURCHASE_RECEIPT',?4,?5,?6,?7,?8,?9)",
+                params![new_id("smov"), a.branch_id, variant, checked_mul(pack_size, good_qty, "mouvement réception")?,
+                    reason, receipt_id, a.user_id, a.device_id, now_ms()],
+            )?;
+        }
+    }
+    // Emballages vides remis au fournisseur : dette physique explicite, distincte du montant.
+    if let Some(packaging) = payload.get("packaging") {
+        let crate_id = field_str_opt(packaging, "crate_type_id");
+        let bottle_profile = field_str_opt(packaging, "bottle_profile_id");
+        if let Some(crate_id) = crate_id {
+            let qty = field_i64(packaging, "crate_qty")?;
+            if qty > 0 {
+                tx.execute(
+                    "INSERT INTO partner_packaging_ledger (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at, user_id, device_id)
+                     VALUES (?1,?2,'SUPPLIER',?3,'CRATE',?4,'OUT_TO_PARTNER',?5,?6,?7,?8,?9,?10)",
+                    params![new_id("pkg"), a.branch_id, supplier, crate_id, qty, receipt_id,
+                        "Casiers remis au fournisseur", now_ms(), a.user_id, a.device_id],
+                )?;
+                db::audit(&tx, &a.branch_id, &a.user_id, "PURCHASE_PACKAGING_OUT", &format!("{crate_id}: {qty}"))?;
+            }
+        }
+        if let Some(profile) = bottle_profile {
+            let qty = field_i64(packaging, "bottle_qty")?;
+            if qty > 0 {
+                tx.execute(
+                    "INSERT INTO partner_packaging_ledger (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at, user_id, device_id)
+                     VALUES (?1,?2,'SUPPLIER',?3,'BOTTLE_PROFILE',?4,'OUT_TO_PARTNER',?5,?6,?7,?8,?9,?10)",
+                    params![new_id("pkg"), a.branch_id, supplier, profile, qty, receipt_id,
+                        "Bouteilles vides remises au fournisseur", now_ms(), a.user_id, a.device_id],
+                )?;
+                db::audit(&tx, &a.branch_id, &a.user_id, "PURCHASE_PACKAGING_OUT", &format!("{profile}: {qty}"))?;
+            }
+        }
     }
     tx.execute(
         "UPDATE suppliers SET financial_debt_fcfa = financial_debt_fcfa + ?1, total_purchased_fcfa = total_purchased_fcfa + ?1 WHERE id = ?2",
         params![received_total, supplier],
     )?;
-    tx.execute(
-        "UPDATE purchase_orders SET status = 'PARTIAL_RECEIVED' WHERE id = ?1",
-        params![order_id],
-    )?;
+    let ordered: i64 = tx.query_row(
+        "SELECT COALESCE(SUM(ordered_qty),0) FROM purchase_order_lines WHERE order_id=?1",
+        params![order_id], |r| r.get(0),
+    ).unwrap_or(0);
+    let received: i64 = tx.query_row(
+        "SELECT COALESCE(SUM(received_qty),0) FROM purchase_reception_lines WHERE order_id=?1",
+        params![order_id], |r| r.get(0),
+    ).unwrap_or(0);
+    let status = if ordered > 0 && received >= ordered { "RECEIVED" } else { "PARTIAL_RECEIVED" };
+    tx.execute("UPDATE purchase_orders SET status = ?1 WHERE id = ?2", params![status, order_id])?;
     tx.execute(
         "INSERT INTO purchase_receipts (id, order_id, branch_id, total_fcfa, received_at) VALUES (?1,?2,?3,?4,?5)",
-        params![new_id("prec"), order_id, a.branch_id, received_total, now_ms()],
+        params![receipt_id, order_id, a.branch_id, received_total, now_ms()],
     )?;
     db::enqueue(
         &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "PURCHASE_RECEIVE",
@@ -597,7 +659,49 @@ pub fn receive_purchase(conn: &mut Connection, payload: &Value) -> CoreResult<Va
         1, &new_id("idem"),
     )?;
     tx.commit()?;
-    Ok(json!({"order_id": order_id, "received_fcfa": received_total, "status": "PARTIAL_RECEIVED"}))
+    Ok(json!({"order_id": order_id, "received_fcfa": received_total, "status": status, "remaining_qty": (ordered - received).max(0)}))
+}
+
+/// Assistant d'écart : jamais de validation automatique des quantités manquantes.
+pub fn get_purchase_variance(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let _ = actor(conn, payload)?;
+    let order_id = field_str(payload, "order_id")?;
+    let mut stmt = conn.prepare(
+        "SELECT pol.variant_id, v.name, pol.ordered_qty, pol.unit_price_fcfa,
+                COALESCE((SELECT SUM(prl.received_qty) FROM purchase_reception_lines prl
+                          WHERE prl.order_id=pol.order_id AND prl.variant_id=pol.variant_id),0),
+                COALESCE((SELECT SUM(prl.damaged_qty) FROM purchase_reception_lines prl
+                          WHERE prl.order_id=pol.order_id AND prl.variant_id=pol.variant_id),0),
+                COALESCE((SELECT SUM(prl.unit_price_fcfa*prl.received_qty) FROM purchase_reception_lines prl
+                          WHERE prl.order_id=pol.order_id AND prl.variant_id=pol.variant_id),0)
+         FROM purchase_order_lines pol
+         LEFT JOIN product_variants v ON v.id=pol.variant_id
+         WHERE pol.order_id=?1 ORDER BY pol.variant_id",
+    )?;
+    let rows = stmt.query_map(params![order_id], |r| {
+        let ordered = r.get::<_, i64>(2)?;
+        let received = r.get::<_, i64>(4)?;
+        let damaged = r.get::<_, i64>(5)?;
+        let ordered_price = r.get::<_, i64>(3)?;
+        let ordered_amount = checked_mul(ordered_price, ordered, "montant commandé")?;
+        let invoiced = r.get::<_, i64>(6)?;
+        let status = if received >= ordered && ordered > 0 { "COMPLETE" } else { "PARTIAL" };
+        Ok(json!({
+            "variant_id": r.get::<_, String>(0)?,
+            "variant_name": r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            "ordered_qty": ordered,
+            "received_qty": received,
+            "missing_qty": (ordered - received).max(0),
+            "damaged_qty": damaged,
+            "ordered_amount_fcfa": ordered_amount,
+            "invoiced_amount_fcfa": invoiced,
+            "price_difference_fcfa": invoiced - checked_mul(ordered_price, received, "écart prix")?,
+            "status": status
+        }))
+    })?;
+    let mut lines = Vec::new();
+    for row in rows { lines.push(row?); }
+    Ok(json!({ "order_id": order_id, "lines": lines, "auto_validated": false }))
 }
 
 pub fn record_payment(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
@@ -643,8 +747,8 @@ pub fn get_dashboard(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
     let day_start = now_ms() - 24 * 60 * 60 * 1000;
     let ca: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(total_fcfa),0) FROM sales WHERE branch_id = ?1 AND occurred_at >= ?2",
-        params![a.branch_id, day_start], |r| r.get(0),
+        "SELECT COALESCE(SUM(total_fcfa),0) FROM sales WHERE branch_id = ?1 AND occurred_at >= ?2 AND occurred_at <= ?3",
+        params![a.branch_id, day_start, to_ms], |r| r.get(0),
     )?;
     let sales_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sales WHERE branch_id = ?1 AND occurred_at >= ?2",
@@ -1583,22 +1687,27 @@ pub fn close_cash_session(conn: &mut Connection, payload: &Value) -> CoreResult<
 /// Indicateurs calculés uniquement depuis les données locales durables.
 pub fn get_reports(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
-    let day_start = now_ms() - 24 * 60 * 60 * 1000;
+    let to_ms = field_i64_or(payload, "to_ms", now_ms());
+    let from_ms = field_i64_or(payload, "from_ms", to_ms - 24 * 60 * 60 * 1000);
+    if from_ms < 0 || to_ms < from_ms {
+        return Err(CoreError::new("INVALID_DATE_RANGE", "Période de rapport invalide."));
+    }
+    let day_start = from_ms;
     let revenue: i64 = conn.query_row(
         "SELECT COALESCE(SUM(total_fcfa),0) FROM sales WHERE branch_id = ?1 AND occurred_at >= ?2",
         params![a.branch_id, day_start], |r| r.get(0),
     )?;
     let cash_collected: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(signed_amount_fcfa),0) FROM cash_movements WHERE branch_id = ?1 AND occurred_at >= ?2 AND signed_amount_fcfa > 0",
-        params![a.branch_id, day_start], |r| r.get(0),
+        "SELECT COALESCE(SUM(signed_amount_fcfa),0) FROM cash_movements WHERE branch_id = ?1 AND occurred_at >= ?2 AND occurred_at <= ?3 AND signed_amount_fcfa > 0",
+        params![a.branch_id, day_start, to_ms], |r| r.get(0),
     )?;
     let credits: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(credit_fcfa),0) FROM sales WHERE branch_id = ?1 AND occurred_at >= ?2",
-        params![a.branch_id, day_start], |r| r.get(0),
+        "SELECT COALESCE(SUM(credit_fcfa),0) FROM sales WHERE branch_id = ?1 AND occurred_at >= ?2 AND occurred_at <= ?3",
+        params![a.branch_id, day_start, to_ms], |r| r.get(0),
     )?;
     let expenses: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(amount_fcfa),0) FROM expenses WHERE branch_id = ?1 AND occurred_at >= ?2",
-        params![a.branch_id, day_start], |r| r.get(0),
+        "SELECT COALESCE(SUM(amount_fcfa),0) FROM expenses WHERE branch_id = ?1 AND occurred_at >= ?2 AND occurred_at <= ?3",
+        params![a.branch_id, day_start, to_ms], |r| r.get(0),
     )?;
     let receivables: i64 = conn.query_row(
         "SELECT COALESCE(SUM(financial_balance_fcfa),0) FROM customers", [], |r| r.get(0),
@@ -1613,16 +1722,18 @@ pub fn get_reports(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let by_product: Vec<Value> = {
         let mut stmt = conn.prepare(
             "SELECT variant_name, SUM(line_total_fcfa), SUM(physical_units) FROM sale_lines sl
-             JOIN sales s ON s.id = sl.sale_id WHERE s.branch_id = ?1 AND s.occurred_at >= ?2
+             JOIN sales s ON s.id = sl.sale_id WHERE s.branch_id = ?1 AND s.occurred_at >= ?2 AND s.occurred_at <= ?3
              GROUP BY variant_name ORDER BY SUM(line_total_fcfa) DESC LIMIT 20",
         )?;
-        stmt.query_map(params![a.branch_id, day_start], |r| Ok(json!({
+        stmt.query_map(params![a.branch_id, day_start, to_ms], |r| Ok(json!({
             "variant_name": r.get::<_, String>(0)?,
             "revenue_fcfa": r.get::<_, i64>(1)?,
             "bottles_sold": r.get::<_, i64>(2)?
         })))?.collect::<Result<_, _>>()?
     };
     Ok(json!({
+        "from_ms": from_ms,
+        "to_ms": to_ms,
         "revenue_fcfa": revenue,
         "cash_collected_fcfa": cash_collected,
         "credits_fcfa": credits,
@@ -2065,6 +2176,7 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "registerPackagingReturn" | "register_packaging_return" => register_packaging_return(conn, payload),
         "createPurchaseOrder" | "create_purchase_order" => create_purchase_order(conn, payload),
         "receivePurchase" | "receive_purchase" => receive_purchase(conn, payload),
+        "getPurchaseVariance" | "get_purchase_variance" => get_purchase_variance(conn, payload),
         "getInventory" | "get_inventory" => get_inventory(conn, payload),
         "recordInventoryCount" | "record_inventory_count" => record_inventory_count(conn, payload),
         "getStockMovements" | "get_stock_movements" => get_stock_movements(conn, payload),

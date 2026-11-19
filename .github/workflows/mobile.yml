@@ -20,6 +20,7 @@ jobs:
       - run: npm test -- --runInBand
       - run: npm run bundle:check
       - run: npx eslint . --ext .ts,.tsx --quiet
+      - run: npm run codegen
 
   rust:
     name: Rust core and sync adapter

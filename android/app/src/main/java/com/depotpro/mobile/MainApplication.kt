@@ -16,6 +16,8 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           // Moteur métier Rust exposé via TurboModule (New Architecture).
           add(DepotCorePackage())
+          // Impression native des reçus PDF.
+          add(ReceiptPrinterPackage())
         },
     )
   }

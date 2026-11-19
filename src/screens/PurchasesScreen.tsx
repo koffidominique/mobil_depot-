@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
@@ -17,6 +17,13 @@ export function PurchasesScreen() {
   const [quantity, setQuantity] = useState('1');
   const [orderId, setOrderId] = useState('');
   const [receivedQuantity, setReceivedQuantity] = useState('1');
+  const [damagedQuantity, setDamagedQuantity] = useState('0');
+  const [invoicePrice, setInvoicePrice] = useState('');
+  const variance = useQuery({
+    queryKey: ['purchase-variance', orderId],
+    enabled: Boolean(orderId),
+    queryFn: () => depot.getPurchaseVariance(orderId),
+  });
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -47,11 +54,19 @@ export function PurchasesScreen() {
     mutationFn: () =>
       depot.receivePurchase({
         order_id: orderId,
-        lines: [{ variant_id: variantId, quantity: Number.parseInt(receivedQuantity, 10) }],
+        lines: [{
+          variant_id: variantId,
+          quantity: Number.parseInt(receivedQuantity, 10),
+          damaged_qty: Number.parseInt(damagedQuantity, 10) || 0,
+          ...(invoicePrice.trim() ? { unit_price_fcfa: Number.parseInt(invoicePrice, 10) } : {}),
+          reason: 'Réception contrôlée',
+        }],
       }),
     onSuccess: async (result) => {
       setMessage(`Réception partielle enregistrée · ${formatFcfa(result.received_fcfa)}`);
       setError(null);
+      setDamagedQuantity('0');
+      setInvoicePrice('');
       await invalidate();
     },
     onError: (err: Error) => setError(err.message),
@@ -98,13 +113,38 @@ export function PurchasesScreen() {
             </Text>
           </Pressable>
         ))}
+        <Text style={{ color: c.subtitle, fontSize: 12 }}>Référence concernée</Text>
+        {(variance.data?.lines ?? []).map((line) => (
+          <Pressable key={line.variant_id} onPress={() => {
+            setVariantId(line.variant_id);
+            setReceivedQuantity(String(line.received_qty));
+            setInvoicePrice('');
+          }}>
+            <Text style={{ color: variantId === line.variant_id ? c.primary : c.text, fontWeight: '700' }}>
+              {line.variant_name} · commandé {line.ordered_qty} · reçu {line.received_qty} · manquant {line.missing_qty}
+            </Text>
+          </Pressable>
+        ))}
         <Field label="Quantité reçue" value={receivedQuantity} keyboardType="numeric" onChangeText={setReceivedQuantity} />
+        <Field label="Quantité endommagée" value={damagedQuantity} keyboardType="numeric" onChangeText={setDamagedQuantity} />
+        <Field label="Prix réellement facturé (FCFA/casier)" value={invoicePrice} keyboardType="numeric" onChangeText={setInvoicePrice} />
         <PrimaryButton
-          label="Enregistrer la réception"
+          label="Enregistrer la réception contrôlée"
           loading={receive.isPending}
           disabled={!orderId || !variantId}
           onPress={() => receive.mutate()}
         />
+        <Text style={{ color: c.subtitle, fontSize: 11 }}>
+          Les quantités manquantes ne sont jamais validées automatiquement.
+          {variance.data?.auto_validated === false ? ' Assistant conforme.' : ''}
+        </Text>
+        {(variance.data?.lines ?? []).map((line) => (
+          <Row
+            key={`ecart-${line.variant_id}`}
+            label={`${line.variant_name} · écart prix`}
+            value={`${formatFcfa(line.price_difference_fcfa)} · ${line.status}`}
+          />
+        ))}
       </Card>
 
       <Card>

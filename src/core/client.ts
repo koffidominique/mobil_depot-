@@ -175,8 +175,27 @@ export const depot = {
 
   receivePurchase: (input: {
     order_id: string;
-    lines: Array<{ variant_id: string; quantity: number }>;
-  }) => call<{ order_id: string; received_fcfa: number }>('receivePurchase', input),
+    lines: Array<{
+      variant_id: string;
+      quantity: number;
+      damaged_qty?: number;
+      unit_price_fcfa?: number;
+      reason?: string;
+    }>;
+    packaging?: { crate_type_id?: string; crate_qty?: number; bottle_profile_id?: string; bottle_qty?: number };
+  }) => call<{ order_id: string; received_fcfa: number; status: string; remaining_qty: number }>(
+    'receivePurchase', input,
+  ),
+  getPurchaseVariance: (orderId: string) =>
+    call<{
+      order_id: string;
+      auto_validated: boolean;
+      lines: Array<{
+        variant_id: string; variant_name: string; ordered_qty: number; received_qty: number;
+        missing_qty: number; damaged_qty: number; ordered_amount_fcfa: number;
+        invoiced_amount_fcfa: number; price_difference_fcfa: number; status: string;
+      }>;
+    }>('getPurchaseVariance', { order_id: orderId }),
 
   recordPayment: (input: {
     partner_type: 'CUSTOMER' | 'SUPPLIER';
@@ -231,7 +250,10 @@ export const depot = {
     call<{ status: string; variance_fcfa: number; counted_fcfa: number }>('closeCashSession', {
       counted_fcfa: countedFcfa,
     }),
-  getReports: () => call<SalesReport>('getReports'),
+  getReports: (fromMs?: number, toMs?: number) => call<SalesReport>('getReports', {
+    ...(fromMs != null ? { from_ms: fromMs } : {}),
+    ...(toMs != null ? { to_ms: toMs } : {}),
+  }),
   getConflicts: () => call<{ conflicts: SyncConflict[] }>('getConflicts'),
   resetStaleSyncing: (staleBeforeMs: number) =>
     call<{ reset: number }>('resetStaleSyncing', { stale_before_ms: staleBeforeMs }),

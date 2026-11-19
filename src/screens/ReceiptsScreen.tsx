@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 import { Pressable, Share, Text, View } from 'react-native';
 import { Banner, Card, Row, Screen, useColors } from '../components/ui';
 import { depot } from '../core/client';
+import { pdfFileUrl, printReceiptPdf, writeReceiptPdf } from '../core/receiptPrinter';
+import type { ReceiptPdfInput } from '../core/receiptPdf';
 import { formatFcfa, formatQuantity, formatTimestamp } from '../core/format';
 import type { PackagingAccount, SaleReceipt } from '../core/types';
 import { useSales } from '../hooks/useCore';
@@ -11,6 +13,7 @@ export function ReceiptsScreen() {
   const c = useColors();
   const sales = useSales();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pdfMessage, setPdfMessage] = useState<string | null>(null);
   const receipt = useQuery<SaleReceipt, Error>({
     queryKey: ['sale-receipt', selectedId],
     enabled: Boolean(selectedId),
@@ -38,6 +41,56 @@ export function ReceiptsScreen() {
     .filter((item) => item.item_kind === 'CRATE')
     .reduce((sum, item) => sum + item.received_qty, 0);
   const outstanding = balances.reduce((sum, item) => sum + item.outstanding_qty, 0);
+
+  async function receiptPdfInput(): Promise<ReceiptPdfInput> {
+    const receiptData = receipt.data;
+    if (!receiptData) throw new Error('Reçu indisponible.');
+    return {
+      depotName: 'DEPOTPRO - Dépôt Marcory',
+      receiptNumber: receiptData.receipt_number,
+      dateLabel: formatTimestamp(receiptData.occurred_at),
+      customer: receiptData.customer_name,
+      lines: receiptData.lines.map((line) => ({
+        label: `${line.variant_name} (${line.unit})`,
+        quantity: String(line.unit_count),
+        amountFcfa: String(line.line_total_fcfa),
+      })),
+      subtotalFcfa: String(receiptData.subtotal_fcfa),
+      discountFcfa: String(receiptData.discount_fcfa),
+      totalFcfa: String(receiptData.total_fcfa),
+      paidFcfa: String(receiptData.paid_confirmed_fcfa),
+      creditFcfa: String(receiptData.credit_fcfa),
+      packagingLines: [
+        `Casiers attendus/recus: ${expectedCrates}/${receivedCrates}`,
+        `Bouteilles vides attendues/recues: ${expectedEmptyBottles}/${receivedBottles}`,
+        `Reste a restituer: ${outstanding}`,
+      ],
+      notes: [
+        'Recu commercial - pas une facture normalisee.',
+        'Aucun frais d emballage n est ajoute automatiquement.',
+      ],
+    };
+  }
+
+  async function exportPdf() {
+    try {
+      const path = await writeReceiptPdf(await receiptPdfInput());
+      setPdfMessage(`PDF enregistre : ${path}`);
+      await Share.share({ url: pdfFileUrl(path) });
+    } catch (error) {
+      setPdfMessage(error instanceof Error ? error.message : 'Export PDF impossible.');
+    }
+  }
+
+  async function printPdf() {
+    try {
+      const path = await writeReceiptPdf(await receiptPdfInput());
+      const started = await printReceiptPdf(path);
+      setPdfMessage(started ? 'Dialogue d’impression ouvert.' : 'Impression annulée.');
+    } catch (error) {
+      setPdfMessage(error instanceof Error ? error.message : 'Impression impossible.');
+    }
+  }
 
   async function shareReceipt() {
     if (!receipt.data) return;
@@ -107,11 +160,15 @@ export function ReceiptsScreen() {
             message="Reçu commercial : il n'est pas présenté comme une facture normalisée. Aucun frais d'emballage n'est ajouté automatiquement."
           />
           <Pressable onPress={() => void shareReceipt()}>
-            <Text style={{ color: c.primary, fontWeight: '700' }}>Partager le reçu</Text>
+            <Text style={{ color: c.primary, fontWeight: '700' }}>Partager le reçu (texte)</Text>
           </Pressable>
-          <Text style={{ color: c.subtitle, fontSize: 11 }}>
-            Export PDF et impression nécessitent un module natif dédié : non activés dans cette version.
-          </Text>
+          <Pressable onPress={() => void exportPdf()}>
+            <Text style={{ color: c.primary, fontWeight: '700' }}>Exporter en PDF</Text>
+          </Pressable>
+          <Pressable onPress={() => void printPdf()}>
+            <Text style={{ color: c.primary, fontWeight: '700' }}>Imprimer le PDF</Text>
+          </Pressable>
+          <Banner tone="info" message={pdfMessage} />
         </Card>
       ) : null}
       {receipt.isError ? <Banner message={receipt.error.message} /> : null}

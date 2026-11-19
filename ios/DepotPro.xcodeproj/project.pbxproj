@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DEB0C0060000000000000006 /* ReceiptPrinter.mm in Sources */ = {isa = PBXBuildFile; fileRef = DEB0C0070000000000000007 /* ReceiptPrinter.mm */; };
 		DEB0C0010000000000000001 /* DepotCoreModule.mm in Sources */ = {isa = PBXBuildFile; fileRef = DEB0C0020000000000000001 /* DepotCoreModule.mm */; };
 		DEB0C0030000000000000001 /* DepotCoreSwift.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEB0C0040000000000000001 /* DepotCoreSwift.swift */; };
 		0C80B921A6F3F58F76C31292 /* libPods-DepotPro.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-DepotPro.a */; };
@@ -17,6 +18,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		DEB0C0070000000000000007 /* ReceiptPrinter.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = ReceiptPrinter.mm; path = DepotPro/ReceiptPrinter.mm; sourceTree = "<group>"; };
 		DEB0C0020000000000000001 /* DepotCoreModule.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = DepotCoreModule.mm; path = DepotPro/DepotCoreModule.mm; sourceTree = "<group>"; };
 		DEB0C0040000000000000001 /* DepotCoreSwift.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DepotCoreSwift.swift; path = DepotPro/DepotCoreSwift.swift; sourceTree = "<group>"; };
 		DEB0C0050000000000000001 /* DepotPro-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "DepotPro-Bridging-Header.h"; path = DepotPro/DepotPro-Bridging-Header.h; sourceTree = "<group>"; };
@@ -55,6 +57,7 @@
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
 				DEB0C0020000000000000001 /* DepotCoreModule.mm */,
+				DEB0C0070000000000000007 /* ReceiptPrinter.mm */,
 				DEB0C0040000000000000001 /* DepotCoreSwift.swift */,
 				DEB0C0050000000000000001 /* DepotPro-Bridging-Header.h */,
 			);
@@ -258,6 +261,7 @@
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
 				761780EF2CA45674006654EF /* SceneDelegate.swift in Sources */,
 				DEB0C0010000000000000001 /* DepotCoreModule.mm in Sources */,
+				DEB0C0060000000000000006 /* ReceiptPrinter.mm in Sources */,
 				DEB0C0030000000000000001 /* DepotCoreSwift.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
