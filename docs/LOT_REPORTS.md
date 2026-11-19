@@ -274,3 +274,13 @@
 - **Moteur simulé** : `web/mock/engine.ts` reproduit le jeu pilote fr-CI (montants FCFA entiers, ventes, clients, emballages, caisse, rapports) ; explicitement non contractuel (`docs/WEB_PREVIEW.md`).
 - **Vérification** : `npm run web:typecheck` OK, `node scripts/verify-web-preview.mjs` OK (connexion `gerant/1234` → écran Accueil rendu sans erreur JSDOM), tsc mobile OK, Jest 10 suites/33 tests OK, ESLint OK.
 - **CI** : le job TypeScript exécute désormais le typecheck web et le rendu headless.
+
+
+## LOT 33 — PARTIE 9 : sécurité, sessions et permissions
+
+- **MIGRATION_8** : rôles WAREHOUSE/ACCOUNTANT, `role_permissions` (établissement + point de vente avec repli `*`), `security_settings`, `login_attempts`, colonnes de session `locked/last_activity/revocation`, appareils révocables, audit enrichi.
+- **Contrôle central** : `permission_for_command` + `assert_permission` avant chaque commande ; `security.admin` requis pour sauvegarde/restauration et réglages ; `checkPermission` vérifie la configuration effective par branche.
+- **Sessions** : rotation sécurisée, révocation, verrouillage/déverrouillage par PIN, expiration, anti brute force, révocation d'appareil perdu ; écran `UnlockScreen` et auto-lock dans App.tsx.
+- **Secrets** : Keychain/Android Keystore, HTTPS obligatoire (`assertHttpsUrl`), aucun PIN/jeton dans les journaux (`audit_security`).
+- **Vérifications** : tsc OK, Jest 11 suites/37 tests, ESLint OK, codegen OK, bundle OK, tree-sitter Rust OK, `git diff --check` OK, aperçu web toujours fonctionnel.
+- **Non exécuté** : `cargo test` (toolchain absente) ; CI ubuntu-latest.

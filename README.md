@@ -27,6 +27,7 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - [Contrat de synchronisation `/api/v1`](docs/API_SYNC_V1.md)
 - [Diagrammes et parité plateformes](docs/DIAGRAMS.md)
 - [Aperçu web et mocks](docs/WEB_PREVIEW.md)
+- [Sécurité, sessions et permissions](docs/PART9_SECURITY.md)
 - [Cahier de développement](prompt.md)
 
 ## Règles non négociables
