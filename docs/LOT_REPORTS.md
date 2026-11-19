@@ -224,3 +224,14 @@
 - **Interface** : `StatementScreen` affiche le compte emballages ; `CatalogScreen` permet de configurer les nouveaux champs ; le contrat TypeScript est couvert par `__tests__/part5-model.test.ts`.
 - **Vérifications exécutées** : tsc OK, Jest 5 suites/20 tests, ESLint OK, tree-sitter Rust OK, codegen OK, `git diff --check` OK.
 - **Non exécuté** : `cargo test` et builds natifs (toolchains absentes).
+
+
+## LOT 28 — PARTIE 6 : modules et écrans mobiles
+
+- **Tableau de bord** : `getDashboard` ajoute encaissements, dépenses, crédits, ruptures, alertes emballages et distinction CA confirmé/local ; `HomeScreen` affiche ces indicateurs.
+- **Vente et paiement** : filtres marque/catégorie/contenance/contenant/favoris, calcul BigInt des FCFA, paiement mixte en deux moyens, Mobile Money non encaissé sans référence validée.
+- **Reçus** : `customer_id` et `occurred_at` ajoutés au reçu Rust, section emballages attendus/reçus/restants, partage natif, mention « reçu commercial pas facture normalisée ».
+- **Stock** : migration `MIGRATION_5`, inventaire justifié (`recordInventoryCount`) et historique (`getStockMovements`), avec contrôle de rôle et audit.
+- **Sync/admin** : `adminApi.ts` (HTTPS uniquement) pour liste/révocation des appareils réservées à OWNER/ADMIN ; `getSyncHistory` pour l'historique local.
+- **Vérifications** : tsc OK, Jest 6 suites/24 tests, ESLint OK, codegen OK, tree-sitter Rust OK, `git diff --check` OK.
+- **Non exécuté** : `cargo test`, builds natifs ; export PDF/impression des reçus non implémentés (aucun module natif dédié).
