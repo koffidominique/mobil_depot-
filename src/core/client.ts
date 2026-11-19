@@ -64,7 +64,7 @@ export function getAuthToken(): string | null {
 }
 
 /** Validation des contrats côté interface : aucune règle métier n'est dupliquée ici. */
-function validateInterface<T>(schema: ZodType<T>, payload: unknown, label: string): T {
+async function validateInterface<T>(schema: ZodType<T>, payload: unknown, label: string): Promise<T> {
   const result = schema.safeParse(payload);
   if (!result.success) {
     const first = result.error.issues[0];
@@ -98,8 +98,8 @@ export const depot = {
   initializeDatabase: (path: string) =>
     call<{ database: string; schema_version: number }>('initializeDatabase', { path }),
 
-  authenticate: (username: string, pin: string, branchId: string, deviceId: string) => {
-    const valid = validateInterface(loginSchema, { username, pin, branchId }, 'Connexion');
+  authenticate: async (username: string, pin: string, branchId: string, deviceId: string) => {
+    const valid = await validateInterface(loginSchema, { username, pin, branchId }, 'Connexion');
     return call<AuthSession>('authenticate', {
       username: valid.username, pin: valid.pin, branch_id: valid.branchId, device_id: deviceId,
     });
@@ -117,7 +117,7 @@ export const depot = {
   getSupplierAccount: (supplierId: string) =>
     call<SupplierAccount>('getSupplierAccount', { supplier_id: supplierId }),
 
-  validateSale: (input: {
+  validateSale: async (input: {
     customer_id: string | null;
     price_tier: string;
     lines: CartLineInput[];
@@ -126,11 +126,11 @@ export const depot = {
     payments: PaymentInput[];
     is_online: boolean;
   }) => {
-    const valid = validateInterface(saleSchema, input, 'Validation de vente');
+    const valid = await validateInterface(saleSchema, input, 'Validation de vente');
     return call<SaleValidation>('validateSale', valid);
   },
 
-  createSale: (input: {
+  createSale: async (input: {
     customer_id: string | null;
     price_tier: string;
     lines: CartLineInput[];
@@ -139,7 +139,7 @@ export const depot = {
     payments: PaymentInput[];
     is_online: boolean;
   }) => {
-    const valid = validateInterface(saleSchema, input, 'Création de vente');
+    const valid = await validateInterface(saleSchema, input, 'Création de vente');
     return call<SaleResult>('createSale', valid);
   },
 
