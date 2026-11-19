@@ -170,3 +170,14 @@
 - **Baseline enregistrée** : `tsc` OK, Jest 2 suites/8 tests, ESLint OK, bundle Android OK, tree-sitter Rust OK, `git diff --check` OK. `cargo test` et builds natifs non exécutés et non déclarés réussis.
 - **Risques mis à jour** : absence de synchronisation serveur, absence de multi-tenant/branch/device, conflits non implémentés, divergence bcrypt/SHA-256 pour les PIN, migrations mobiles non encore versionnées en fichiers ordonnés.
 - **Prochaine étape** : PARTIE 3 — consolider le contrat d'architecture Rust ↔ React Native et vérifier les points ouverts avant tout nouveau développement métier.
+
+## LOT 23 — PARTIE 2 : implémentation des écarts bloquants côté adaptateur
+
+- **Choix** (validé par l'utilisateur) : implémenter ici les écarts identifiés par l'audit sans modifier le dépôt parent.
+- **`SqliteSyncKernel`** (`server/src/sqlite_kernel.rs`) : implémentation SQLx complète de `SyncKernel`. Idempotence persistée par clé, curseur serveur incrémenté dans la même transaction, événements de pull filtrés par `tenant_id`/`branch_id`, registre des appareils par paire (tenant, device) avec révocation, conflits ouverts persistés et journal d'audit.
+- **Séparation stricte des responsabilités** : deux traits d'injection — `TokenVerifier` (à brancher sur `depotpro_core::auth`) et `OperationExecutor` (à brancher sur `sales`, `purchases`, `cash`, …). Le kernel ne contient **aucune** règle métier : l'exécuteur reçoit la transaction SQLx et renvoie `Applied`/`Conflict`/`Rejected`.
+- **Router mis à jour** : `list_devices` reçoit désormais l'identité pour isoler le locataire ; les événements de réplication portent `tenant_id`.
+- **Tests SQLx ajoutés** (`server/tests/sqlite_kernel.rs`) : double push idempotent avec une seule exécution et un seul événement, conflit persisté et visible via `/api/v1/conflicts`, enregistrement puis révocation d'un appareil.
+- **Documentation** : `server/README.md` et `docs/API_SYNC_V1.md` décrivent le schéma, les invariants transactionnels et le branchement sur `depotpro-core` ; `docs/PART2_AUDIT_COMPLET.md` réévalue les écarts.
+- **Vérifications** : analyse tree-sitter des fichiers Rust sans nœud d'erreur ; `git diff --check` OK. `cargo test` reste non exécutable dans ce sandbox (toolchain absente) : les tests SQLx sont fournis mais pas exécutés ici.
+- **Reste à faire dans le parent** : injecter les implémentations réelles de `TokenVerifier` et `OperationExecutor` dans `crates/depotpro-server`, puis exécuter les tests multi-appareils.

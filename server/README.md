@@ -31,3 +31,27 @@ cargo test --manifest-path server/Cargo.toml
 Les tests couvrent l'idempotence, la présence d'un accusé par opération, le rejet explicite d'un schéma non pris en charge et l'authentification. Ils utilisent un `SyncKernel` factice **uniquement en test** ; aucune règle métier n'y est dupliquée pour la production.
 
 État dans ce workspace : la syntaxe Rust a été validée par analyzeur tree-sitter, mais `cargo test` n'a pas pu être exécuté (toolchain Rust absente). À exécuter dans un environnement Rust stable avant intégration.
+
+## Implémentation SQLx fournie
+
+`src/sqlite_kernel.rs` contient `SqliteSyncKernel`, une implémentation concrète de `SyncKernel` qui persiste :
+
+- `sync_idempotency` : clé d'idempotence → séquence serveur (une nouvelle tentative renvoie la même séquence sans réécrire) ;
+- `sync_sequence` : curseur serveur incrémenté dans la même transaction que l'opération ;
+- `sync_events` : événements à distribuer via `/sync/pull`, filtrés par `tenant_id` et `branch_id` ;
+- `sync_devices` : appareils par (tenant, device), enregistrement et révocation ;
+- `sync_conflicts` / `sync_audit` : conflits ouverts et journal des décisions.
+
+Deux traits d'injection évitent toute seconde implémentation des règles métier :
+
+- `TokenVerifier` : à brancher sur `depotpro_core::application::auth` ;
+- `OperationExecutor` : reçoit la transaction SQLx et l'opération, et doit appeler les services `depotpro-core` (`sales::create_sale`, `purchases::receive_purchase_order`, `cash::*`, …). Il renvoie `Applied`, `Conflict` ou `Rejected` ; le kernel se charge de l'idempotence, du curseur, de l'événement et de l'audit.
+
+```rust
+let pool = SqlitePoolOptions::new().connect("sqlite://…").await?;
+let kernel = SqliteSyncKernel::new(pool, Arc::new(CoreTokenVerifier), Arc::new(CoreOperationExecutor));
+kernel.initialize_schema().await?;
+let app = Router::new().merge(depotpro_sync_adapter::sync_router(Arc::new(kernel)));
+```
+
+Les tests `server/tests/sqlite_kernel.rs` exécutent cette implémentation sur une base SQLite en mémoire : idempotence, unicité de l'événement de pull, conflit visible, enregistrement et révocation d'appareil. L'`OperationExecutor` de ces tests est un faux volontairement sans règle métier ; la production doit injecter `depotpro-core`.

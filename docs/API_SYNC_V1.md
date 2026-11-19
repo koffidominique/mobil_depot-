@@ -80,3 +80,11 @@ Pull :
 ## Intégration dans le projet parent
 
 Voir `server/README.md`. Le parent reste le seul serveur métier : ce crate est un routeur + des DTO, pas une seconde implémentation des règles.
+
+## Persistance serveur de référence
+
+`server/src/sqlite_kernel.rs` fournit l'implémentation SQLx du contrat. Les tables sont créées par `initialize_schema()` de façon additive :
+
+`sync_sequence`, `sync_idempotency`, `sync_events`, `sync_devices`, `sync_conflicts`, `sync_audit`.
+
+L'idempotence et l'incrémentation du curseur sont **atomiques** avec l'exécution de l'opération : l'`OperationExecutor` reçoit la transaction ouverte par le kernel. Un accusé `ACCEPTED` porte toujours le `server_sequence` qui a été persisté. Un conflit est persisté avant d'être renvoyé au mobile, donc jamais masqué.

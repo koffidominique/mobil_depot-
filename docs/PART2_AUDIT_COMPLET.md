@@ -85,8 +85,8 @@ Un seul `main.rs` avec 50 routes déclarées sous `/api/*` : auth, dashboard, pr
 | Inventaires, stock | `inventory::*` | Stock local propre à l'appareil ; le serveur reste autorité globale. |
 | PDF, sauvegardes chiffrées | `pdf::generate_document_pdf`, `backup::create_encrypted_backup` | Ne pas recréer côté mobile : impression/partage à brancher sur les services existants. |
 | Auth bcrypt/RBAC | `auth::*`, migration `0005` | Réutiliser côté serveur ; mobile = session locale + token. |
-| Synchronisation multi-appareils | **Aucune route** | À développer dans le parent (adaptateur fourni dans `server/`). |
-| Multi-tenant / branches / appareils | **Absent du schéma V3** | Migration centrale à concevoir avant production multi-points de vente. |
+| Synchronisation multi-appareils | **Aucune route** | Adaptateur Axum + implémentation SQLx fournis dans `server/` ; injection du noyau parent restante. |
+| Multi-tenant / branches / appareils | **Absent du schéma V3** | Les tables de réplication fournies isolent déjà par `tenant_id`/`branch_id` ; migration centrale à concevoir avant production. |
 | Conflits serveur | **Absent** | Contrat `CONFLICT` défini ; implémentation dans `SyncKernel` à faire. |
 | File outbox / curseurs locaux | Absent du parent (normal, côté appareil) | Implémenté dans `rust/src/db.rs` et `commands.rs`. |
 
