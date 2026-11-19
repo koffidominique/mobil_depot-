@@ -83,6 +83,8 @@ Limites de l'environnement d'audit : ni `cargo`, ni JDK/Gradle n'étant install�
 
 ## 7. Ré-audit du 2026-11-19 (branche `arena/76d0c3ee-mobil-depot`)
 
+> Audit complet PARTIE 2, inventaire des fonctions et rapport de protection : `docs/PART2_AUDIT_COMPLET.md` (script reproductible `scripts/audit-parent.sh`).
+
 Vérification demandée par la PARTIE 2 avant tout nouveau développement :
 
 | Élément | Commande | Résultat |

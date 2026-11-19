@@ -159,3 +159,14 @@
 - **Autres vérifications** : `npx tsc --noEmit` sans erreur, `npx eslint . --ext .ts,.tsx --quiet` sans erreur, `git diff --check` OK.
 - **CI** : `npm run bundle:check` ajouté au job TypeScript de `.github/workflows/mobile.yml` pour reproduire l'exécution du bundle Android sur GitHub.
 - **Limite explicite** : ces tests simulés exécutent le **contrat** entre l'interface et Rust. Le moteur Rust lui-même n'a pas pu être exécuté (`cargo` absent, téléchargement de toolchain bloqué), non plus que l'application sur Android/iOS (JDK/SDK/Xcode absents). Aucun build natif n'est déclaré réussi.
+
+## LOT 22 — PARTIE 2 : audit complet, inventaire et rapport de protection
+
+- **PARTIE 2 exécutée** : `scripts/audit-parent.sh` ajouté puis exécuté. Parent vérifié à `cb78d3ca…`, version `3.0.0`, 50 routes `/api/*`, **0** route `/api/v1/sync/*`, 66 commandes Tauri, 8 suites de tests Rust d'intégration, 13 jobs CI, migrations `0001`–`0005`.
+- **Inventaire livré** : `docs/PART2_AUDIT_COMPLET.md` couvre workspace Rust, `depotpro-core` (fonctions par module), `depotpro-server`, `src-tauri`, frontend React/TS, clients HTTP/Tauri, DTO, migrations, écrans, authentification, tests, scripts et CI/CD.
+- **Décision « ne pas recréer »** : tableau explicite des fonctions parent réutilisées via le moteur Rust et des seules fonctions mobiles ajoutées (hors-ligne, catalogue local, outbox), avec raison technique documentée.
+- **Protection (2.3)** : branche dédiée `arena/76d0c3ee-mobil-depot`, `git status` propre, aucune base SQLite ou sauvegarde dans le workspace, aucune base de production consultée, migrations additives, sauvegarde automatique avant restauration, développement isolé du Desktop.
+- **Rationalisation (2.4)** : backend Node/Express confirmé présent (`server.ts`, `server/app.ts`, `server/domain.ts`) et non retiré : suppression conditionnée à la parité Rust et aux tests dans le dépôt parent. Node reste outillage RN/Vite, jamais serveur métier final.
+- **Baseline enregistrée** : `tsc` OK, Jest 2 suites/8 tests, ESLint OK, bundle Android OK, tree-sitter Rust OK, `git diff --check` OK. `cargo test` et builds natifs non exécutés et non déclarés réussis.
+- **Risques mis à jour** : absence de synchronisation serveur, absence de multi-tenant/branch/device, conflits non implémentés, divergence bcrypt/SHA-256 pour les PIN, migrations mobiles non encore versionnées en fichiers ordonnés.
+- **Prochaine étape** : PARTIE 3 — consolider le contrat d'architecture Rust ↔ React Native et vérifier les points ouverts avant tout nouveau développement métier.
