@@ -8,6 +8,7 @@ Application mobile offline-first pour dépôts de boissons en Côte d'Ivoire (fr
 
 ```bash
 npm install
+npm run web            # aperçu interactif dans le navigateur (http://localhost:5173)
 npm run rust:android     # nécessite Rust + cargo-ndk + Android NDK
 npm run android          # nécessite JDK 21 + Android SDK
 npm run typecheck
@@ -25,6 +26,7 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - [Rapports par lots](docs/LOT_REPORTS.md)
 - [Contrat de synchronisation `/api/v1`](docs/API_SYNC_V1.md)
 - [Diagrammes et parité plateformes](docs/DIAGRAMS.md)
+- [Aperçu web et mocks](docs/WEB_PREVIEW.md)
 - [Cahier de développement](prompt.md)
 
 ## Règles non négociables

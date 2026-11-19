@@ -265,3 +265,12 @@
 - **Mobile** : `src/core/apiContracts.ts` envoie l'enveloppe versionnée et gère les deux formes de réponse `/devices` ; `adminApi.ts` et `useCore.ts` l'utilisent.
 - **Vérifications** : tsc OK, Jest 10 suites/33 tests, ESLint OK, tree-sitter Rust OK, codegen OK, bundle OK, `git diff --check` OK.
 - **Non exécuté** : `cargo test` (toolchain absente) ; CI ubuntu-latest exécute les tests Rust.
+
+
+## LOT 32 — Aperçu web interactif
+
+- **Exécution navigateur** : Vite 6 + `react-native-web`, `npm run web` sur le port 5173, hôte 0.0.0.0 et `allowedHosts` activé pour la prévisualisation.
+- **Shims isolés** : navigation React Navigation remplacée par une navigation écran/tabs locale, Keychain par `localStorage`, RNFS par un système de fichiers simulé (téléchargement PDF/CSV), NetInfo/AppState simplifiés, TurboModules remplacés par `web/mock/`.
+- **Moteur simulé** : `web/mock/engine.ts` reproduit le jeu pilote fr-CI (montants FCFA entiers, ventes, clients, emballages, caisse, rapports) ; explicitement non contractuel (`docs/WEB_PREVIEW.md`).
+- **Vérification** : `npm run web:typecheck` OK, `node scripts/verify-web-preview.mjs` OK (connexion `gerant/1234` → écran Accueil rendu sans erreur JSDOM), tsc mobile OK, Jest 10 suites/33 tests OK, ESLint OK.
+- **CI** : le job TypeScript exécute désormais le typecheck web et le rendu headless.
