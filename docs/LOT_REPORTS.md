@@ -320,3 +320,11 @@
 - **Corrigé** : doublons de lignes de commande/réception d'achat, transactions critiques `BEGIN IMMEDIATE`, seed de démonstration optionnel, quantité desktop strictement entière, origines web filtrées et en-têtes de proxy non fiables supprimés.
 - **Non corrigé / documenté** : chiffrement des sauvegardes, PIN sans KDF salé, points 15–19 du parent, E2E natif et `cargo test` non exécutables ici.
 - **Validation** : tsc, web:typecheck, ESLint, Jest 15 suites/48 tests, syntaxe Rust, codegen, bundle et aperçu JSDOM OK.
+
+
+## LOT 38 — PARTIE 14 : clôture du plan et guides de livraison
+
+- **Rapport** : `docs/PART14_LOT_REPORT.md`. Lots 0–4 livrés ou partiels, lot 5 et 12 bloqués par l'absence de routes `/api/v1/sync/*` dans le parent, lot 13 bloqué par l'absence de builds et d'E2E natifs.
+- **Guides ajoutés** : installation/développement, synchronisation, sauvegarde/restauration, déploiement serveur.
+- **Validation réexécutée** : tsc, web:typecheck, ESLint, Jest 15 suites/48 tests, syntaxe Rust, codegen, bundle, aperçu JSDOM, `git diff --check` : OK.
+- **Non exécuté** : `cargo test`, builds natifs, E2E appareils, tests de charge, synchronisation réelle inter-appareils.

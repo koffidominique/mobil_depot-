@@ -32,6 +32,11 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - [Parité avec DEPOTPRO Desktop](docs/PART11_DESKTOP.md)
 - [Tests et validation obligatoire](docs/PART12_TESTS.md)
 - [Audit des défauts existants](docs/PART13_AUDIT.md)
+- [Rapport de clôture du plan](docs/PART14_LOT_REPORT.md)
+- [Installation et développement](docs/INSTALL_AND_DEV.md)
+- [Guide de synchronisation](docs/SYNC_GUIDE.md)
+- [Sauvegarde et restauration](docs/BACKUP_RESTORE.md)
+- [Déploiement serveur](docs/DEPLOYMENT.md)
 - [Cahier de développement](prompt.md)
 
 ## Règles non négociables
