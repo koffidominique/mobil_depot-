@@ -246,6 +246,189 @@ pub const MIGRATION_6: &str = r#"
           ON purchase_reception_lines(order_id);
         "#;
 
+/// Migration 7 — complétude fonctionnelle du modèle de données (PARTIE 7).
+/// Les entités déjà présentes ne sont pas dupliquées : les noms manquants sont
+/// soit des tables de référence complémentaires, soit des vues sur les tables
+/// existantes. Aucune donnée historique n'est supprimée.
+pub const MIGRATION_7: &str = r#"
+        CREATE TABLE IF NOT EXISTS roles (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, level INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO roles (id, name, level) VALUES
+          ('role_owner','OWNER',100), ('role_admin','ADMIN',50),
+          ('role_manager','MANAGER',25), ('role_cashier','CASHIER',5),
+          ('role_read_only','READ_ONLY',0);
+        CREATE TABLE IF NOT EXISTS permissions (
+          code TEXT PRIMARY KEY, description TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO permissions (code, description) VALUES
+          ('catalog.write','Modifier catalogue et prix'),
+          ('sales.write','Enregistrer une vente'),
+          ('purchase.write','Commander et réceptionner'),
+          ('cash.write','Écrire en caisse'),
+          ('conflict.resolve','Résoudre un conflit'),
+          ('device.revoke','Révoquer un appareil');
+        CREATE TABLE IF NOT EXISTS user_branch_access (
+          user_id TEXT NOT NULL, branch_id TEXT NOT NULL, role TEXT NOT NULL,
+          PRIMARY KEY (user_id, branch_id)
+        );
+        INSERT OR IGNORE INTO user_branch_access (user_id, branch_id, role)
+          SELECT id, 'branch_marcory_01', role FROM users;
+
+        CREATE TABLE IF NOT EXISTS brands (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+        INSERT OR IGNORE INTO brands (id, name)
+          SELECT 'brand_' || LOWER(REPLACE(v.brand, ' ', '_')), v.brand
+          FROM product_variants v GROUP BY v.brand;
+        CREATE TABLE IF NOT EXISTS product_categories (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+        INSERT OR IGNORE INTO product_categories (id, name)
+          SELECT 'cat_' || LOWER(REPLACE(COALESCE(v.category, 'Divers'), ' ', '_')),
+                 COALESCE(v.category, 'Divers')
+          FROM product_variants v GROUP BY COALESCE(v.category, 'Divers');
+        CREATE TABLE IF NOT EXISTS products (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+          brand_id TEXT, category_id TEXT, description TEXT, photo_path TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT OR IGNORE INTO products (id, tenant_id, name, brand_id, category_id, description, photo_path, is_active)
+          SELECT 'prod_' || LOWER(REPLACE(v.name, ' ', '_')), v.tenant_id, v.name,
+                 b.id, c.id, v.description, v.photo_path, 1
+          FROM product_variants v
+          LEFT JOIN brands b ON b.name = v.brand
+          LEFT JOIN product_categories c ON c.name = COALESCE(v.category, 'Divers')
+          GROUP BY v.name;
+        CREATE TABLE IF NOT EXISTS product_variant_links (
+          variant_id TEXT PRIMARY KEY, product_id TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO product_variant_links (variant_id, product_id)
+          SELECT v.id, p.id FROM product_variants v JOIN products p ON p.name = v.name;
+
+        CREATE TABLE IF NOT EXISTS crate_compatibility_groups (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+        INSERT OR IGNORE INTO crate_compatibility_groups (id, name)
+          SELECT DISTINCT compatibility_group_id, compatibility_group_id FROM crate_types;
+        CREATE TABLE IF NOT EXISTS packaging_units (
+          code TEXT PRIMARY KEY, label TEXT NOT NULL, is_returnable INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT OR IGNORE INTO packaging_units (code, label, is_returnable) VALUES
+          ('BOTTLE','Bouteille',1), ('CRATE','Casier plastique',1),
+          ('PACK','Pack film',0), ('CARTON','Carton jetable',0);
+        CREATE TABLE IF NOT EXISTS price_lists (
+          id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL,
+          is_default INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT OR IGNORE INTO price_lists (id, code, tenant_id, is_default) VALUES
+          ('price_retail','RETAIL','tenant_ci_01',1),
+          ('price_wholesale','WHOLESALE','tenant_ci_01',0);
+        CREATE TABLE IF NOT EXISTS product_packaging_options (
+          id TEXT PRIMARY KEY, variant_id TEXT NOT NULL, packaging_unit TEXT NOT NULL,
+          is_returnable INTEGER NOT NULL DEFAULT 0, pack_size INTEGER NOT NULL DEFAULT 1,
+          CHECK (pack_size > 0)
+        );
+        INSERT OR IGNORE INTO product_packaging_options
+          (id, variant_id, packaging_unit, is_returnable, pack_size)
+          SELECT 'ppo_' || v.id, v.id, 'BOTTLE', v.is_returnable, v.pack_size FROM product_variants v;
+
+        CREATE TABLE IF NOT EXISTS mixed_case_groups (
+          id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, crate_type_id TEXT,
+          capacity INTEGER NOT NULL, total_bottles INTEGER NOT NULL, created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS mixed_case_lines (
+          id TEXT PRIMARY KEY, group_id TEXT NOT NULL, variant_id TEXT NOT NULL,
+          qty INTEGER NOT NULL, unit_price_fcfa INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS supplier_returns (
+          id TEXT PRIMARY KEY, branch_id TEXT NOT NULL, supplier_id TEXT NOT NULL,
+          reason TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sync_inbox (
+          server_sequence INTEGER PRIMARY KEY, entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '', applied_at INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO sync_inbox (server_sequence, entity_type, entity_id, applied_at)
+          SELECT last_sequence, entity_type, entity_id, updated_at FROM replication_state;
+
+        CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand_id);
+        CREATE INDEX IF NOT EXISTS idx_product_variant_links_product ON product_variant_links(product_id);
+        CREATE INDEX IF NOT EXISTS idx_product_packaging_variant ON product_packaging_options(variant_id);
+        CREATE INDEX IF NOT EXISTS idx_mixed_case_group_sale ON mixed_case_groups(sale_id);
+        CREATE INDEX IF NOT EXISTS idx_mixed_case_line_group ON mixed_case_lines(group_id);
+        CREATE INDEX IF NOT EXISTS idx_supplier_returns_supplier ON supplier_returns(supplier_id);
+        CREATE INDEX IF NOT EXISTS idx_user_branch_access_branch ON user_branch_access(branch_id);
+
+        CREATE VIEW IF NOT EXISTS customer_accounts AS
+          SELECT id AS account_id, id AS customer_id, tenant_id, name,
+                 total_purchases_fcfa, total_paid_fcfa, financial_balance_fcfa, is_archived
+          FROM customers;
+        CREATE VIEW IF NOT EXISTS supplier_accounts AS
+          SELECT id AS account_id, id AS supplier_id, tenant_id, name,
+                 total_purchased_fcfa, total_paid_fcfa, financial_debt_fcfa, is_archived
+          FROM suppliers;
+        CREATE VIEW IF NOT EXISTS receipts AS
+          SELECT id AS receipt_id, id AS sale_id, receipt_number, customer_id, customer_name,
+                 total_fcfa, paid_confirmed_fcfa, occurred_at, sync_status
+          FROM sales;
+        CREATE VIEW IF NOT EXISTS customer_credits AS
+          SELECT id AS credit_id, customer_id, credit_fcfa, occurred_at, sync_status
+          FROM sales WHERE credit_fcfa > 0;
+        CREATE VIEW IF NOT EXISTS inventory_adjustments AS
+          SELECT id AS adjustment_id, variant_id, difference_qty, reason, occurred_at
+          FROM inventory_counts;
+        CREATE VIEW IF NOT EXISTS packaging_operations AS
+          SELECT document_id AS operation_id, branch_id, partner_type, partner_id,
+                 COUNT(*) AS line_count, SUM(qty) AS total_qty, MAX(occurred_at) AS occurred_at
+          FROM partner_packaging_ledger GROUP BY document_id, branch_id, partner_type, partner_id;
+        CREATE VIEW IF NOT EXISTS packaging_operation_lines AS
+          SELECT id AS line_id, document_id AS operation_id, item_kind, ref_id,
+                 direction, qty, reason, occurred_at
+          FROM partner_packaging_ledger;
+        CREATE VIEW IF NOT EXISTS packaging_balances AS
+          SELECT item_kind, ref_id, SUM(expected_qty) AS expected_qty,
+                 SUM(received_qty) AS received_qty,
+                 SUM(expected_qty - received_qty) AS outstanding_qty
+          FROM packaging_expectations GROUP BY item_kind, ref_id;
+        CREATE VIEW IF NOT EXISTS packaging_return_documents AS
+          SELECT document_id AS return_id, branch_id, partner_type, partner_id,
+                 SUM(qty) AS returned_qty, MAX(occurred_at) AS occurred_at
+          FROM partner_packaging_ledger WHERE direction = 'IN_FROM_PARTNER'
+          GROUP BY document_id, branch_id, partner_type, partner_id;
+        CREATE VIEW IF NOT EXISTS cash_transactions AS
+          SELECT id AS transaction_id, branch_id, 'MOVEMENT' AS source, movement_type AS label,
+                 signed_amount_fcfa AS amount_fcfa, occurred_at FROM cash_movements
+          UNION ALL
+          SELECT id AS transaction_id, branch_id, 'PAYMENT' AS source, method AS label,
+                 amount_fcfa, occurred_at FROM payments;
+        CREATE VIEW IF NOT EXISTS sync_operations AS
+          SELECT operation_id, command_type, status, local_sequence, server_sequence,
+                 idempotency_key, attempt_count, created_at FROM sync_outbox;
+        CREATE VIEW IF NOT EXISTS idempotency_keys AS
+          SELECT idempotency_key, operation_id, created_at FROM sync_outbox;
+
+        CREATE TRIGGER IF NOT EXISTS trg_sale_lines_integer_qty
+          BEFORE INSERT ON sale_lines BEGIN
+            SELECT CASE WHEN typeof(NEW.unit_count) <> 'integer' OR NEW.unit_count <= 0
+                             OR typeof(NEW.physical_units) <> 'integer' OR NEW.physical_units <= 0
+                        THEN RAISE(ABORT, 'INVALID_INTEGER_QUANTITY') END;
+          END;
+        CREATE TRIGGER IF NOT EXISTS trg_payments_integer_fcfa
+          BEFORE INSERT ON payments BEGIN
+            SELECT CASE WHEN typeof(NEW.amount_fcfa) <> 'integer' OR NEW.amount_fcfa < 0
+                        THEN RAISE(ABORT, 'INVALID_FCFA_AMOUNT') END;
+          END;
+        CREATE TRIGGER IF NOT EXISTS trg_variants_integer_prices
+          BEFORE INSERT ON product_variants BEGIN
+            SELECT CASE WHEN typeof(NEW.retail_case_fcfa) <> 'integer'
+                             OR typeof(NEW.wholesale_case_fcfa) <> 'integer'
+                             OR typeof(NEW.retail_bottle_fcfa) <> 'integer'
+                             OR NEW.retail_case_fcfa < 0 OR NEW.wholesale_case_fcfa < 0
+                             OR NEW.retail_bottle_fcfa < 0 OR NEW.pack_size <= 0
+                        THEN RAISE(ABORT, 'INVALID_FCFA_OR_PACK_SIZE') END;
+          END;
+        CREATE TRIGGER IF NOT EXISTS trg_stock_integer_qty
+          BEFORE INSERT ON stock_balances BEGIN
+            SELECT CASE WHEN typeof(NEW.full_units_qty) <> 'integer'
+                        THEN RAISE(ABORT, 'INVALID_INTEGER_QUANTITY') END;
+          END;
+        "#;
+
 /// Applique les migrations ordonnées et enregistre leur version dans la base locale.
 pub fn migrate(conn: &Connection) -> CoreResult<()> {
     conn.execute_batch(
@@ -255,7 +438,10 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 6] = [(1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4), (5, MIGRATION_5), (6, MIGRATION_6)];
+    let migrations: [(i64, &str); 7] = [
+        (1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4),
+        (5, MIGRATION_5), (6, MIGRATION_6), (7, MIGRATION_7),
+    ];
     for (version, sql) in migrations {
         if version <= current {
             continue;
