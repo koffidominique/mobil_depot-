@@ -303,3 +303,12 @@
 - **Parité** : `exportDesktopSnapshot` (versionné + empreinte stable) et `importDesktopUpdates` qui délègue à `apply_sync_updates`, sans seconde logique métier ; écran `DesktopScreen` et entrée de menu.
 - **Vérifications** : tsc OK, web:typecheck OK, ESLint OK, Jest 13 suites/42 tests OK, codegen OK, bundle OK, JSDOM OK, tree-sitter Rust OK, `git diff --check` OK.
 - **Limite** : intégration réelle avec le binaire Desktop/parent `ss_depot_rust` non effectuée (routes `/api/v1/sync/*` absentes) ; documentée dans `docs/PART11_DESKTOP.md`.
+
+
+## LOT 36 — PARTIE 12 : suite de tests obligatoire
+
+- **Moteur** : `rust/tests/part12_core.rs` couvre ventes simples/multi-lignes/crédit/remise/calcul exact/stock insuffisant/doublon/paiement Mobile Money, achats, retours fournisseur, caisse et historique des prix avec rejet transactionnel. La commande centralisée `recordSupplierReturn` a été ajoutée au moteur Rust pour rendre ce scénario testable sans dupliquer la logique métier.
+- **Emballages** : `rust/tests/part12_packaging.rs` couvre explicitement les scénarios A à H, y compris retours partiels imputés par document et profils incompatibles.
+- **Sync/SQLite** : `rust/tests/part12_sync_sqlite.rs` couvre vente hors ligne persistée après réouverture, réémission idempotente, lots bornés, intégrité FK, rollback et sauvegarde/restauration ; `__tests__/part12-sync.test.ts` vérifie l'accusé manquant et le curseur bloqué.
+- **Vérifications** : tsc OK, web:typecheck OK, ESLint OK, Jest 14 suites/45 tests OK, tree-sitter Rust OK, codegen OK, bundle OK, JSDOM OK, `git diff --check` OK.
+- **Non exécuté** : `cargo test` (toolchain absente), scénario réel deux appareils, tests visuels sur matrice native ; procédures et limites documentées dans `docs/PART12_TESTS.md`.
