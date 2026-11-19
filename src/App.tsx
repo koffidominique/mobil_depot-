@@ -24,6 +24,7 @@ import { MenuScreen } from './screens/MenuScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { UnlockScreen } from './screens/UnlockScreen';
 import { SyncScreen } from './screens/SyncScreen';
+import { DesktopScreen } from './screens/DesktopScreen';
 import { PurchasesScreen } from './screens/PurchasesScreen';
 import { SuppliersScreen } from './screens/SuppliersScreen';
 import { CashScreen } from './screens/CashScreen';
@@ -196,6 +197,7 @@ function Bootstrap() {
             <Stack.Screen name="Catalog" component={CatalogScreen} options={{ headerShown: true, title: 'Catalogue' }} />
             <Stack.Screen name="Receipts" component={ReceiptsScreen} options={{ headerShown: true, title: 'Reçus' }} />
             <Stack.Screen name="Statement" component={StatementScreen} options={{ headerShown: true, title: 'Bordereaux' }} />
+            <Stack.Screen name="Desktop" component={DesktopScreen} options={{ headerShown: true, title: 'Parité Desktop' }} />
           </>
         ) : (
           <Stack.Screen name="Login" component={LoginScreen} />

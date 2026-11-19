@@ -7,7 +7,7 @@ import type { RootStackParamList } from '../navigation/types';
 import { depot } from '../core/client';
 import { useAppStore } from '../store/useAppStore';
 
-type Destination = Exclude<keyof RootStackParamList, 'Login' | 'Main'>;
+type Destination = Exclude<keyof RootStackParamList, 'Login' | 'Main' | 'Unlock'>;
 
 export function MenuScreen() {
   const session = useAppStore((state) => state.session);
@@ -22,6 +22,7 @@ export function MenuScreen() {
     { label: 'Catalogue', detail: 'Produits, variantes et formats de casiers', screen: 'Catalog' },
     { label: 'Reçus', detail: 'Reçus commerciaux et état de synchronisation', screen: 'Receipts' },
     { label: 'Bordereaux', detail: 'Relevés clients/fournisseurs et registre emballages', screen: 'Statement' },
+    { label: 'Parité Desktop', detail: 'Snapshot, transferts et import des mises à jour', screen: 'Desktop' },
     { label: 'Synchronisation & paramètres', detail: 'Appareils, conflits et serveur Axum', screen: 'Sync' },
   ];
   const lock = () => {

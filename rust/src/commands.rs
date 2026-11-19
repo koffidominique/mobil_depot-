@@ -125,7 +125,9 @@ fn permission_for_command(command: &str) -> Option<&'static str> {
         | "get_packaging_account" | "getSyncHistory" | "get_sync_history"
         | "getSynchronizationStatus" | "get_synchronization_status" | "getPendingOperations"
         | "get_pending_operations" | "startSynchronization" | "start_synchronization"
-        | "backupDatabase" | "backup_database" | "getAuditLog" => Some("read"),
+        | "backupDatabase" | "backup_database" | "getAuditLog" | "listBranches" | "list_branches"
+        | "listStockTransfers" | "list_stock_transfers" | "exportDesktopSnapshot"
+        | "export_desktop_snapshot" | "importDesktopUpdates" => Some("read"),
         "createSale" | "create_sale" | "validateSale" | "validate_sale" | "createMixedOrder"
         | "create_mixed_order" => Some("sales.write"),
         "recordPayment" | "record_payment" | "recordCashMovement" | "record_cash_movement"
@@ -133,7 +135,8 @@ fn permission_for_command(command: &str) -> Option<&'static str> {
         "createPurchaseOrder" | "create_purchase_order" | "receivePurchase" | "receive_purchase"
         | "registerPackagingReturn" | "register_packaging_return"
         | "correctPackagingMovement" | "correct_packaging_movement" => Some("purchase.write"),
-        "recordInventoryCount" | "record_inventory_count" => Some("inventory.write"),
+        "recordInventoryCount" | "record_inventory_count" | "createStockTransfer"
+        | "create_stock_transfer" => Some("inventory.write"),
         "saveProductVariant" | "save_product_variant" | "updateVariantPrices"
         | "update_variant_prices" | "archiveProductVariant" | "archive_product_variant"
         | "createCrateType" | "create_crate_type" | "updateCrateType" | "update_crate_type"
@@ -2561,6 +2564,168 @@ pub fn get_audit_log(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     Ok(json!({ "entries": entries }))
 }
 
+/// Points de vente et entrepôts du même établissement, filtrés par droits.
+pub fn list_branches(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.name, b.city, b.kind, b.parent_branch_id
+         FROM branches b WHERE b.tenant_id=?1 AND b.is_active=1
+           AND (NOT EXISTS (SELECT 1 FROM user_branch_access u WHERE u.user_id=?2)
+                OR EXISTS (SELECT 1 FROM user_branch_access u
+                           WHERE u.user_id=?2 AND u.branch_id=b.id))
+         ORDER BY b.kind, b.id",
+    )?;
+    let branches = stmt.query_map(params![a.tenant_id, a.user_id], |row| Ok(json!({
+        "branch_id": row.get::<_, String>(0)?, "name": row.get::<_, String>(1)?,
+        "city": row.get::<_, String>(2)?, "kind": row.get::<_, String>(3)?,
+        "parent_branch_id": row.get::<_, Option<String>>(4)?
+    })))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({ "tenant_id": a.tenant_id, "branches": branches }))
+}
+
+/// Transfert traçable entre deux points de vente/entrepôts du même établissement.
+pub fn create_stock_transfer(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_permission(conn, &a, "inventory.write")?;
+    let from = field_str(payload, "from_branch_id")?;
+    let to = field_str(payload, "to_branch_id")?;
+    let reason = field_str(payload, "reason")?;
+    if from == to {
+        return Err(CoreError::new("SAME_BRANCH", "Source et destination doivent être distincts."));
+    }
+    let branches = list_branches(conn, payload)?;
+    let allowed: Vec<&str> = branches["branches"]
+        .as_array()
+        .map(|items| items.iter().filter_map(|item| item["branch_id"].as_str()).collect())
+        .unwrap_or_default();
+    if !allowed.contains(&from) || !allowed.contains(&to) {
+        return Err(CoreError::new("BRANCH_FORBIDDEN", "Transfert hors périmètre autorisé."));
+    }
+    let lines = field_array(payload, "lines")?.clone();
+    if lines.is_empty() {
+        return Err(CoreError::new("EMPTY_TRANSFER", "Au moins une ligne est requise."));
+    }
+    let id = new_id("xfer");
+    let tx = conn.unchecked_transaction()?;
+    for line in &lines {
+        let variant = field_str(line, "variant_id")?;
+        let qty = field_i64(line, "qty")?;
+        if qty <= 0 {
+            return Err(CoreError::new("INVALID_QUANTITY", "Quantité de transfert entière et positive requise."));
+        }
+        let available: i64 = tx.query_row(
+            "SELECT full_units_qty FROM stock_balances WHERE branch_id=?1 AND variant_id=?2",
+            params![from, variant], |row| row.get(0),
+        ).optional()?.unwrap_or(0);
+        if available < qty {
+            return Err(CoreError::new("STOCK_INSUFFICIENT", "Stock source insuffisant."));
+        }
+        tx.execute(
+            "UPDATE stock_balances SET full_units_qty=full_units_qty-?3 WHERE branch_id=?1 AND variant_id=?2",
+            params![from, variant, qty],
+        )?;
+        tx.execute(
+            "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units)
+             VALUES (?1,?2,?3,12)
+             ON CONFLICT(branch_id, variant_id) DO UPDATE SET
+               full_units_qty=full_units_qty+excluded.full_units_qty,
+               server_revision=server_revision+1",
+            params![to, variant, qty],
+        )?;
+        tx.execute(
+            "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+             VALUES (?1,?2,?3,'TRANSFER_OUT',?4,?5,?6,?7,?8,?9)",
+            params![new_id("smov"), from, variant, -qty, reason, id, a.user_id, a.device_id, now_ms()],
+        )?;
+        tx.execute(
+            "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+             VALUES (?1,?2,?3,'TRANSFER_IN',?4,?5,?6,?7,?8,?9)",
+            params![new_id("smov"), to, variant, qty, reason, id, a.user_id, a.device_id, now_ms()],
+        )?;
+        tx.execute(
+            "INSERT INTO stock_transfer_lines (id, transfer_id, variant_id, qty) VALUES (?1,?2,?3,?4)",
+            params![new_id("stl"), id, variant, qty],
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO stock_transfers (id, tenant_id, from_branch_id, to_branch_id, status, reason, created_by, created_at)
+         VALUES (?1,?2,?3,?4,'COMPLETED',?5,?6,?7)",
+        params![id, a.tenant_id, from, to, reason, a.user_id, now_ms()],
+    )?;
+    db::enqueue(
+        &tx, &a.tenant_id, &from, &a.device_id, &a.user_id, "STOCK_TRANSFER",
+        &format!("Transfert {from} → {to}"), &json!({"transfer_id": id}).to_string(), 1, &new_id("idem"),
+    )?;
+    db::audit_security(&tx, &from, &a.user_id, Some(&a.device_id), "STOCK_TRANSFER", &format!("{from}->{to}"), "INFO", "STOCK")?;
+    tx.commit()?;
+    Ok(json!({ "transfer_id": id, "status": "COMPLETED", "from_branch_id": from, "to_branch_id": to }))
+}
+
+pub fn list_stock_transfers(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.from_branch_id, t.to_branch_id, t.status, t.reason, t.created_at,
+                COALESCE(SUM(l.qty),0)
+         FROM stock_transfers t LEFT JOIN stock_transfer_lines l ON l.transfer_id=t.id
+         WHERE t.tenant_id=?1 GROUP BY t.id ORDER BY t.created_at DESC LIMIT 50",
+    )?;
+    let transfers = stmt.query_map(params![a.tenant_id], |row| Ok(json!({
+        "transfer_id": row.get::<_, String>(0)?, "from_branch_id": row.get::<_, String>(1)?,
+        "to_branch_id": row.get::<_, String>(2)?, "status": row.get::<_, String>(3)?,
+        "reason": row.get::<_, String>(4)?, "created_at": row.get::<_, i64>(5)?,
+        "total_qty": row.get::<_, i64>(6)?
+    })))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({ "transfers": transfers }))
+}
+
+fn stable_checksum(text: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Export neutre pour DEPOTPRO Desktop : données et curseur, jamais de calcul recalculé côté TS.
+pub fn export_desktop_snapshot(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let branch = field_str_opt(payload, "branch_id").unwrap_or(&a.branch_id);
+    if branch != a.branch_id {
+        return Err(CoreError::new("BRANCH_FORBIDDEN", "Export limité au point de vente courant."));
+    }
+    let catalog = get_inventory(conn, &json!({ "auth": { "token": payload["auth"]["token"].as_str().unwrap_or("") } }))?;
+    let customers = get_customers(conn, payload)?;
+    let suppliers = get_suppliers(conn, payload)?;
+    let cursor: i64 = conn.query_row(
+        "SELECT server_sequence FROM sync_cursors WHERE branch_id=?1",
+        params![branch], |row| row.get(0),
+    ).optional()?.unwrap_or(0);
+    let mut stmt = conn.prepare(
+        "SELECT variant_id, full_units_qty, server_revision FROM stock_balances WHERE branch_id=?1 ORDER BY variant_id",
+    )?;
+    let stock = stmt.query_map(params![branch], |row| Ok(json!({
+        "variant_id": row.get::<_, String>(0)?, "qty": row.get::<_, i64>(1)?,
+        "revision": row.get::<_, i64>(2)?
+    })))?.collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    let body = json!({
+        "tenant_id": a.tenant_id, "branch_id": branch, "catalog": catalog,
+        "customers": customers, "suppliers": suppliers, "stock": stock, "server_sequence": cursor
+    });
+    let checksum = stable_checksum(&body.to_string());
+    conn.execute(
+        "INSERT INTO desktop_snapshots (id, tenant_id, branch_id, schema_version, checksum, exported_at)
+         VALUES (?1,?2,?3,1,?4,?5)",
+        params![new_id("snap"), a.tenant_id, branch, checksum, now_ms()],
+    )?;
+    Ok(json!({
+        "schema_version": 1, "tenant_id": a.tenant_id, "branch_id": branch,
+        "exported_at": now_ms(), "checksum": checksum, "data": body,
+        "rules_source": "depotpro-core", "rules_version": 1
+    }))
+}
+
 pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreResult<Value> {
     if let Some(permission) = permission_for_command(command) {
         let a = actor(conn, payload)?;
@@ -2578,6 +2743,11 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "setRolePermission" | "set_role_permission" => set_role_permission(conn, payload),
         "revokeDevice" | "revoke_device" => revoke_device(conn, payload),
         "getAuditLog" | "get_audit_log" => get_audit_log(conn, payload),
+        "listBranches" | "list_branches" => list_branches(conn, payload),
+        "createStockTransfer" | "create_stock_transfer" => create_stock_transfer(conn, payload),
+        "listStockTransfers" | "list_stock_transfers" => list_stock_transfers(conn, payload),
+        "exportDesktopSnapshot" | "export_desktop_snapshot" => export_desktop_snapshot(conn, payload),
+        "importDesktopUpdates" => apply_sync_updates(conn, payload),
         "getDashboard" | "get_dashboard" => get_dashboard(conn, payload),
         "validateSale" | "validate_sale" => validate_sale(conn, payload),
         "createSale" | "create_sale" => create_sale(conn, payload),

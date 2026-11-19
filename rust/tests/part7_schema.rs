@@ -32,7 +32,7 @@ fn migrations_are_ordered_additive_and_validated() {
     let path = std::env::temp_dir().join(format!("depot-part7-{}.sqlite", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let init = call("initializeDatabase", json!({ "path": path.to_str().unwrap() }));
-    assert_eq!(init["data"]["schema_version"], 8);
+    assert_eq!(init["data"]["schema_version"], 9);
 
     // 1. Base neuve : tables et vues fonctionnelles présentes, sans doublon de données.
     let conn = open(&path);
@@ -139,7 +139,7 @@ fn migrations_are_ordered_additive_and_validated() {
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM purchase_orders"), 1);
     }
     let upgraded = call("initializeDatabase", json!({ "path": old.to_str().unwrap() }));
-    assert_eq!(upgraded["data"]["schema_version"], 8);
+    assert_eq!(upgraded["data"]["schema_version"], 9);
     let conn = open(&old);
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM sales"), 1, "vente conservée");
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM purchase_order_lines"), 1, "achat conservé");

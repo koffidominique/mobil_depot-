@@ -10,6 +10,7 @@ export type RootStackParamList = {
   Catalog: undefined;
   Receipts: undefined;
   Statement: undefined;
+  Desktop: undefined;
 };
 
 export type MainTabParamList = {

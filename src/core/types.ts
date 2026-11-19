@@ -439,3 +439,33 @@ export interface StockMovement {
   device_id: string;
   occurred_at: number;
 }
+
+
+export interface BranchInfo {
+  branch_id: string;
+  name: string;
+  city: string;
+  kind: 'POS' | 'WAREHOUSE';
+  parent_branch_id: string | null;
+}
+
+export interface StockTransferRecord {
+  transfer_id: string;
+  from_branch_id: string;
+  to_branch_id: string;
+  status: string;
+  reason: string;
+  created_at: number;
+  total_qty: number;
+}
+
+export interface DesktopSnapshot {
+  schema_version: number;
+  tenant_id: string;
+  branch_id: string;
+  exported_at: number;
+  checksum: string;
+  rules_source: string;
+  rules_version: number;
+  data: Record<string, unknown>;
+}

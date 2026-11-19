@@ -34,6 +34,9 @@ import type {
   PartnerStatement,
   VariantSaveInput,
   CrateTypeInput,
+  BranchInfo,
+  StockTransferRecord,
+  DesktopSnapshot,
 } from './types';
 
 export class CoreError extends Error {
@@ -310,6 +313,17 @@ export const depot = {
   startSynchronization: (afterSequence = 0, limit = 50) =>
     call<PushBatch>('startSynchronization', { after_sequence: afterSequence, limit }),
   getSynchronizationStatus: () => call<SyncStatus>('getSynchronizationStatus'),
+  listBranches: () => call<{ tenant_id: string; branches: BranchInfo[] }>('listBranches'),
+  listStockTransfers: () => call<{ transfers: StockTransferRecord[] }>('listStockTransfers'),
+  createStockTransfer: (input: {
+    from_branch_id: string; to_branch_id: string; reason: string;
+    lines: Array<{ variant_id: string; qty: number }>;
+  }) => call<{ transfer_id: string; status: string }>('createStockTransfer', input),
+  exportDesktopSnapshot: (branchId?: string) =>
+    call<DesktopSnapshot>('exportDesktopSnapshot', branchId ? { branch_id: branchId } : {}),
+  importDesktopUpdates: (input: {
+    updates: SyncUpdate[]; server_sequence: number;
+  }) => call<{ applied: number; skipped: number; server_sequence: number }>('importDesktopUpdates', input),
   getSyncHistory: () => call<{
     operations: Array<{
       operation_id: string; command_type: string; summary: string; status: string;

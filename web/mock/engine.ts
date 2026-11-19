@@ -68,6 +68,7 @@ const state = {
   conflicts: [] as AnyRecord[],
   operations: [] as AnyRecord[],
   audit: [{ action: 'SYNC_COMPLETED', details: '12 opérations acquittées', occurred_at: now - 1800000 }],
+  transfers: [] as AnyRecord[],
 };
 
 function integer(value: unknown, field: string) {
@@ -131,6 +132,25 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     case 'setRolePermission': return { role: payload.role, permission: payload.permission, allowed: payload.allowed, branch_id: payload.branch_id };
     case 'revokeDevice': return { device_id: payload.device_id, status: 'REVOKED' };
     case 'getAuditLog': return { entries: [{ id: 'aud_web_1', branch_id: 'branch_marcory_01', user_id: 'usr_gerant', device_id: 'dev_mobile_01', action: 'LOGIN', severity: 'INFO', category: 'AUTHENTICATION', occurred_at: now - 60000 }] };
+    case 'listBranches': return { tenant_id: 'tenant_ci_01', branches: [{ branch_id: 'branch_marcory_01', name: 'Dépôt Marcory', city: 'Abidjan', kind: 'POS', parent_branch_id: null }, { branch_id: 'warehouse_abobo_01', name: 'Entrepôt Abobo', city: 'Abidjan', kind: 'WAREHOUSE', parent_branch_id: 'branch_marcory_01' }] };
+    case 'listStockTransfers': return { transfers: state.transfers };
+    case 'createStockTransfer': {
+      const transfer = { transfer_id: nextId('xfer'), from_branch_id: payload.from_branch_id, to_branch_id: payload.to_branch_id, status: 'COMPLETED', reason: payload.reason, created_at: Date.now(), total_qty: (payload.lines ?? []).reduce((sum: number, line: AnyRecord) => sum + integer(line.qty, 'qty'), 0) };
+      state.transfers.unshift(transfer);
+      return { transfer_id: transfer.transfer_id, status: transfer.status };
+    }
+    case 'exportDesktopSnapshot': {
+      const branch = payload.branch_id ?? 'branch_marcory_01';
+      const body = { tenant_id: 'tenant_ci_01', branch_id: branch, catalog: execute('getInventory', {}), customers: execute('getCustomers', {}), suppliers: execute('getSuppliers', {}), stock: variants.map((item) => ({ variant_id: item.variant_id, qty: item.full_units_qty, revision: 1 })), server_sequence: state.serverSequence };
+      const text = JSON.stringify(body);
+      let hash = 0x811c9dc5;
+      for (const byte of text) { hash ^= byte.charCodeAt(0); hash = Math.imul(hash, 0x01000193) >>> 0; }
+      return { schema_version: 1, tenant_id: 'tenant_ci_01', branch_id: branch, exported_at: Date.now(), checksum: hash.toString(16).padStart(8, '0'), rules_source: 'depotpro-core', rules_version: 1, data: body };
+    }
+    case 'importDesktopUpdates': {
+      const updates = (payload.updates ?? []) as AnyRecord[];
+      return { applied: updates.length, skipped: 0, server_sequence: payload.server_sequence ?? state.serverSequence };
+    }
     case 'getDashboard': return dashboard();
     case 'getInventory': return { full_drinks: variants, empty_bottles_qty: 48, empty_crates_qty: 18 };
     case 'getCustomers': return { customers: customers.map(({ total_purchases_fcfa: _total_purchases_fcfa, total_paid_fcfa: _total_paid_fcfa, ...rest }) => ({ ...rest, outstanding_fcfa: rest.financial_balance_fcfa, available_credit_fcfa: Math.max(0, rest.credit_limit_fcfa - rest.financial_balance_fcfa) })) };

@@ -505,6 +505,28 @@ pub const MIGRATION_8: &str = r#"
         VALUES ('tenant_ci_01', '*', 28800000, 300000, 1, 5, 900000, 1, 0);
         "#;
 
+/// Migration 9 — parité Desktop : établissement/point de vente/entrepôt et
+/// transferts de stock traçables. Les stocks restent strictement séparés.
+pub const MIGRATION_9: &str = r#"
+        CREATE TABLE IF NOT EXISTS stock_transfers (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, from_branch_id TEXT NOT NULL,
+          to_branch_id TEXT NOT NULL, status TEXT NOT NULL, reason TEXT NOT NULL,
+          created_by TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS stock_transfer_lines (
+          id TEXT PRIMARY KEY, transfer_id TEXT NOT NULL, variant_id TEXT NOT NULL,
+          qty INTEGER NOT NULL, CHECK (qty > 0)
+        );
+        CREATE TABLE IF NOT EXISTS desktop_snapshots (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+          schema_version INTEGER NOT NULL, checksum TEXT NOT NULL,
+          exported_at INTEGER NOT NULL, applied_at INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_transfer_lines_transfer ON stock_transfer_lines(transfer_id);
+        CREATE INDEX IF NOT EXISTS idx_stock_transfers_branches ON stock_transfers(tenant_id, from_branch_id, to_branch_id);
+        CREATE INDEX IF NOT EXISTS idx_desktop_snapshots_branch ON desktop_snapshots(branch_id, exported_at DESC);
+        "#;
+
 /// Ajout de colonne idempotent (SQLite n'a pas `ADD COLUMN IF NOT EXISTS`).
 fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> CoreResult<()> {
     let sql = format!("PRAGMA table_info({table})");
@@ -520,6 +542,11 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str)
 }
 
 /// Colonnes de sécurité, appliquées après chaque migration pour rester réversibles.
+pub fn ensure_desktop_columns(conn: &Connection) -> CoreResult<()> {
+    ensure_column(conn, "branches", "kind", "kind TEXT NOT NULL DEFAULT 'POS'")?;
+    ensure_column(conn, "branches", "parent_branch_id", "parent_branch_id TEXT")
+}
+
 pub fn ensure_security_columns(conn: &Connection) -> CoreResult<()> {
     ensure_column(conn, "sessions", "locked", "locked INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(conn, "sessions", "last_activity_at", "last_activity_at INTEGER NOT NULL DEFAULT 0")?;
@@ -541,9 +568,10 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 8] = [
+    let migrations: [(i64, &str); 9] = [
         (1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4),
         (5, MIGRATION_5), (6, MIGRATION_6), (7, MIGRATION_7), (8, MIGRATION_8),
+        (9, MIGRATION_9),
     ];
     for (version, sql) in migrations {
         if version <= current {
@@ -558,6 +586,7 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
         tx.commit()?;
     }
     ensure_security_columns(conn)?;
+    ensure_desktop_columns(conn)?;
     Ok(())
 }
 
