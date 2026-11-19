@@ -235,3 +235,13 @@
 - **Sync/admin** : `adminApi.ts` (HTTPS uniquement) pour liste/révocation des appareils réservées à OWNER/ADMIN ; `getSyncHistory` pour l'historique local.
 - **Vérifications** : tsc OK, Jest 6 suites/24 tests, ESLint OK, codegen OK, tree-sitter Rust OK, `git diff --check` OK.
 - **Non exécuté** : `cargo test`, builds natifs ; export PDF/impression des reçus non implémentés (aucun module natif dédié).
+
+
+## LOT 29 — PARTIE 6 (suite) : PDF, rapports filtrés, assistant d'écart et outillage
+
+- **PDF/impression** : générateur PDF 1.4 ASCII testé (xref), TurboModule `ReceiptPrinter` (Android `PrintManager`, iOS `UIPrintInteractionController`), specs codegen vérifiées, boutons exporter/imprimer dans `ReceiptsScreen`.
+- **Rapports** : `getReports` filtre par `from_ms`/`to_ms`, export CSV via RNFS/Share dans `ReportsScreen`.
+- **Assistant fournisseur** : `MIGRATION_6`, lignes de commande/réception, quantité manquante/endommagée, prix réellement facturé, emballages remis au fournisseur tracés, `getPurchaseVariance` avec `auto_validated=false`.
+- **Toolchains** : `scripts/verify-toolchains.sh` et script npm `verify:toolchains` indiquent explicitement les outils absents ; CI exécute `cargo test` sur ubuntu-latest et vérifie le codegen des deux modules.
+- **Vérifications** : tsc OK, Jest 8 suites/30 tests, ESLint OK, codegen OK, bundle OK, tree-sitter Rust OK, `git diff --check` OK.
+- **Non exécuté** : `cargo test` et builds natifs (cargo/java/gradle/xcodebuild absents constatés par le script).

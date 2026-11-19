@@ -7,46 +7,58 @@
 - Écrans vente rapide, commande mixte avec jauge `12 / 12`, paiement, reçu, clients, fournisseurs, achats, réception, stock, caisse, rapports, synchronisation.
 - Règles financières calculées dans Rust : aucun `Math.round()` n'est utilisé comme mécanisme comptable.
 
-## 2. Ajouté dans ce lot
+## 2. Premier lot de compléments
 
 ### 2.1 Tableau de bord (6.3)
 
-`getDashboard` expose désormais : encaissements confirmés, dépenses, crédits accordés (24 h), alertes de rupture, alertes d'emballages et **séparation du CA confirmé par le serveur et du CA local non synchronisé**. `HomeScreen` affiche ces indicateurs.
+`getDashboard` expose désormais encaissements confirmés, dépenses, crédits accordés (24 h), alertes de rupture, alertes d'emballages et **séparation du CA confirmé par le serveur et du CA local non synchronisé**. `HomeScreen` affiche ces indicateurs.
 
 ### 2.2 Vente rapide et paiement (6.4, 6.6)
 
 - Recherche texte plus filtres par marque, catégorie, contenance, type de contenant et favoris (étoile dans la liste). Les favoris sont conservés dans le store Zustand.
-- Calcul local du total en **BigInt** (`formatFcfaExact`, `parseIntegerFcfa`, `toJsonInteger`) : `Number` ne sert qu'à la sérialisation du DTO, jamais au calcul. Rust reste la seule autorité pour les prix, remises et validations.
-- Paiement mixte : deux moyens avec montants distincts ; le solde non réglé devient du crédit (le Rust exige alors un client enregistré). Mobile Money n'est considéré comme encaissé que si une référence de confirmation est fournie et validée côté moteur.
+- Calcul local du total en **BigInt** (`formatFcfaExact`, `parseIntegerFcfa`, `toJsonInteger`) : `Number` ne sert qu'à la sérialisation du DTO, jamais au calcul. Rust reste la seule autorité pour prix, remises et validations.
+- Paiement mixte : deux moyens avec montants distincts ; le solde non réglé devient du crédit (Rust exige alors un client enregistré). Mobile Money n'est considéré comme encaissé que si une référence de confirmation est fournie et validée côté moteur.
 
-### 2.3 Reçu client (6.7)
+### 2.3 Reçu et stock (6.7, 6.12)
 
-- Le reçu Rust contient `customer_id` et `occurred_at`. `ReceiptsScreen` affiche les casiers et bouteilles attendus/reçus et le restant à restituer depuis `getPackagingAccount`, avec mention explicite « reçu commercial, pas une facture normalisée ».
-- Partage du texte du reçu via le module natif `Share` de React Native.
-- **Non implémenté** : export PDF et impression (module natif dédié absent). Aucun resultado n'est présenté comme disponible.
+- Le reçu Rust contient `customer_id` et `occurred_at` ; l'écran affiche les emballages attendus/reçus et le restant à restituer.
+- `MIGRATION_5` ajoute `inventory_counts` et `stock_movements` ; `recordInventoryCount` (OWNER/ADMIN/MANAGER) exige un motif, calcule l'écart et écrit dans la même transaction avec audit et outbox. `getStockMovements` fournit l'historique filtrable.
 
-### 2.4 Inventaire et historique de stock (6.12)
+### 2.4 Administration et synchronisation (6.15)
 
-- `MIGRATION_5` : `inventory_counts` et `stock_movements`.
-- `recordInventoryCount` (OWNER/ADMIN/MANAGER) exige un motif d'au moins 3 caractères, calcule l'écart, met à jour le stock et écrit les deux tables dans la même transaction, avec `audit_logs` et opération d'outbox. Aucun écart silencieux.
-- `getStockMovements` fournit l'historique filtrable par référence ; `StockScreen` propose l'inventaire et l'historique avec contrôle de rôle.
+- `src/core/adminApi.ts` appelle `GET /api/v1/devices` et `POST /api/v1/devices/revoke/:device_id` uniquement en HTTPS ; la liste et la révocation sont réservées à OWNER/ADMIN.
+- `getSyncHistory` renvoie l'historique local des opérations et décisions auditées, visible hors ligne.
 
-### 2.5 Administration et historique de synchronisation (6.15)
+## 3. Compléments livrés dans le second lot
 
-- `src/core/adminApi.ts` appelle `GET /api/v1/devices` et `POST /api/v1/devices/revoke/:device_id` uniquement en HTTPS. `SyncScreen` réserve la liste et la révocation à OWNER/ADMIN.
-- `getSyncHistory` renvoie l'historique local des opérations et des décisions auditées, visible même hors ligne.
+### 3.1 Reçus : PDF et impression
 
-### 2.6 Connexion (6.2)
+- `src/core/receiptPdf.ts` produit un PDF 1.4 ASCII valide (xref vérifié par test) sans dépendance native ; le moteur Rust reste la source des montants.
+- `src/specs/NativeReceiptPrinter.ts` définit le TurboModule `printPdf(filePath)`. L'implémentation Android utilise `PrintManager` et un `PrintDocumentAdapter` ; l'implémentation iOS utilise `UIPrintInteractionController`. Les deux specs sont vérifiées par `scripts/codegen.sh`.
+- `ReceiptsScreen` propose l'export du PDF (partage du fichier) et l'impression via le module natif. Le reçu est explicitement un reçu commercial, pas une facture normalisée.
 
-Indicateur en ligne/hors ligne sur l'écran de connexion et rappel de la durée de session (8 h) et de la révocation administrative.
+### 3.2 Rapports : filtres de dates et export
 
-## 3. Limites restantes
+- `getReports` accepte `from_ms` et `to_ms` (bornes inclusives, période par défaut 24 h, plage invalide refusée) et renvoie les bornes retenues.
+- `ReportsScreen` propose deux champs de dates, applique la période et exporte un CSV partageable via RNFS et `Share`. Le CA est distinct des encaissements et de la marge estimée.
 
-- Les filtres de dates et l'export des rapports (6.14) ne sont pas encore implémentés ; les indicateurs de marge restent des estimations locales.
-- Les écrans fournisseurs/achats (6.9–6.11) affichent les données disponibles mais ne disposent pas encore d'un assistant dédié aux écarts de réception.
-- `cargo test` et les builds natifs restent non exécutés dans cet environnement.
-- Le serveur parent n'expose toujours pas `/api/v1/sync/*` ; la liste/révocation des appareils dépend de l'adaptateur local.
+### 3.3 Assistant d'écart de réception fournisseur
 
-## 4. Vérifications
+- `MIGRATION_6` ajoute `purchase_order_lines` et `purchase_reception_lines`.
+- `createPurchaseOrder` enregistre les quantités commandées ; `receivePurchase` accepte `quantity`, `damaged_qty`, `unit_price_fcfa`, `reason` et un bloc `packaging` remis au fournisseur, tracé dans `partner_packaging_ledger`.
+- `getPurchaseVariance` calcule `missing_qty`, `damaged_qty` et l'écart de prix ; `auto_validated` vaut toujours `false` : aucune quantité manquante n'est validée automatiquement.
+- `PurchasesScreen` affiche l'assistant et permet une réception contrôlée.
 
-`npx tsc --noEmit`, Jest **6 suites / 24 tests**, ESLint, codegen, bundle, tree-sitter Rust et `git diff --check` exécutés avec succès. Les tests Rust `rust/tests/part6_screens.rs` sont validés syntaxiquement seulement (toolchain absente).
+### 3.4 Tests Rust et builds natifs
+
+Les outils sont absents de cet environnement (`cargo`, `rustc`, `java`, `gradle`, `xcodebuild`). `scripts/verify-toolchains.sh` (`npm run verify:toolchains`) l'établit explicitement. Les jobs `rust` de `.github/workflows/mobile.yml` exécutent `cargo test --manifest-path rust/Cargo.toml` et `server/Cargo.toml` sur `ubuntu-latest` ; le job Android reste désactivé tant que les artefacts NDK ne sont pas configurés. Les scripts `rust:android` et `rust:ios` sont prêts à être exécutés sur les machines disposant des SDK respectifs. **Aucun résultat de build natif ni de `cargo test` n'est affirmé ici.**
+
+## 4. Limites restantes
+
+- Les tests Rust (`rust/tests/*.rs`) et les builds Android/iOS n'ont pas été exécutés dans cet environnement.
+- L'impression sur iPad peut nécessiter une ancre de popover selon la version d'iOS ; le module iOS présente le contrôle standard d'impression.
+- Le serveur parent n'expose toujours pas `/api/v1/sync/*`.
+
+## 5. Vérifications exécutées ici
+
+`npx tsc --noEmit`, Jest **8 suites / 30 tests**, ESLint, codegen (deux specs TurboModule), bundle, tree-sitter Rust et `git diff --check` réussis. Les tests Rust sont validés syntaxiquement seulement.
