@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Banner, Card, Row, Screen, useColors } from '../components/ui';
 import { formatFcfa, formatQuantity } from '../core/format';
-import { useInventory } from '../hooks/useCore';
+import { useInventory, usePackagingStock } from '../hooks/useCore';
 
 const TABS = [
   { id: 'full', label: 'Pleines' },
@@ -16,6 +16,7 @@ type TabId = (typeof TABS)[number]['id'];
 export function StockScreen() {
   const c = useColors();
   const inventory = useInventory();
+  const packaging = usePackagingStock();
   const [tab, setTab] = useState<TabId>('full');
   const full = inventory.data?.full_drinks ?? [];
 
@@ -55,6 +56,9 @@ export function StockScreen() {
             label="Bouteilles vides réutilisables au dépôt"
             value={formatQuantity(inventory.data?.empty_bottles_qty ?? 0)}
           />
+          {(packaging.data?.empty_bottles ?? []).map((item) => (
+            <Row key={item.profile_id} label={`${item.name} · ${item.volume_label}`} value={formatQuantity(item.qty)} />
+          ))}
         </Card>
       ) : null}
 
@@ -64,12 +68,22 @@ export function StockScreen() {
             label="Casiers plastique vides"
             value={formatQuantity(inventory.data?.empty_crates_qty ?? 0)}
           />
+          {(packaging.data?.crates ?? []).map((item) => (
+            <Row
+              key={item.crate_type_id}
+              label={`${item.code} · ${item.capacity} emplacements`}
+              value={`${formatQuantity(item.empty_qty)} vides / ${formatQuantity(item.full_qty)} pleins`}
+            />
+          ))}
         </Card>
       ) : null}
 
       {tab === 'disposable' ? (
         <Card>
-          <Row label="PET / canettes / films" value="Aucune dette d'emballage automatique" />
+          {full.filter((item) => item.material !== 'Verre').map((item) => (
+            <Row key={item.variant_id} label={`${item.name} · ${item.material}`} value={formatQuantity(item.full_units_qty)} />
+          ))}
+          <Row label="Dette automatique" value="Aucune dette d'emballage sur les jetables" />
         </Card>
       ) : null}
     </Screen>

@@ -273,3 +273,72 @@ export interface SyncConflict {
   status: string;
   created_at: number;
 }
+
+export interface EmptyBottleStockItem {
+  profile_id: string;
+  name: string;
+  volume_label: string;
+  compatibility_group_id: string;
+  qty: number;
+}
+
+export interface CrateStockItem {
+  crate_type_id: string;
+  code: string;
+  capacity: number;
+  compatibility_group_id: string;
+  empty_qty: number;
+  full_qty: number;
+}
+
+export interface PackagingStock {
+  empty_bottles: EmptyBottleStockItem[];
+  crates: CrateStockItem[];
+}
+
+export interface PartnerStatement {
+  partner_type: 'CUSTOMER' | 'SUPPLIER';
+  partner_id: string;
+  purchases_fcfa: number;
+  paid_fcfa: number;
+  balance_fcfa: number;
+  is_bordereau_local: boolean;
+  payments: Array<{
+    method: string;
+    amount_fcfa: number;
+    occurred_at: number;
+    reference: string | null;
+  }>;
+  packaging_ledger: Array<{
+    item_kind: string;
+    ref_id: string;
+    direction: string;
+    qty: number;
+    reason: string;
+    occurred_at: number;
+  }>;
+}
+
+export interface VariantSaveInput {
+  variant_id?: string;
+  name: string;
+  brand: string;
+  sku: string;
+  volume_label: string;
+  container_type: string;
+  material: string;
+  pack_size: number;
+  retail_case_fcfa: number;
+  wholesale_case_fcfa: number;
+  retail_bottle_fcfa: number;
+  bottle_profile_id: string | null;
+  crate_type_id: string | null;
+}
+
+export interface CrateTypeInput {
+  code: string;
+  capacity: number;
+  compatibility_group_id: string;
+  allow_half_case: boolean;
+  replacement_value_fcfa: number;
+}

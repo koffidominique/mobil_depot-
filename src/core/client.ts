@@ -23,6 +23,10 @@ import type {
   SalesReport,
   SupplierAccount,
   SyncConflict,
+  PackagingStock,
+  PartnerStatement,
+  VariantSaveInput,
+  CrateTypeInput,
 } from './types';
 
 export class CoreError extends Error {
@@ -146,6 +150,24 @@ export const depot = {
     reference: string | null;
   }) => call<{ status: string; amount_fcfa: number }>('recordPayment', input),
 
+  saveProductVariant: (input: VariantSaveInput) =>
+    call<{ variant_id: string; synced: boolean }>('saveProductVariant', input),
+  updateVariantPrices: (input: {
+    variant_id: string;
+    retail_case_fcfa: number;
+    wholesale_case_fcfa: number;
+    retail_bottle_fcfa: number;
+  }) => call<{ variant_id: string; price_revision: number }>('updateVariantPrices', input),
+  archiveProductVariant: (variantId: string) =>
+    call<{ variant_id: string; status: string }>('archiveProductVariant', { variant_id: variantId }),
+  createCrateType: (input: CrateTypeInput) =>
+    call<{ crate_type_id: string; code: string }>('createCrateType', input),
+  getPackagingStock: () => call<PackagingStock>('getPackagingStock'),
+  getPartnerStatement: (partnerType: 'CUSTOMER' | 'SUPPLIER', partnerId: string) =>
+    call<PartnerStatement>('getPartnerStatement', {
+      partner_type: partnerType,
+      partner_id: partnerId,
+    }),
   getCrateTypes: () => call<{ crate_types: CrateTypeInfo[] }>('getCrateTypes'),
   getPurchaseOrders: () => call<{ orders: PurchaseOrderRecord[] }>('getPurchaseOrders'),
   getSaleReceipt: (saleId: string) =>

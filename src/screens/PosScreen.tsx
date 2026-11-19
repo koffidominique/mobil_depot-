@@ -8,6 +8,8 @@ import type { CartLineInput, CommercialUnit, InventoryItem, PaymentInput, SaleRe
 import { useCustomers, useInventory } from '../hooks/useCore';
 import { useAppStore } from '../store/useAppStore';
 
+const UNITS: CommercialUnit[] = ['BOTTLE', 'CASE', 'CARTON', 'PACK', 'CAN', 'UNIT'];
+
 function priceFor(item: InventoryItem, unit: CommercialUnit, tier: 'RETAIL' | 'WHOLESALE'): number {
   if (unit === 'BOTTLE' || unit === 'CAN' || unit === 'UNIT') {
     return item.retail_bottle_fcfa;
@@ -93,7 +95,7 @@ export function PosScreen() {
       unit_price_fcfa: priceFor(item, unit, tier),
       crate_capacity: item.pack_size,
       pack_size: item.pack_size,
-      is_reusable: item.container_type === 'Verre',
+      is_reusable: item.container_type === 'Verre' && unit !== 'CAN',
       allow_half_case: item.pack_size % 2 === 0,
       bottle_profile_id: item.bottle_profile_id,
       crate_type_id: item.crate_type_id,
@@ -135,13 +137,12 @@ export function PosScreen() {
               label={`Stock local : ${item.full_units_qty} unités`}
               value={formatFcfa(priceFor(item, 'BOTTLE', tier))}
             />
-            <View style={{ flexDirection: 'row', gap: 14 }}>
-              <Pressable onPress={() => addToCart(item, 'BOTTLE')}>
-                <Text style={{ color: c.primary, fontWeight: '700' }}>+ Bouteille</Text>
-              </Pressable>
-              <Pressable onPress={() => addToCart(item, 'CASE')}>
-                <Text style={{ color: c.primary, fontWeight: '700' }}>+ Casier</Text>
-              </Pressable>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+              {UNITS.map((unit) => (
+                <Pressable key={unit} onPress={() => addToCart(item, unit)}>
+                  <Text style={{ color: c.primary, fontWeight: '700' }}>+ {unit.toLowerCase()}</Text>
+                </Pressable>
+              ))}
             </View>
           </View>
         ))}

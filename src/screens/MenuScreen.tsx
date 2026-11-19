@@ -20,6 +20,7 @@ export function MenuScreen() {
     { label: 'Rapports', detail: 'CA, encaissements, créances et emballages', screen: 'Reports' },
     { label: 'Catalogue', detail: 'Produits, variantes et formats de casiers', screen: 'Catalog' },
     { label: 'Reçus', detail: 'Reçus commerciaux et état de synchronisation', screen: 'Receipts' },
+    { label: 'Bordereaux', detail: 'Relevés clients/fournisseurs et registre emballages', screen: 'Statement' },
     { label: 'Synchronisation & paramètres', detail: 'Appareils, conflits et serveur Axum', screen: 'Sync' },
   ];
 

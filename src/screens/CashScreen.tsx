@@ -38,6 +38,17 @@ export function CashScreen() {
     onError: (err: Error) => setError(err.message),
   });
 
+  const payout = useMutation({
+    mutationFn: () =>
+      depot.recordCashMovement({
+        movement_type: 'OUT',
+        amount_fcfa: Number.parseInt(amount, 10),
+        label,
+      }),
+    onSuccess: async () => { setError(null); await invalidate(); },
+    onError: (err: Error) => setError(err.message),
+  });
+
   const expense = useMutation({
     mutationFn: () =>
       depot.recordCashMovement({
@@ -80,6 +91,7 @@ export function CashScreen() {
           <Field label="Motif" value={label} onChangeText={setLabel} />
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <PrimaryButton label="Encaisser" loading={movement.isPending} onPress={() => movement.mutate()} />
+            <PrimaryButton label="Décaissement" loading={payout.isPending} onPress={() => payout.mutate()} />
             <PrimaryButton label="Dépense" loading={expense.isPending} onPress={() => expense.mutate()} />
           </View>
           <Field label="Montant compté à la clôture" value={counted} keyboardType="numeric" onChangeText={setCounted} />

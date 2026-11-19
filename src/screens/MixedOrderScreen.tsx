@@ -5,40 +5,40 @@ import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../c
 import { depot } from '../core/client';
 import { formatFcfa, formatQuantity } from '../core/format';
 import type { InventoryItem, MixedCaseInput, MixedCaseLineInput, ValidatedMixedCase } from '../core/types';
-import { useInventory } from '../hooks/useCore';
+import { useCrateTypes, useInventory } from '../hooks/useCore';
 import { useAppStore } from '../store/useAppStore';
-
-const CRATES = [
-  { id: 'crate_b12_50', code: 'B12-50', capacity: 12, group: 'G_B12_50' },
-  { id: 'crate_b24_33', code: 'B24-33', capacity: 24, group: 'G_B24_33' },
-  { id: 'crate_b12_65', code: 'B12-65', capacity: 12, group: 'G_B12_65' },
-  { id: 'crate_b20_50', code: 'B20-50', capacity: 20, group: 'G_B20_50' },
-];
 
 export function MixedOrderScreen() {
   const c = useColors();
   const inventory = useInventory();
+  const crateQuery = useCrateTypes();
+  const crates = (crateQuery.data?.crate_types ?? []).map((item) => ({
+    id: item.crate_type_id, code: item.code, capacity: item.capacity, group: item.compatibility_group_id,
+  }));
   const addMixedCase = useAppStore((state) => state.addMixedCase);
   const notify = useAppStore((state) => state.notify);
-  const [crateId, setCrateId] = useState(CRATES[0]!.id);
+  const [crateId, setCrateId] = useState('');
   const [half, setHalf] = useState(false);
   const [lines, setLines] = useState<MixedCaseLineInput[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [validated, setValidated] = useState<ValidatedMixedCase | null>(null);
 
-  const crate = CRATES.find((item) => item.id === crateId) ?? CRATES[0]!;
+  const crate = crates.find((item) => item.id === crateId) ?? crates[0] ?? {
+    id: '', code: '—', capacity: 0, group: '',
+  };
+  const effectiveCrateId = crate.id;
   const capacity = half ? crate.capacity / 2 : crate.capacity;
   const selected = lines.reduce((sum, line) => sum + line.quantity_bottles, 0);
 
   const validateCase = useMutation<ValidatedMixedCase, Error, void>({
     mutationFn: async () => {
-      const payload: MixedCaseInput = { crate_type_id: crateId, is_half_case: half, lines };
+      const payload: MixedCaseInput = { crate_type_id: effectiveCrateId, is_half_case: half, lines };
       return depot.createMixedOrder(payload);
     },
     onSuccess: (result) => {
       setValidated(result);
       addMixedCase({
-        crate_type_id: crateId,
+        crate_type_id: effectiveCrateId,
         is_half_case: half,
         lines,
       });
@@ -79,7 +79,7 @@ export function MixedOrderScreen() {
       <Card>
         <Text style={{ color: c.text, fontWeight: '700' }}>Format de casier</Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
-          {CRATES.map((item) => (
+          {crates.map((item) => (
             <Pressable key={item.id} onPress={() => { setCrateId(item.id); setValidated(null); }}>
               <Text style={{ color: crateId === item.id ? c.primary : c.subtitle, fontWeight: '700' }}>
                 {item.code}

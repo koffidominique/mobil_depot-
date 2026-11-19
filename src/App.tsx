@@ -27,6 +27,7 @@ import { CashScreen } from './screens/CashScreen';
 import { ReportsScreen } from './screens/ReportsScreen';
 import { CatalogScreen } from './screens/CatalogScreen';
 import { ReceiptsScreen } from './screens/ReceiptsScreen';
+import { StatementScreen } from './screens/StatementScreen';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 5000 } },
@@ -157,6 +158,7 @@ function Bootstrap() {
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ headerShown: true, title: 'Rapports' }} />
             <Stack.Screen name="Catalog" component={CatalogScreen} options={{ headerShown: true, title: 'Catalogue' }} />
             <Stack.Screen name="Receipts" component={ReceiptsScreen} options={{ headerShown: true, title: 'Reçus' }} />
+            <Stack.Screen name="Statement" component={StatementScreen} options={{ headerShown: true, title: 'Bordereaux' }} />
           </>
         ) : (
           <Stack.Screen name="Login" component={LoginScreen} />

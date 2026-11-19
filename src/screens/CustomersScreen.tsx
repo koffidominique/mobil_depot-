@@ -13,6 +13,9 @@ export function CustomersScreen() {
   const customers = useCustomers();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [amount, setAmount] = useState('1000');
+  const [returnRef, setReturnRef] = useState('bp_beaufort_50');
+  const [returnQty, setReturnQty] = useState('1');
+  const [returnKind, setReturnKind] = useState<'BOTTLE' | 'CRATE'>('BOTTLE');
   const [error, setError] = useState<string | null>(null);
 
   const account = useQuery<CustomerAccount, Error>({
@@ -46,9 +49,9 @@ export function CustomersScreen() {
       depot.registerPackagingReturn({
         partner_type: 'CUSTOMER',
         partner_id: selectedId ?? '',
-        item_kind: 'BOTTLE',
-        ref_id: 'bp_beaufort_50',
-        qty: 1,
+        item_kind: returnKind,
+        ref_id: returnRef,
+        qty: Number.parseInt(returnQty, 10),
         reason: 'Retour bouteilles vides au comptoir',
       }),
     onSuccess: async () => {
@@ -78,8 +81,11 @@ export function CustomersScreen() {
           <View style={{ marginTop: 8, gap: 8 }}>
             <Field label="Règlement espèces (FCFA)" value={amount} keyboardType="numeric" onChangeText={setAmount} />
             <PrimaryButton label="Enregistrer le paiement" loading={pay.isPending} onPress={() => pay.mutate()} />
+            <Field label="Type d'emballage" value={returnKind} onChangeText={(v) => setReturnKind(v === 'CRATE' ? 'CRATE' : 'BOTTLE')} />
+            <Field label="Référence exacte" value={returnRef} onChangeText={setReturnRef} />
+            <Field label="Quantité retournée" value={returnQty} keyboardType="numeric" onChangeText={setReturnQty} />
             <PrimaryButton
-              label="Retour 1 bouteille vide"
+              label="Enregistrer le retour partiel"
               loading={returnBottles.isPending}
               onPress={() => returnBottles.mutate()}
             />

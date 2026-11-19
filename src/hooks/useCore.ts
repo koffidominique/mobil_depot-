@@ -28,6 +28,10 @@ export function useSyncStatus() {
   return useQuery({ queryKey: ['sync-status'], queryFn: () => depot.getSynchronizationStatus(), refetchInterval: 8000 });
 }
 
+export function usePackagingStock() {
+  return useQuery({ queryKey: ['packaging-stock'], queryFn: () => depot.getPackagingStock() });
+}
+
 export function useCrateTypes() {
   return useQuery({ queryKey: ['crate-types'], queryFn: () => depot.getCrateTypes() });
 }
