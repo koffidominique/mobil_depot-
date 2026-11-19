@@ -255,3 +255,13 @@
 - **Tests** : `rust/tests/part7_schema.rs` couvre base neuve, ancienne base rétrogradée, données de vente/achat/emballage/sync conservées et refus des écritures invalides.
 - **Vérifications** : tsc OK, Jest 9 suites/31 tests, ESLint OK, codegen OK, tree-sitter Rust OK, `git diff --check` OK.
 - **Non exécuté** : `cargo test` (toolchain absente) ; CI ubuntu-latest exécute les tests Rust.
+
+
+## LOT 31 — PARTIE 8 : contrats typés et API centrale /api/v1
+
+- **Routes complétées** : `/auth/login|refresh|logout`, `/bootstrap`, `/products`, `/customers`, `/suppliers`, `/inventory` en plus de `/sync/*`, `/devices*` et `/conflicts*` ; `api_router()` montre le périmètre complet.
+- **Contrats typés** : `server/src/contracts.rs` convertit chaque payload en AST typé sans flottant, valide les champs requis par commande, le `payload_version`, l'`occurred_at` RFC 3339 UTC, les identifiants et la taille ; les commandes inconnues sont refusées avant le noyau.
+- **Contrôles avant exécution** : auth, établissement/point de vente, appareil, rôle/permission (`authorize_command`), puis `apply_operation` atomique et idempotent via le kernel SQLx.
+- **Mobile** : `src/core/apiContracts.ts` envoie l'enveloppe versionnée et gère les deux formes de réponse `/devices` ; `adminApi.ts` et `useCore.ts` l'utilisent.
+- **Vérifications** : tsc OK, Jest 10 suites/33 tests, ESLint OK, tree-sitter Rust OK, codegen OK, bundle OK, `git diff --check` OK.
+- **Non exécuté** : `cargo test` (toolchain absente) ; CI ubuntu-latest exécute les tests Rust.
