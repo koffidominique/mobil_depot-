@@ -1,6 +1,0 @@
-{
-  "name": "DEPOTPRO",
-  "description": "Application mobile React Native + Rust de gestion de dépôt de boissons (fr-CI, FCFA), offline-first avec caisse, commandes mixtes, suivi des emballages et synchronisation.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
