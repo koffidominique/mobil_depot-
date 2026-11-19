@@ -18,7 +18,8 @@
     "codegen": "bash scripts/codegen.sh",
     "web": "vite --config vite.config.ts",
     "web:build": "vite build --config vite.config.ts",
-    "web:typecheck": "tsc --noEmit -p web/tsconfig.json"
+    "web:typecheck": "tsc --noEmit -p web/tsconfig.json",
+    "verify:acceptance": "bash scripts/verify-acceptance.sh"
   },
   "dependencies": {
     "@react-native-community/netinfo": "^12.0.1",
