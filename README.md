@@ -31,6 +31,7 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - [Design, responsive et accessibilité](docs/PART10_UX.md)
 - [Parité avec DEPOTPRO Desktop](docs/PART11_DESKTOP.md)
 - [Tests et validation obligatoire](docs/PART12_TESTS.md)
+- [Audit des défauts existants](docs/PART13_AUDIT.md)
 - [Cahier de développement](prompt.md)
 
 ## Règles non négociables

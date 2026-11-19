@@ -312,3 +312,11 @@
 - **Sync/SQLite** : `rust/tests/part12_sync_sqlite.rs` couvre vente hors ligne persistée après réouverture, réémission idempotente, lots bornés, intégrité FK, rollback et sauvegarde/restauration ; `__tests__/part12-sync.test.ts` vérifie l'accusé manquant et le curseur bloqué.
 - **Vérifications** : tsc OK, web:typecheck OK, ESLint OK, Jest 14 suites/45 tests OK, tree-sitter Rust OK, codegen OK, bundle OK, JSDOM OK, `git diff --check` OK.
 - **Non exécuté** : `cargo test` (toolchain absente), scénario réel deux appareils, tests visuels sur matrice native ; procédures et limites documentées dans `docs/PART12_TESTS.md`.
+
+
+## LOT 37 — PARTIE 13 : audit et corrections de stabilité
+
+- **État réel** : les 20 défauts annoncés ont été revérifiés dans le mobile et dans le parent `ss_depot_rust@cb78d3ca`. Rapport détaillé : `docs/PART13_AUDIT.md`.
+- **Corrigé** : doublons de lignes de commande/réception d'achat, transactions critiques `BEGIN IMMEDIATE`, seed de démonstration optionnel, quantité desktop strictement entière, origines web filtrées et en-têtes de proxy non fiables supprimés.
+- **Non corrigé / documenté** : chiffrement des sauvegardes, PIN sans KDF salé, points 15–19 du parent, E2E natif et `cargo test` non exécutables ici.
+- **Validation** : tsc, web:typecheck, ESLint, Jest 15 suites/48 tests, syntaxe Rust, codegen, bundle et aperçu JSDOM OK.
