@@ -47,7 +47,7 @@ Aucune migration destructive n'a été lancée, aucune base existante n'a été 
    - **Conséquence** : la synchronisation multi-appareils annoncée ne peut pas être validée en conditions réelles tant que ces endpoints ne sont pas implémentés côté parent (ou définis comme contrat cible et confirmés). Les tests mobiles utilisent donc un serveur Axum simulé et ne doivent pas être présentés comme une preuve d'interopérabilité.
 2. **Modèle multi-établissements absent du parent.** Le schéma V3 est mono-établissement. Le mobile gère déjà `tenant_id`/`branch_id` localement ; une migration du schéma central est nécessaire avant production multi-points de vente.
 3. **Auth différente.** Le parent authentifie par PIN + token de session ; le mobile dispose d'une authentification locale (PIN hashé, KeyStore) et transmet un Bearer aux endpoints de sync. Il faudra aligner durées de session, révocation et rotation des tokens.
-4. **Stack mobile.** Le cahier prescrit React Native + TypeScript + Rust + Turbo Modules. Ce dépôt est un workspace Android natif (Kotlin, Jetpack Compose, Room). Le rapport LOT 0 documente cette adaptation liée à l'environnement. Le principe « un seul moteur métier » est conservé par un noyau Kotlin strictement isolé (`com.example.core`), mais il ne s'agit pas d'une réutilisation directe de `depotpro-core`. Un port Rust/Turbo reste un prérequis architectural si la stack prescrite doit être respectée à la lettre.
+4. **Stack mobile (tranchée le 2026-11-19).** L'utilisateur a confirmé vouloir React Native + Rust et non Kotlin/Compose. Le dépôt a été migré : application React Native + TypeScript strict + TurboModule, moteur Rust `depotpro-mobile-core`, base SQLite possédée par Rust. L'ancien code Kotlin/Compose est archivé sous `legacy/android-compose/` et n'est plus compilé. Voir `docs/ARCHITECTURE_RN_RUST.md`.
 5. **Node/Express historique** toujours concurrent du serveur Axum ; à retirer uniquement dans le dépôt parent après parité fonctionnelle et tests.
 
 ## 5. Décisions prises dans ce dépôt mobile
@@ -74,7 +74,7 @@ Limites de l'environnement d'audit : ni `cargo`, ni JDK/Gradle n'étant install�
 | --- | --- | --- | --- |
 | P0 | Routes `/api/v1/sync/push`, `/pull`, `/devices/register`, `/conflicts/{id}/resolve`, curseurs, outbox et idempotence serveur | `ss_depot_rust` (`depotpro-server`) | À faire : bloque la sync réelle |
 | P0 | Schéma central multi-tenant / multi-points de vente (`tenant_id`, `branch_id`) et contrôle des droits par établissement | `ss_depot_rust` | À faire |
-| P1 | Port du noyau métier mobile vers un crate Rust partagé + Turbo Native Modules, React Navigation/TanStack Query/Zustand/Zod si la stack du cahier doit être respectée à la lettre | Ce dépôt + parent | Décision d'architecture à valider : le dépôt est aujourd'hui natif Kotlin/Compose (voir LOT 0) |
+| P1 | Port du noyau métier mobile vers un crate Rust partagé + Turbo Native Modules, React Navigation/TanStack Query/Zustand/Zod | Ce dépôt | Terminé dans ce dépôt (Lot 17) : `docs/ARCHITECTURE_RN_RUST.md` |
 | P1 | Alignement auth mobile/parent (durées de session, révocation distante, rotation du token) | Les deux dépôts | Partiel : révocation locale et pull des appareils révoqués déjà présents |
 | P1 | Suppression du serveur Node/Express historique après parité complète avec Axum | `ss_depot_rust` | À faire |
 | P2 | CI/CD Android (wrapper Gradle absent du dépôt, JDK + Android SDK à provisionner) | Ce dépôt | À faire |

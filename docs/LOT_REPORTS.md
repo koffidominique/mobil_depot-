@@ -92,3 +92,11 @@
 - **Tests ajoutés** : plafond exact accepté / +1 FCFA refusé, crédit disponible jamais négatif, validation de vente au-delà du plafond, rejet atomique sans vente ni mouvement stock ni outbox, accusé partiel avec séquence serveur persistée et opération manquante reprogrammée.
 - **Vérification partielle effectuée** : le noyau métier modifié et ses tests (`DepotProCoreTest`) compilent sans erreur avec `kotlinc-js` (stubs JVM JUnit/`java.lang.Math`/Moshi), ce qui valide la syntaxe et les types des règles ajoutées.
 - **Limite d'exécution** : aucun JDK/Gradle/Android SDK ni toolchain Rust n'est installé dans ce workspace ; la batterie Kotlin complète n'a pas pu être relancée ici. Les tests existants (30) et les nouveaux scénarios doivent être exécutés avec `gradle :app:testDebugUnitTest` dans un environnement Android SDK/JDK disponible.
+
+## LOT 17 — Migration de la stack vers React Native + TypeScript + Rust (décision utilisateur)
+- **Décision** : l'utilisateur a demandé explicitement React Native + Rust et non Kotlin/Compose. L'ancien module Android natif est déplacé sous `legacy/android-compose/` (référence historique, plus compilé).
+- **Application React Native** : projet CLI 0.88.1 (New Architecture activée), React 19.3, TypeScript strict, React Navigation (5 entrées : Accueil, Ventes, Stock, Clients, Menu + écran Synchronisation), TanStack Query, Zustand, Zod, Keychain, NetInfo.
+- **Moteur Rust** : crate `depotpro-mobile-core` avec domaine pur (`domain.rs`), schéma SQLite et jeu pilote fr-CI (`db.rs`), 21 commandes métier transactionnelles (`commands.rs`), FFI C/JNI (`lib.rs`). Règles conservées : FCFA entier, casiers physiques, commande mixte, plafond de crédit, remise par rôle, outbox/idempotence/conflicts, HTTPS obligatoire.
+- **TurboModule** : spec codegen `src/specs/NativeDepotCore.ts`, implémentation Android `DepotCoreModule.kt` + JNI Rust, pont iOS `DepotCoreModule.mm` + statiques Rust, scripts `build-rust-android.sh` / `build-rust-ios.sh`.
+- **Vérifications effectuées** : `npx tsc --noEmit` sans erreur, `npx jest --runInBand` 3/3 réussis, analyse syntaxique tree-sitter des 4 fichiers Rust sans nœud d'erreur.
+- **Non exécuté ici** : `cargo test` (toolchain Rust absent) et build Gradle/Xcode (JDK/Android SDK/Xcode absents). Ces commandes sont documentées dans `docs/ARCHITECTURE_RN_RUST.md`.

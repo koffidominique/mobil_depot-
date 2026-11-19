@@ -1,23 +1,48 @@
+# React Native / Metro
+node_modules/
+.expo/
+dist/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.metro-health-check*
+
+# Android
 *.iml
 .gradle
-.kotlin
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+/.idea
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
-local.properties
+android/app/build/
+android/.gradle/
+android/local.properties
+android/app/src/main/jniLibs/*
+!android/app/src/main/jniLibs/.gitkeep
+
+# iOS
+ios/Pods/
+ios/build/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Rust
+rust/target/
+*.a
+*.so
+*.dylib
+
+# Données locales et secrets
 .env
-debug.keystore
 *.db
 *.db-wal
 *.db-shm
 *.sqlite
 *.sqlite3
+debug.keystore
+!android/app/debug.keystore
+my-upload-key.jks
