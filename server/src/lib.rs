@@ -19,6 +19,8 @@ use serde::de::{Deserializer, Error as DeError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod sqlite_kernel;
+
 pub const SYNC_SCHEMA_VERSION: i32 = 1;
 pub const MAX_PULL_LIMIT: usize = 200;
 
@@ -190,7 +192,7 @@ pub trait SyncKernel: Send + Sync {
 
     async fn cursor(&self, branch_id: &str) -> Result<i64, String>;
 
-    async fn list_devices(&self, _branch_id: &str) -> Result<Vec<DeviceInfo>, String> {
+    async fn list_devices(&self, _identity: &Identity, _branch_id: &str) -> Result<Vec<DeviceInfo>, String> {
         Err("NOT_IMPLEMENTED".to_string())
     }
 
@@ -394,7 +396,7 @@ async fn list_devices(State(kernel): State<SharedKernel>, headers: HeaderMap, Qu
     if identity.role != "OWNER" && identity.role != "ADMIN" {
         return error_response(StatusCode::FORBIDDEN, "ROLE_FORBIDDEN", "Administration requise.");
     }
-    match kernel.list_devices(&identity.branch_id).await {
+    match kernel.list_devices(&identity, &identity.branch_id).await {
         Ok(devices) => Json(devices).into_response(),
         Err(code) => error_response(StatusCode::NOT_IMPLEMENTED, "DEVICE_LIST_UNAVAILABLE", &code),
     }
