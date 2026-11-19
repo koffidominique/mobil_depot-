@@ -383,3 +383,126 @@ pub fn backoff_ms(attempt: i64, now_ms: i64) -> i64 {
     let jitter = (base / 4).max(500);
     now_ms.saturating_add(base).saturating_add((attempt * 7919) % jitter)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bottle_line(key: &str, variant: &str, price: i64, stock: i64) -> Value {
+        json!({
+            "line_key": key,
+            "variant_id": variant,
+            "unit": "BOTTLE",
+            "unit_count": 1,
+            "crate_capacity": 12,
+            "pack_size": 1,
+            "allow_half_case": false,
+            "unit_price_fcfa": price,
+            "available_stock_units": stock
+        })
+    }
+
+    fn sale(lines: Vec<Value>, payments: Vec<Value>, customer: Option<&str>, limit: i64, outstanding: i64) -> Value {
+        json!({
+            "role": "OWNER",
+            "offline_policy": "ALLOW_WITH_WARNING",
+            "lines": lines,
+            "mixed_cases": [],
+            "payments": payments,
+            "customer_id": customer,
+            "credit_limit_fcfa": limit,
+            "outstanding_balance_fcfa": outstanding
+        })
+    }
+
+    fn mixed_line(profile: &str, group: &str, qty: i64) -> Value {
+        json!({
+            "variant_id": "var_test",
+            "quantity_bottles": qty,
+            "unit_price_fcfa": 600,
+            "compatibility_group_id": group,
+            "bottle_profile_id": profile,
+            "is_reusable": true
+        })
+    }
+
+    #[test]
+    fn half_case_b24_is_twelve_whole_bottles() {
+        let mut line = bottle_line("l1", "var_drogba_50", 600, 24);
+        line["unit"] = json!("HALF_CASE");
+        line["unit_count"] = json!(1);
+        line["crate_capacity"] = json!(24);
+        line["allow_half_case"] = json!(true);
+        let result = validate_sale(&sale(vec![line], vec![], None, 0, 0)).expect("demi-casier valide");
+        assert_eq!(result["physical_units_by_variant"]["var_drogba_50"], json!(12));
+        assert_eq!(result["total_fcfa"], json!(600));
+    }
+
+    #[test]
+    fn half_case_odd_capacity_is_rejected() {
+        let mut line = bottle_line("l1", "var_test", 600, 24);
+        line["unit"] = json!("HALF_CASE");
+        line["crate_capacity"] = json!(23);
+        line["allow_half_case"] = json!(true);
+        let err = validate_sale(&sale(vec![line], vec![], None, 0, 0)).unwrap_err();
+        assert_eq!(err.code, "NON_INTEGER_HALF_CASE");
+    }
+
+    #[test]
+    fn mixed_case_requires_exact_capacity_and_same_physical_group() {
+        let payload = json!({
+            "crate_type_id": "crate_b12_50",
+            "is_half_case": false,
+            "lines": [
+                mixed_line("bp_drogba_50", "G_B12_50", 6),
+                mixed_line("bp_beaufort_50", "G_B12_50", 6)
+            ]
+        });
+        let result = validate_mixed_case(&payload).expect("casier B12 complet");
+        assert_eq!(result["slot_capacity"], json!(12));
+        assert_eq!(result["total_drinks_fcfa"], json!(7200));
+
+        let mut incompatible = payload.clone();
+        incompatible["lines"][1]["compatibility_group_id"] = json!("G_B12_50_ALT");
+        let err = validate_mixed_case(&incompatible).unwrap_err();
+        assert_eq!(err.code, "INCOMPATIBLE_CRATE_PROFILE");
+
+        let mut incomplete = payload;
+        incomplete["lines"][1]["quantity_bottles"] = json!(5);
+        let err = validate_mixed_case(&incomplete).unwrap_err();
+        assert_eq!(err.code, "MIXED_CASE_CAPACITY_MISMATCH");
+    }
+
+    #[test]
+    fn credit_limit_is_strict_and_requires_known_customer() {
+        let line = bottle_line("l1", "var_test", 1000, 10);
+        let accepted = sale(vec![line.clone()], vec![], Some("cust_palmier"), 1000, 0);
+        assert_eq!(validate_sale(&accepted).expect("plafond exact")["credit_fcfa"], json!(1000));
+
+        let refused = sale(vec![line.clone()], vec![], Some("cust_palmier"), 999, 0);
+        assert_eq!(validate_sale(&refused).unwrap_err().code, "CREDIT_LIMIT_EXCEEDED");
+
+        let anonymous = sale(vec![line], vec![], None, 5000, 0);
+        assert_eq!(validate_sale(&anonymous).unwrap_err().code, "CUSTOMER_REQUIRED_FOR_CREDIT");
+    }
+
+    #[test]
+    fn mobile_money_unconfirmed_is_pending_not_collected() {
+        let payment = json!({
+            "method": "MOBILE_MONEY",
+            "amount_fcfa": 1000,
+            "reference": null,
+            "confirmed_by_provider": false
+        });
+        let result = validate_sale(&sale(vec![bottle_line("l1", "var_test", 1000, 10)], vec![payment], None, 0, 0))
+            .expect("paiement en attente autorisé");
+        assert_eq!(result["confirmed_paid_fcfa"], json!(0));
+        assert_eq!(result["pending_mobile_money_fcfa"], json!(1000));
+    }
+
+    #[test]
+    fn sync_backoff_is_bounded() {
+        assert!(backoff_ms(50, 0) == backoff_ms(10, 0));
+        assert!(backoff_ms(1, 0) < backoff_ms(2, 0));
+    }
+}

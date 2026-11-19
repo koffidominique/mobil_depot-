@@ -592,16 +592,16 @@ pub fn get_inventory(conn: &Connection, payload: &Value) -> CoreResult<Value> {
             "brand": r.get::<_, String>(2)?,
             "volume_label": r.get::<_, String>(3)?,
             "container_type": r.get::<_, String>(4)?,
-            "material": r.get::<_, String>(6)?,
-            "pack_size": r.get::<_, i64>(7)?,
-            "retail_bottle_fcfa": r.get::<_, i64>(8)?,
-            "retail_case_fcfa": r.get::<_, i64>(9)?,
-            "wholesale_case_fcfa": r.get::<_, i64>(10)?,
-            "bottle_profile_id": r.get::<_, Option<String>>(11)?,
-            "crate_type_id": r.get::<_, Option<String>>(12)?,
-            "compatibility_group_id": r.get::<_, Option<String>>(13)?,
-            "full_units_qty": r.get::<_, i64>(14)?,
-            "min_alert_units": r.get::<_, i64>(15)?
+            "material": r.get::<_, String>(5)?,
+            "pack_size": r.get::<_, i64>(6)?,
+            "retail_bottle_fcfa": r.get::<_, i64>(7)?,
+            "retail_case_fcfa": r.get::<_, i64>(8)?,
+            "wholesale_case_fcfa": r.get::<_, i64>(9)?,
+            "bottle_profile_id": r.get::<_, Option<String>>(10)?,
+            "crate_type_id": r.get::<_, Option<String>>(11)?,
+            "compatibility_group_id": r.get::<_, Option<String>>(12)?,
+            "full_units_qty": r.get::<_, i64>(13)?,
+            "min_alert_units": r.get::<_, i64>(14)?
         }))
     })?;
     let mut items = Vec::new();
@@ -791,6 +791,298 @@ pub fn apply_sync_ack(conn: &mut Connection, payload: &Value) -> CoreResult<Valu
     Ok(json!({"applied": field_array(payload, "results")?.len()}))
 }
 
+// ---- LOT 6/9/10 : catalogue, achats, caisse et rapports locaux ----
+
+/// Formats de casiers physiques et stock d'emballages du point de vente.
+pub fn get_crate_types(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let mut stmt = conn.prepare(
+        "SELECT ct.id, ct.code, ct.capacity, ct.compatibility_group_id, ct.allow_half_case,
+                ct.replacement_value_fcfa, COALESCE(cs.empty_qty, 0)
+         FROM crate_types ct
+         LEFT JOIN crate_stock cs ON cs.crate_id = ct.id AND cs.branch_id = ?1
+         ORDER BY ct.code",
+    )?;
+    let rows = stmt.query_map(params![a.branch_id], |r| {
+        Ok(json!({
+            "crate_type_id": r.get::<_, String>(0)?,
+            "code": r.get::<_, String>(1)?,
+            "capacity": r.get::<_, i64>(2)?,
+            "compatibility_group_id": r.get::<_, String>(3)?,
+            "allow_half_case": r.get::<_, i64>(4)? == 1,
+            "replacement_value_fcfa": r.get::<_, i64>(5)?,
+            "empty_crates_qty": r.get::<_, i64>(6)?
+        }))
+    })?;
+    let mut items = Vec::new();
+    for row in rows { items.push(row?); }
+    Ok(json!({ "crate_types": items }))
+}
+
+/// Bons de commande fournisseur avec montant déjà réceptionné.
+pub fn get_purchase_orders(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let mut stmt = conn.prepare(
+        "SELECT po.id, po.reference, po.total_fcfa, po.status, po.created_at, s.name,
+                COALESCE((SELECT SUM(total_fcfa) FROM purchase_receipts pr WHERE pr.order_id = po.id), 0)
+         FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id
+         WHERE po.branch_id = ?1 ORDER BY po.created_at DESC LIMIT 100",
+    )?;
+    let rows = stmt.query_map(params![a.branch_id], |r| {
+        Ok(json!({
+            "order_id": r.get::<_, String>(0)?,
+            "reference": r.get::<_, String>(1)?,
+            "total_fcfa": r.get::<_, i64>(2)?,
+            "status": r.get::<_, String>(3)?,
+            "created_at": r.get::<_, i64>(4)?,
+            "supplier_name": r.get::<_, String>(5)?,
+            "received_fcfa": r.get::<_, i64>(6)?
+        }))
+    })?;
+    let mut orders = Vec::new();
+    for row in rows { orders.push(row?); }
+    Ok(json!({ "orders": orders }))
+}
+
+/// Reçu détaillé d'une vente : lignes, montants et état de synchronisation.
+pub fn get_sale_receipt(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let sale_id = field_str(payload, "sale_id")?;
+    let row: Option<(String, String, i64, i64, i64, i64, i64, i64, String)> = conn.query_row(
+        "SELECT receipt_number, customer_name, subtotal_fcfa, discount_fcfa, total_fcfa,
+                paid_confirmed_fcfa, pending_mobile_money_fcfa, credit_fcfa, sync_status
+         FROM sales WHERE id = ?1 AND branch_id = ?2",
+        params![sale_id, a.branch_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+    ).optional()?;
+    let (receipt, customer, subtotal, discount, total, paid, pending, credit, sync_status) =
+        row.ok_or_else(|| CoreError::new("SALE_NOT_FOUND", "Vente introuvable sur cet établissement."))?;
+    let mut stmt = conn.prepare(
+        "SELECT variant_name, unit_code, unit_count, physical_units, unit_price_fcfa, line_total_fcfa
+         FROM sale_lines WHERE sale_id = ?1 ORDER BY id",
+    )?;
+    let lines: Vec<Value> = stmt.query_map(params![sale_id], |r| {
+        Ok(json!({
+            "variant_name": r.get::<_, String>(0)?,
+            "unit": r.get::<_, String>(1)?,
+            "unit_count": r.get::<_, i64>(2)?,
+            "physical_units": r.get::<_, i64>(3)?,
+            "unit_price_fcfa": r.get::<_, i64>(4)?,
+            "line_total_fcfa": r.get::<_, i64>(5)?
+        }))
+    })?.collect::<Result<_, _>>()?;
+    Ok(json!({
+        "sale_id": sale_id,
+        "receipt_number": receipt,
+        "customer_name": customer,
+        "subtotal_fcfa": subtotal,
+        "discount_fcfa": discount,
+        "total_fcfa": total,
+        "paid_confirmed_fcfa": paid,
+        "pending_mobile_money_fcfa": pending,
+        "credit_fcfa": credit,
+        "sync_status": sync_status,
+        "lines": lines,
+        "is_receipt_not_invoice": true
+    }))
+}
+
+/// Session de caisse ouverte du point de vente, ou `null`.
+pub fn get_cash_session(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let row: Option<(String, i64, i64, i64)> = conn.query_row(
+        "SELECT id, opening_float_fcfa, expected_closing_fcfa, opened_at FROM cash_sessions
+         WHERE branch_id = ?1 AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1",
+        params![a.branch_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    ).optional()?;
+    match row {
+        Some((id, float, expected, opened_at)) => Ok(json!({
+            "session_id": id, "opening_float_fcfa": float,
+            "expected_closing_fcfa": expected, "opened_at": opened_at
+        })),
+        None => Ok(json!({ "session_id": null, "opening_float_fcfa": 0, "expected_closing_fcfa": 0, "opened_at": 0 })),
+    }
+}
+
+pub fn open_cash_session(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    checkout_permission(&a.role)?;
+    let float = field_i64(payload, "opening_float_fcfa")?;
+    if float < 0 { return Err(CoreError::new("INVALID_FLOAT", "Le fond de caisse ne peut pas être négatif.")); }
+    let existing = get_cash_session(conn, payload)?;
+    if existing.get("session_id").and_then(Value::as_str).is_some() {
+        return Ok(existing);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let session_id = new_id("cash");
+    tx.execute(
+        "INSERT INTO cash_sessions (id, branch_id, opened_by, opening_float_fcfa, expected_closing_fcfa, status, opened_at) VALUES (?1,?2,?3,?4,?4,'OPEN',?5)",
+        params![session_id, a.branch_id, a.user_id, float, now_ms()],
+    )?;
+    tx.execute(
+        "INSERT INTO cash_movements (id, session_id, branch_id, movement_type, signed_amount_fcfa, label, occurred_at) VALUES (?1,?2,?3,'OPEN',?4,'Ouverture de caisse',?5)",
+        params![new_id("cmv"), session_id, a.branch_id, float, now_ms()],
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "CASH_OPEN", &format!("Fond de caisse {float} FCFA"))?;
+    tx.commit()?;
+    Ok(json!({ "session_id": session_id, "opening_float_fcfa": float, "expected_closing_fcfa": float }))
+}
+
+/// Écritures de caisse immuables : encaissement, décaissement ou dépense.
+pub fn record_cash_movement(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    checkout_permission(&a.role)?;
+    let session = get_cash_session(conn, payload)?;
+    let session_id = session.get("session_id").and_then(Value::as_str)
+        .ok_or_else(|| CoreError::new("CASH_CLOSED", "Ouvrez d'abord la caisse."))?.to_string();
+    let kind = field_str(payload, "movement_type")?;
+    if !matches!(kind, "IN" | "OUT" | "EXPENSE") {
+        return Err(CoreError::new("INVALID_MOVEMENT", "Type de mouvement inconnu."));
+    }
+    let amount = field_i64(payload, "amount_fcfa")?;
+    if amount <= 0 { return Err(CoreError::new("INVALID_AMOUNT", "Montant positif requis.")); }
+    let label = field_str(payload, "label").unwrap_or("Mouvement de caisse");
+    let expected_before = field_i64(&session, "expected_closing_fcfa")?;
+    let signed = if kind == "IN" { amount } else { -amount };
+    let expected = if kind == "IN" {
+        checked_add(expected_before, amount, "caisse")?
+    } else {
+        checked_sub(expected_before, amount, "caisse")?
+    };
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO cash_movements (id, session_id, branch_id, movement_type, signed_amount_fcfa, label, occurred_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![new_id("cmv"), session_id, a.branch_id, kind, signed, label, now_ms()],
+    )?;
+    if kind == "EXPENSE" {
+        let category = field_str(payload, "category").unwrap_or("AUTRE");
+        tx.execute(
+            "INSERT INTO expenses (id, branch_id, category, amount_fcfa, description, occurred_at) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![new_id("exp"), a.branch_id, category, amount, label, now_ms()],
+        )?;
+    }
+    tx.execute("UPDATE cash_sessions SET expected_closing_fcfa = ?1 WHERE id = ?2", params![expected, session_id])?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "CASH_MOVEMENT", &format!("{kind} {amount} FCFA · {label}"))?;
+    tx.commit()?;
+    Ok(json!({ "status": "RECORDED", "expected_closing_fcfa": expected }))
+}
+
+pub fn close_cash_session(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    checkout_permission(&a.role)?;
+    let session = get_cash_session(conn, payload)?;
+    let session_id = session.get("session_id").and_then(Value::as_str)
+        .ok_or_else(|| CoreError::new("CASH_CLOSED", "Aucune caisse ouverte."))?.to_string();
+    let counted = field_i64(payload, "counted_fcfa")?;
+    if counted < 0 { return Err(CoreError::new("INVALID_COUNT", "Le montant compté ne peut pas être négatif.")); }
+    let expected = field_i64(&session, "expected_closing_fcfa")?;
+    let variance = checked_sub(counted, expected, "écart de caisse")?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE cash_sessions SET status = 'CLOSED', counted_fcfa = ?1 WHERE id = ?2",
+        params![counted, session_id],
+    )?;
+    db::enqueue(
+        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "CASH_CLOSE",
+        &format!("Clôture {session_id} · écart {variance} FCFA"),
+        &json!({ "session_id": session_id, "counted_fcfa": counted, "variance_fcfa": variance }).to_string(),
+        1, &new_id("idem"),
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "CASH_CLOSE", &format!("Compté {counted}, attendu {expected}, écart {variance}"))?;
+    tx.commit()?;
+    Ok(json!({ "status": "CLOSED", "variance_fcfa": variance, "counted_fcfa": counted }))
+}
+
+/// Indicateurs calculés uniquement depuis les données locales durables.
+pub fn get_reports(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let day_start = now_ms() - 24 * 60 * 60 * 1000;
+    let revenue: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(total_fcfa),0) FROM sales WHERE branch_id = ?1 AND occurred_at >= ?2",
+        params![a.branch_id, day_start], |r| r.get(0),
+    )?;
+    let cash_collected: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(signed_amount_fcfa),0) FROM cash_movements WHERE branch_id = ?1 AND occurred_at >= ?2 AND signed_amount_fcfa > 0",
+        params![a.branch_id, day_start], |r| r.get(0),
+    )?;
+    let credits: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(credit_fcfa),0) FROM sales WHERE branch_id = ?1 AND occurred_at >= ?2",
+        params![a.branch_id, day_start], |r| r.get(0),
+    )?;
+    let expenses: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(amount_fcfa),0) FROM expenses WHERE branch_id = ?1 AND occurred_at >= ?2",
+        params![a.branch_id, day_start], |r| r.get(0),
+    )?;
+    let receivables: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(financial_balance_fcfa),0) FROM customers", [], |r| r.get(0),
+    )?;
+    let supplier_debts: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(financial_debt_fcfa),0) FROM suppliers", [], |r| r.get(0),
+    )?;
+    let stock_value: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(s.full_units_qty * v.retail_bottle_fcfa),0) FROM stock_balances s JOIN product_variants v ON v.id = s.variant_id WHERE s.branch_id = ?1",
+        params![a.branch_id], |r| r.get(0),
+    )?;
+    let by_product: Vec<Value> = {
+        let mut stmt = conn.prepare(
+            "SELECT variant_name, SUM(line_total_fcfa), SUM(physical_units) FROM sale_lines sl
+             JOIN sales s ON s.id = sl.sale_id WHERE s.branch_id = ?1 AND s.occurred_at >= ?2
+             GROUP BY variant_name ORDER BY SUM(line_total_fcfa) DESC LIMIT 20",
+        )?;
+        stmt.query_map(params![a.branch_id, day_start], |r| Ok(json!({
+            "variant_name": r.get::<_, String>(0)?,
+            "revenue_fcfa": r.get::<_, i64>(1)?,
+            "bottles_sold": r.get::<_, i64>(2)?
+        })))?.collect::<Result<_, _>>()?
+    };
+    Ok(json!({
+        "revenue_fcfa": revenue,
+        "cash_collected_fcfa": cash_collected,
+        "credits_fcfa": credits,
+        "expenses_fcfa": expenses,
+        "estimated_margin_fcfa": checked_sub(cash_collected, expenses, "marge estimée")?,
+        "receivables_fcfa": receivables,
+        "supplier_debts_fcfa": supplier_debts,
+        "stock_value_fcfa": stock_value,
+        "by_product": by_product,
+        "confirms_revenue_not_cash": true
+    }))
+}
+
+/// Conflits ouverts, jamais résolus silencieusement.
+pub fn get_conflicts(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let _ = actor(conn, payload)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, operation_id, conflict_type, server_reason, status, created_at
+         FROM sync_conflicts ORDER BY created_at DESC LIMIT 100",
+    )?;
+    let rows = stmt.query_map(params![], |r| Ok(json!({
+        "conflict_id": r.get::<_, String>(0)?,
+        "operation_id": r.get::<_, String>(1)?,
+        "conflict_type": r.get::<_, String>(2)?,
+        "server_reason": r.get::<_, String>(3)?,
+        "status": r.get::<_, String>(4)?,
+        "created_at": r.get::<_, i64>(5)?
+    })))?;
+    let mut conflicts = Vec::new();
+    for row in rows { conflicts.push(row?); }
+    Ok(json!({ "conflicts": conflicts }))
+}
+
+/// Un lot resté `SYNCING` après une coupure réseau redevient réessayable.
+pub fn reset_stale_syncing(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let _ = actor(conn, payload)?;
+    let stale_before = payload.get("stale_before_ms").and_then(Value::as_i64)
+        .unwrap_or_else(|| now_ms() - 10 * 60 * 1000);
+    let changed = conn.execute(
+        "UPDATE sync_outbox SET status = 'FAILED', last_error = 'Synchronisation interrompue — réessai', next_retry_at = ?1
+         WHERE status = 'SYNCING' AND created_at < ?2",
+        params![now_ms(), stale_before],
+    )?;
+    Ok(json!({ "reset": changed }))
+}
+
 pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreResult<Value> {
     match command {
         "authenticate" | "authenticateUser" => authenticate(conn, payload),
@@ -813,6 +1105,16 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "getSynchronizationStatus" | "get_synchronization_status" => get_synchronization_status(conn, payload),
         "configureSyncServer" | "configure_sync_server" => configure_sync_server(conn, payload),
         "applySyncAcknowledgements" | "apply_sync_acknowledgements" => apply_sync_ack(conn, payload),
+        "getCrateTypes" | "get_crate_types" => get_crate_types(conn, payload),
+        "getPurchaseOrders" | "get_purchase_orders" => get_purchase_orders(conn, payload),
+        "getSaleReceipt" | "get_sale_receipt" => get_sale_receipt(conn, payload),
+        "getCashSession" | "get_cash_session" => get_cash_session(conn, payload),
+        "openCashSession" | "open_cash_session" => open_cash_session(conn, payload),
+        "recordCashMovement" | "record_cash_movement" => record_cash_movement(conn, payload),
+        "closeCashSession" | "close_cash_session" => close_cash_session(conn, payload),
+        "getReports" | "get_reports" => get_reports(conn, payload),
+        "getConflicts" | "get_conflicts" => get_conflicts(conn, payload),
+        "resetStaleSyncing" | "reset_stale_syncing" => reset_stale_syncing(conn, payload),
         other => Err(CoreError::new("UNKNOWN_COMMAND", format!("Commande inconnue : {other}"))),
     }
 }
