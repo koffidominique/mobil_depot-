@@ -127,3 +127,19 @@
 - **LOT 13 — CI** : `.github/workflows/mobile.yml` exécute `tsc`, Jest, ESLint en mode erreurs seulement, et `cargo test` pour le moteur et l'adaptateur Axum. Le job Android est explicitement désactivé tant que les artefacts natifs et le SDK ne sont pas configurés : aucun build non exécuté n'est déclaré réussi.
 - **Vérifications exécutées ici** : `npx tsc --noEmit` sans erreur, `npx jest --runInBand` 3/3, `npx eslint . --ext .ts,.tsx` 0 erreur, tree-sitter Rust sans nœud d'erreur, `git diff --check` OK.
 - **Risques restants** : restauration à tester avec une base réelle et le toolchain Rust ; CI à exécuter sur GitHub ; intégration du `SyncKernel` dans le parent toujours requise.
+
+## LOT 20 — PARTIE 1 : couverture fonctionnelle du dépôt de boissons
+
+- **Lecture de la PARTIE 1** (`prompt.md`, lignes 16–68) : la mission exige une application de gestion réellement exploitable, pas une maquette de consultation, avec un seul moteur métier Rust. Chaque élément de la liste a été confronté à l'état du code.
+- **Produits et catalogues** : `saveProductVariant`, `archiveProductVariant` et `createCrateType` ajoutés au moteur. L'écran Catalogue permet désormais créer, modifier et archiver logiquement une variante, et configurer un format de casier avec son groupe de compatibilité physique explicite. Aucune suppression historique.
+- **Prix d'achat et de vente** : `updateVariantPrices` met à jour les trois prix et écrit systématiquement l'ancien prix dans la nouvelle table additive `price_history`. La mise à jour est enfilée dans `sync_outbox` (`PRICE_UPDATE`) et tracée dans `audit_logs`.
+- **Ventes au détail/en gros et unités** : le POS propose désormais `BOTTLE`, `CASE`, `CARTON`, `PACK`, `CAN`, `UNIT`, avec le tarif détail ou gros choisi par le moteur. Le jeu pilote contient une canette aluminium et un pack PET jetables, sans profil de bouteille consignée.
+- **Commandes mixtes** : la liste des formats de casiers n'est plus codée en dur dans l'interface ; elle provient de `getCrateTypes`, donc de la configuration Rust. Le remplissage exact et le groupe physique restent validés par Rust.
+- **Bouteilles vides et casiers retournables** : `getPackagingStock` expose les stocks par profil exact et par type de casier. Les retours clients et fournisseurs acceptent désormais un type, une référence et une quantité explicites ; aucun solde n'est modifié arbitrairement.
+- **Clients, crédits, fournisseurs, achats** : déjà câblés sur les commandes Rust ; le plafond de crédit, les réceptions partielles et les dettes restent calculés dans le moteur.
+- **Stocks pleins/vides/jetables** : l'écran Stock affiche quatre vues séparées avec le détail par profil/format ; les emballages jetables n'entraînent aucune dette automatique.
+- **Caisse, paiements, dépenses** : ajout du décaissement (`OUT`) en plus de l'encaissement et de la dépense ; la référence de paiement est transmise au moteur depuis le POS.
+- **Reçus, bordereaux, rapports** : nouvel écran « Bordereaux » avec relevé local des règlements et du registre d'emballages par client/fournisseur (`getPartnerStatement`), en complément des reçus et rapports existants.
+- **Synchronisation avec l'ordinateur** : le contrat `/api/v1` et l'adaptateur Axum restent la brique cible ; l'intégration du `SyncKernel` dans `ss_depot_rust` demeure hors de ce dépôt et n'est pas annoncée comme terminée.
+- **Vérifications** : `npx tsc --noEmit` sans erreur, `npx jest --runInBand` 3/3, `npx eslint . --ext .ts,.tsx --quiet` sans erreur, tree-sitter Rust sans nœud d'erreur, `git diff --check` OK.
+- **Limites** : `cargo test` non exécutable ici (toolchain absente) ; les tests de catalogage ajoutés dans `commands.rs` sont validés syntaxiquement seulement. Le pilotage multi-établissements et les quotas de stock par appareil restent à implémenter côté serveur central.

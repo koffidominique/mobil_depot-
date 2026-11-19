@@ -35,3 +35,4 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - Aucun conflit de synchronisation masqué.
 - HTTPS obligatoire pour le serveur Axum central.
 - Les ventes, paiements et mouvements d'emballages sont des faits immuables : aucune résolution « dernière modification gagnante ».
+- Le catalogue, les prix et les formats de casiers sont modifiables uniquement via des commandes Rust qui historisent chaque changement.
