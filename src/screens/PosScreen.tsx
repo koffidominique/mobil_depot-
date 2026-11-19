@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import React, { useMemo, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
-import { Banner, Card, PrimaryButton, Row, Screen, useColors } from '../components/ui';
+import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
 import { depot } from '../core/client';
 import { formatFcfa } from '../core/format';
 import type { CartLineInput, CommercialUnit, InventoryItem, PaymentInput, SaleResult } from '../core/types';
@@ -30,6 +30,8 @@ export function PosScreen() {
   const [search, setSearch] = useState('');
   const [tier, setTier] = useState<'RETAIL' | 'WHOLESALE'>('RETAIL');
   const [method, setMethod] = useState<PaymentInput['method']>('CASH');
+  const [reference, setReference] = useState('');
+  const [discount, setDiscount] = useState('0');
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
@@ -50,16 +52,17 @@ export function PosScreen() {
 
   const checkout = useMutation<SaleResult, Error, void>({
     mutationFn: async () => {
+      const ref = reference.trim() || null;
       const payments: PaymentInput[] =
         method === 'CREDIT'
           ? [{ method: 'CREDIT', amount_fcfa: 0, reference: null, confirmed_by_provider: false }]
-          : [{ method, amount_fcfa: total, reference: null, confirmed_by_provider: method !== 'MOBILE_MONEY' }];
+          : [{ method, amount_fcfa: total, reference: ref, confirmed_by_provider: method !== 'MOBILE_MONEY' }];
       const input = {
         customer_id: selectedCustomerId,
         price_tier: tier,
         lines: cartLines,
         mixed_cases: [],
-        discount_fcfa: 0,
+        discount_fcfa: Number.parseInt(discount, 10) || 0,
         payments,
         is_online: true,
       };
@@ -188,6 +191,13 @@ export function PosScreen() {
             </Pressable>
           ))}
         </View>
+        <Field
+          label="Remise FCFA (plafond vérifié par Rust)"
+          value={discount}
+          keyboardType="numeric"
+          onChangeText={setDiscount}
+        />
+        <Field label="Référence du paiement (si requise)" value={reference} onChangeText={setReference} />
         <PrimaryButton
           label="Valider la vente"
           disabled={cartLines.length === 0}
