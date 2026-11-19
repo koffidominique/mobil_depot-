@@ -1,4 +1,6 @@
+import type { ZodType } from 'zod';
 import NativeDepotCore from '../specs/NativeDepotCore';
+import { loginSchema, saleSchema } from './schemas';
 import type {
   AuthSession,
   Customer,
@@ -61,6 +63,16 @@ export function getAuthToken(): string | null {
   return authToken;
 }
 
+/** Validation des contrats côté interface : aucune règle métier n'est dupliquée ici. */
+function validateInterface<T>(schema: ZodType<T>, payload: unknown, label: string): T {
+  const result = schema.safeParse(payload);
+  if (!result.success) {
+    const first = result.error.issues[0];
+    throw new CoreError('INVALID_INTERFACE_DTO', `${label} : ${first?.message ?? 'données invalides'}`);
+  }
+  return result.data;
+}
+
 function withAuth(payload: object): object {
   if (!authToken) return payload;
   const record = payload as Record<string, unknown>;
@@ -86,8 +98,12 @@ export const depot = {
   initializeDatabase: (path: string) =>
     call<{ database: string; schema_version: number }>('initializeDatabase', { path }),
 
-  authenticate: (username: string, pin: string, branchId: string, deviceId: string) =>
-    call<AuthSession>('authenticate', { username, pin, branch_id: branchId, device_id: deviceId }),
+  authenticate: (username: string, pin: string, branchId: string, deviceId: string) => {
+    const valid = validateInterface(loginSchema, { username, pin, branchId }, 'Connexion');
+    return call<AuthSession>('authenticate', {
+      username: valid.username, pin: valid.pin, branch_id: valid.branchId, device_id: deviceId,
+    });
+  },
 
   getDashboard: () => call<Dashboard>('getDashboard'),
   getInventory: () => call<Inventory>('getInventory'),
@@ -109,7 +125,10 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
-  }) => call<SaleValidation>('validateSale', input),
+  }) => {
+    const valid = validateInterface(saleSchema, input, 'Validation de vente');
+    return call<SaleValidation>('validateSale', valid);
+  },
 
   createSale: (input: {
     customer_id: string | null;
@@ -119,7 +138,10 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
-  }) => call<SaleResult>('createSale', input),
+  }) => {
+    const valid = validateInterface(saleSchema, input, 'Création de vente');
+    return call<SaleResult>('createSale', valid);
+  },
 
   createMixedOrder: (input: MixedCaseInput) => call<ValidatedMixedCase>('createMixedOrder', input),
 

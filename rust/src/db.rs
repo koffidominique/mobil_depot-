@@ -28,9 +28,8 @@ pub fn open(path: &str) -> CoreResult<Connection> {
     Ok(conn)
 }
 
-pub fn migrate(conn: &Connection) -> CoreResult<()> {
-    conn.execute_batch(
-        r#"
+/// Migration 1 : schéma initial local. Toutes les créations sont additives.
+pub const MIGRATION_1: &str = r#"
         CREATE TABLE IF NOT EXISTS tenants (
           id TEXT PRIMARY KEY, trade_name TEXT NOT NULL, city TEXT NOT NULL,
           offline_policy TEXT NOT NULL DEFAULT 'ALLOW_WITH_WARNING', is_pilot INTEGER NOT NULL DEFAULT 1
@@ -147,12 +146,6 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
           status TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, next_retry_at INTEGER NOT NULL DEFAULT 0,
           last_error TEXT, created_at INTEGER NOT NULL, synced_at INTEGER, server_sequence INTEGER
         );
-        CREATE TABLE IF NOT EXISTS price_history (
-          id TEXT PRIMARY KEY, variant_id TEXT NOT NULL, retail_case_fcfa INTEGER NOT NULL,
-          wholesale_case_fcfa INTEGER NOT NULL, retail_bottle_fcfa INTEGER NOT NULL,
-          changed_at INTEGER NOT NULL, changed_by TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_price_history_variant ON price_history(variant_id, changed_at);
         CREATE TABLE IF NOT EXISTS sync_cursors (
           branch_id TEXT PRIMARY KEY, server_sequence INTEGER NOT NULL DEFAULT 0,
           last_sync_at INTEGER, server_url TEXT NOT NULL DEFAULT ''
@@ -165,8 +158,40 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
           id TEXT PRIMARY KEY, branch_id TEXT NOT NULL, user_id TEXT NOT NULL, action TEXT NOT NULL,
           details TEXT NOT NULL, occurred_at INTEGER NOT NULL
         );
-        "#,
+        "#;
+
+/// Migration 2 : historique des prix, sans toucher aux données existantes.
+pub const MIGRATION_2: &str = r#"
+        CREATE TABLE IF NOT EXISTS price_history (
+          id TEXT PRIMARY KEY, variant_id TEXT NOT NULL, retail_case_fcfa INTEGER NOT NULL,
+          wholesale_case_fcfa INTEGER NOT NULL, retail_bottle_fcfa INTEGER NOT NULL,
+          changed_at INTEGER NOT NULL, changed_by TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_price_history_variant ON price_history(variant_id, changed_at);
+        "#;
+
+/// Applique les migrations ordonnées et enregistre leur version dans la base locale.
+pub fn migrate(conn: &Connection) -> CoreResult<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_meta (
+           version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL
+         );
+         INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
+    let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
+    let migrations: [(i64, &str); 2] = [(1, MIGRATION_1), (2, MIGRATION_2)];
+    for (version, sql) in migrations {
+        if version <= current {
+            continue;
+        }
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(sql)?;
+        tx.execute(
+            "INSERT INTO schema_meta (version, applied_at) VALUES (?1, ?2)",
+            params![version, now_ms()],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
