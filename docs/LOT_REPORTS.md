@@ -116,3 +116,14 @@
 - **Non exécuté ici** : `cargo test` et `cargo build` (toolchain Rust absente, téléchargement `static.rust-lang.org` bloqué), builds Gradle/Xcode (JDK/Android SDK/Xcode absents). Aucun build n'est déclaré comme réussi.
 - **Risques restants** : intégration du `SyncKernel` dans le parent non encore faite ; multi-tenant central et quotas de stock par appareil à migrer côté serveur ; confirmation des paiements Mobile Money opérateur et impression/partage de reçus à brancher sur des services natifs.
 - **Prochaine étape** : implémenter `SyncKernel` dans `crates/depotpro-server` du parent avec SQLx (table d'idempotence, curseurs, événements de réplication), puis exécuter les tests multi-appareils réels avant toute activation en production.
+
+## LOT 19 — Sauvegarde/restauration, déclencheurs de synchro et CI
+
+- **LOT 3 — sauvegarde cohérente** : `backupDatabase` utilise `VACUUM INTO` sur la connexion SQLite ouverte ; `restoreDatabase` crée d'abord une sauvegarde de sécurité `*.before-restore-<horodatage>`, ferme la connexion, copie le fichier puis rouvre et re-migre la base. Aucune restauration destructive n'est possible sans ce snapshot ; une source inexistante est refusée (`BACKUP_NOT_FOUND`).
+- **Écran Synchronisation** : création de sauvegarde, restauration contrôlée, liste des conflits ouverts (aucun conflit masqué), bouton de synchronisation manuelle existant conservé.
+- **LOT 5 — déclencheurs automatiques** : `AutoSync` dans `src/App.tsx` déclenche la synchronisation au démarrage d'une session configurée, au retour au premier plan et lors d'une reconnexion réseau (`NetInfo`). Aucune tentative n'est faite sans URL HTTPS configurée ; les opérations restent dans la file locale.
+- **Curseur serveur visible** : `getSynchronizationStatus` expose désormais `server_url`, ce qui permet ce déclenchement sans marquer les opérations `SYNCING` inutilement.
+- **LOT 7 — paiement** : reçu et référence de paiement saisis dans le POS et transmis au moteur Rust. La remise est validée par Rust selon le plafond du rôle, jamais par l'interface.
+- **LOT 13 — CI** : `.github/workflows/mobile.yml` exécute `tsc`, Jest, ESLint en mode erreurs seulement, et `cargo test` pour le moteur et l'adaptateur Axum. Le job Android est explicitement désactivé tant que les artefacts natifs et le SDK ne sont pas configurés : aucun build non exécuté n'est déclaré réussi.
+- **Vérifications exécutées ici** : `npx tsc --noEmit` sans erreur, `npx jest --runInBand` 3/3, `npx eslint . --ext .ts,.tsx` 0 erreur, tree-sitter Rust sans nœud d'erreur, `git diff --check` OK.
+- **Risques restants** : restauration à tester avec une base réelle et le toolchain Rust ; CI à exécuter sur GitHub ; intégration du `SyncKernel` dans le parent toujours requise.

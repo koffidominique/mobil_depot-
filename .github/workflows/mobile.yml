@@ -1,0 +1,39 @@
+name: Mobile CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  typescript:
+    name: TypeScript and Jest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.11.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test -- --runInBand
+      - run: npx eslint . --ext .ts,.tsx --quiet
+
+  rust:
+    name: Rust core and sync adapter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path rust/Cargo.toml
+      - run: cargo test --manifest-path server/Cargo.toml
+
+  android:
+    name: Android build (requires NDK artifacts)
+    runs-on: ubuntu-latest
+    needs: [typescript, rust]
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+      # À activer seulement après configuration des artefacts Rust Android et du SDK dans le runner.
