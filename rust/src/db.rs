@@ -147,6 +147,12 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
           status TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, next_retry_at INTEGER NOT NULL DEFAULT 0,
           last_error TEXT, created_at INTEGER NOT NULL, synced_at INTEGER, server_sequence INTEGER
         );
+        CREATE TABLE IF NOT EXISTS price_history (
+          id TEXT PRIMARY KEY, variant_id TEXT NOT NULL, retail_case_fcfa INTEGER NOT NULL,
+          wholesale_case_fcfa INTEGER NOT NULL, retail_bottle_fcfa INTEGER NOT NULL,
+          changed_at INTEGER NOT NULL, changed_by TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_price_history_variant ON price_history(variant_id, changed_at);
         CREATE TABLE IF NOT EXISTS sync_cursors (
           branch_id TEXT PRIMARY KEY, server_sequence INTEGER NOT NULL DEFAULT 0,
           last_sync_at INTEGER, server_url TEXT NOT NULL DEFAULT ''
@@ -271,6 +277,22 @@ pub fn seed(conn: &mut Connection) -> CoreResult<()> {
         "INSERT OR IGNORE INTO purchase_orders (id, branch_id, supplier_id, reference, total_fcfa, status, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
         params!["po_seed_01", BRANCH_ID, "sup_brasserie", "BC-2026-0041", 150000, "PARTIAL_RECEIVED", now],
     )?;
+    // Références jetables du jeu pilote : aucune dette d'emballage ne doit être créée.
+    let disposables = [
+        ("var_flag_can_33", "Flag Canette 33 cl", "SOLIBRA", "FLAG-CAN-33", "FLG33C", "33 cl", "Canette", "Aluminium", 24i64, 2100i64, 1950i64, 180i64),
+        ("var_eau_pack_6", "Eau Minérale Pack 6", "CIE", "EAU-PACK-6", "EAUP6", "1,5 L", "Pack", "PET", 6i64, 1800i64, 1650i64, 300i64),
+    ];
+    for (id, name, brand, sku, barcode, volume, container, material, pack, retail, wholesale, bottle) in disposables {
+        tx.execute(
+            "INSERT OR IGNORE INTO product_variants (id, tenant_id, name, brand, sku, barcode, volume_label, container_type, material, bottle_profile_id, crate_type_id, pack_size, retail_case_fcfa, wholesale_case_fcfa, retail_bottle_fcfa, price_revision, is_active) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,NULL,?10,?11,?12,?13,1,1)",
+            params![id, TENANT_ID, name, brand, sku, barcode, volume, container, material, pack, retail, wholesale, bottle],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units) VALUES (?1,?2,120,12)",
+            params![BRANCH_ID, id],
+        )?;
+    }
+
     tx.execute(
         "INSERT OR IGNORE INTO sync_cursors (branch_id, server_sequence, last_sync_at, server_url) VALUES (?1,0,NULL,'')",
         params![BRANCH_ID],

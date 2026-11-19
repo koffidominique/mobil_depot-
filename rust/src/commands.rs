@@ -1084,6 +1084,277 @@ pub fn reset_stale_syncing(conn: &mut Connection, payload: &Value) -> CoreResult
     Ok(json!({ "reset": changed }))
 }
 
+// ---- PARTIE 1 : catalogue, prix et relevés partenaires ----
+
+fn assert_catalog_role(role: &str) -> CoreResult<()> {
+    if matches!(role, "OWNER" | "ADMIN" | "MANAGER") {
+        Ok(())
+    } else {
+        Err(CoreError::new("ROLE_FORBIDDEN", "Rôle non autorisé à modifier le catalogue."))
+    }
+}
+
+fn assert_non_negative_prices(retail_case: i64, wholesale: i64, bottle: i64) -> CoreResult<()> {
+    if retail_case < 0 || wholesale < 0 || bottle < 0 {
+        Err(CoreError::new("INVALID_PRICE", "Les prix FCFA doivent être positifs ou nuls."))
+    } else {
+        Ok(())
+    }
+}
+
+/// Création ou modification d'une variante. Les règles de prix restent dans le moteur.
+pub fn save_product_variant(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_catalog_role(&a.role)?;
+    let pack_size = field_i64(payload, "pack_size")?;
+    if pack_size <= 0 {
+        return Err(CoreError::new("INVALID_PACK_SIZE", "La contenance doit être positive."));
+    }
+    let retail = field_i64(payload, "retail_case_fcfa")?;
+    let wholesale = field_i64(payload, "wholesale_case_fcfa")?;
+    let bottle = field_i64(payload, "retail_bottle_fcfa")?;
+    assert_non_negative_prices(retail, wholesale, bottle)?;
+    let name = field_str(payload, "name")?.trim().to_string();
+    let sku = field_str(payload, "sku")?.trim().to_string();
+    if name.is_empty() || sku.is_empty() {
+        return Err(CoreError::new("INVALID_PRODUCT", "Nom et référence requis."));
+    }
+    let profile = field_str_opt(payload, "bottle_profile_id").map(str::to_string);
+    let crate_id = field_str_opt(payload, "crate_type_id").map(str::to_string);
+    let tx = conn.unchecked_transaction()?;
+    let variant_id = match field_str_opt(payload, "variant_id").map(str::to_string) {
+        Some(id) => {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM product_variants WHERE id = ?1 AND tenant_id = ?2",
+                params![id, a.tenant_id], |r| r.get(0),
+            )?;
+            if exists == 0 {
+                return Err(CoreError::new("VARIANT_NOT_FOUND", "Variante introuvable."));
+            }
+            tx.execute(
+                "UPDATE product_variants SET name=?2, brand=?3, sku=?4, volume_label=?5, container_type=?6, material=?7, bottle_profile_id=?8, crate_type_id=?9, pack_size=?10, retail_case_fcfa=?11, wholesale_case_fcfa=?12, retail_bottle_fcfa=?13, price_revision=price_revision+1 WHERE id=?1",
+                params![id, name, field_str(payload, "brand")?, sku, field_str(payload, "volume_label")?,
+                    field_str(payload, "container_type")?, field_str(payload, "material")?, profile, crate_id,
+                    pack_size, retail, wholesale, bottle],
+            )?;
+            id
+        }
+        None => {
+            let id = new_id("var");
+            tx.execute(
+                "INSERT INTO product_variants (id, tenant_id, name, brand, sku, barcode, volume_label, container_type, material, bottle_profile_id, crate_type_id, pack_size, retail_case_fcfa, wholesale_case_fcfa, retail_bottle_fcfa, price_revision, is_active) VALUES (?1,?2,?3,?4,?5,NULL,?6,?7,?8,?9,?10,?11,?12,?13,?14,1,1)",
+                params![id, a.tenant_id, name, field_str(payload, "brand")?, sku,
+                    field_str(payload, "volume_label")?, field_str(payload, "container_type")?,
+                    field_str(payload, "material")?, profile, crate_id, pack_size, retail, wholesale, bottle],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units) VALUES (?1,?2,0,12)",
+                params![a.branch_id, id],
+            )?;
+            id
+        }
+    };
+    tx.execute(
+        "INSERT INTO price_history (id, variant_id, retail_case_fcfa, wholesale_case_fcfa, retail_bottle_fcfa, changed_at, changed_by) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![new_id("price"), variant_id, retail, wholesale, bottle, now_ms(), a.user_id],
+    )?;
+    db::enqueue(
+        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "CATALOG_VARIANT_UPSERT",
+        &format!("Variante {variant_id} · {name}"), &payload.to_string(), 1, &new_id("idem"),
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "CATALOG_VARIANT_UPSERT", &format!("{variant_id} · {name}"))?;
+    tx.commit()?;
+    Ok(json!({ "variant_id": variant_id, "synced": false }))
+}
+
+/// Mise à jour des prix avec historique immuable.
+pub fn update_variant_prices(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_catalog_role(&a.role)?;
+    let variant_id = field_str(payload, "variant_id")?;
+    let retail = field_i64(payload, "retail_case_fcfa")?;
+    let wholesale = field_i64(payload, "wholesale_case_fcfa")?;
+    let bottle = field_i64(payload, "retail_bottle_fcfa")?;
+    assert_non_negative_prices(retail, wholesale, bottle)?;
+    let old: (i64, i64, i64, i64) = conn.query_row(
+        "SELECT retail_case_fcfa, wholesale_case_fcfa, retail_bottle_fcfa, price_revision FROM product_variants WHERE id = ?1",
+        params![variant_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "INSERT INTO price_history (id, variant_id, retail_case_fcfa, wholesale_case_fcfa, retail_bottle_fcfa, changed_at, changed_by) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![new_id("price"), variant_id, old.0, old.1, old.2, now_ms(), a.user_id],
+    )?;
+    tx.execute(
+        "UPDATE product_variants SET retail_case_fcfa=?2, wholesale_case_fcfa=?3, retail_bottle_fcfa=?4, price_revision=price_revision+1 WHERE id=?1",
+        params![variant_id, retail, wholesale, bottle],
+    )?;
+    db::enqueue(
+        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "PRICE_UPDATE",
+        &format!("{variant_id} : {retail}/{wholesale}/{bottle} FCFA"), &payload.to_string(), 1, &new_id("idem"),
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "PRICE_UPDATE", variant_id)?;
+    tx.commit()?;
+    Ok(json!({ "variant_id": variant_id, "price_revision": old.3 + 1 }))
+}
+
+/// Archivage logique : l'historique commercial reste intact.
+pub fn archive_product_variant(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_catalog_role(&a.role)?;
+    let variant_id = field_str(payload, "variant_id")?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("UPDATE product_variants SET is_active = 0 WHERE id = ?1", params![variant_id])?;
+    db::enqueue(
+        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "CATALOG_VARIANT_ARCHIVE",
+        variant_id, &payload.to_string(), 1, &new_id("idem"),
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "CATALOG_VARIANT_ARCHIVE", variant_id)?;
+    tx.commit()?;
+    Ok(json!({ "variant_id": variant_id, "status": "ARCHIVED" }))
+}
+
+/// Nouveau format de casier physiquement configuré (jamais déduit du volume).
+pub fn create_crate_type(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_catalog_role(&a.role)?;
+    let code = field_str(payload, "code")?.trim().to_string();
+    let capacity = field_i64(payload, "capacity")?;
+    if code.is_empty() || capacity <= 0 {
+        return Err(CoreError::new("INVALID_CRATE", "Code et capacité requis."));
+    }
+    let group = field_str(payload, "compatibility_group_id")?.to_string();
+    let replacement = field_i64(payload, "replacement_value_fcfa")?;
+    if replacement < 0 {
+        return Err(CoreError::new("INVALID_REPLACEMENT_VALUE", "Valeur de remplacement invalide."));
+    }
+    let allow_half = if field_bool(payload, "allow_half_case", true) { 1 } else { 0 };
+    let tx = conn.unchecked_transaction()?;
+    let exists: i64 = tx.query_row("SELECT COUNT(*) FROM crate_types WHERE code = ?1", params![code], |r| r.get(0))?;
+    if exists > 0 {
+        return Err(CoreError::new("CRATE_CODE_EXISTS", "Ce format de casier existe déjà."));
+    }
+    let id = new_id("crate");
+    tx.execute(
+        "INSERT INTO crate_types (id, code, capacity, compatibility_group_id, allow_half_case, replacement_value_fcfa, is_reusable) VALUES (?1,?2,?3,?4,?5,?6,1)",
+        params![id, code, capacity, group, allow_half, replacement],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO crate_stock (branch_id, crate_id, full_qty, empty_qty) VALUES (?1,?2,0,0)",
+        params![a.branch_id, id],
+    )?;
+    db::enqueue(
+        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "CRATE_TYPE_UPSERT",
+        &format!("{code} ({capacity})"), &payload.to_string(), 1, &new_id("idem"),
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "CRATE_TYPE_UPSERT", &code)?;
+    tx.commit()?;
+    Ok(json!({ "crate_type_id": id, "code": code }))
+}
+
+/// Stocks d'emballages vides par profil exact et par type de casier.
+pub fn get_packaging_stock(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let mut stmt = conn.prepare(
+        "SELECT bp.id, bp.name, bp.volume_label, bp.compatibility_group_id, COALESCE(ebs.qty,0)
+         FROM bottle_profiles bp LEFT JOIN empty_bottle_stock ebs
+         ON ebs.profile_id = bp.id AND ebs.branch_id = ?1
+         WHERE bp.tenant_id = ?2 ORDER BY bp.name",
+    )?;
+    let bottles: Vec<Value> = stmt.query_map(params![a.branch_id, a.tenant_id], |r| Ok(json!({
+        "profile_id": r.get::<_, String>(0)?,
+        "name": r.get::<_, String>(1)?,
+        "volume_label": r.get::<_, String>(2)?,
+        "compatibility_group_id": r.get::<_, String>(3)?,
+        "qty": r.get::<_, i64>(4)?
+    })))?.collect::<Result<_, _>>()?;
+    let mut stmt = conn.prepare(
+        "SELECT ct.id, ct.code, ct.capacity, ct.compatibility_group_id, COALESCE(cs.empty_qty,0), COALESCE(cs.full_qty,0)
+         FROM crate_types ct LEFT JOIN crate_stock cs
+         ON cs.crate_id = ct.id AND cs.branch_id = ?1 ORDER BY ct.code",
+    )?;
+    let crates: Vec<Value> = stmt.query_map(params![a.branch_id], |r| Ok(json!({
+        "crate_type_id": r.get::<_, String>(0)?,
+        "code": r.get::<_, String>(1)?,
+        "capacity": r.get::<_, i64>(2)?,
+        "compatibility_group_id": r.get::<_, String>(3)?,
+        "empty_qty": r.get::<_, i64>(4)?,
+        "full_qty": r.get::<_, i64>(5)?
+    })))?.collect::<Result<_, _>>()?;
+    Ok(json!({ "empty_bottles": bottles, "crates": crates }))
+}
+
+/// Bordereau local : opérations financières et emballages d'un partenaire.
+pub fn get_partner_statement(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let partner_type = field_str(payload, "partner_type")?;
+    let partner_id = field_str(payload, "partner_id")?;
+    if !matches!(partner_type, "CUSTOMER" | "SUPPLIER") {
+        return Err(CoreError::new("INVALID_PARTNER", "Type de partenaire inconnu."));
+    }
+    let (purchases, paid, balance) = if partner_type == "CUSTOMER" {
+        let purchases: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(total_fcfa),0) FROM sales WHERE branch_id = ?1 AND customer_id = ?2",
+            params![a.branch_id, partner_id], |r| r.get(0),
+        )?;
+        let paid: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(amount_fcfa),0) FROM payments WHERE branch_id = ?1 AND partner_type='CUSTOMER' AND partner_id=?2",
+            params![a.branch_id, partner_id], |r| r.get(0),
+        )?;
+        let balance: i64 = conn.query_row(
+            "SELECT COALESCE(financial_balance_fcfa,0) FROM customers WHERE id = ?1",
+            params![partner_id], |r| r.get(0),
+        )?;
+        (purchases, paid, balance)
+    } else {
+        let purchases: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(pr.total_fcfa),0) FROM purchase_receipts pr JOIN purchase_orders po ON po.id=pr.order_id WHERE po.branch_id=?1 AND po.supplier_id=?2",
+            params![a.branch_id, partner_id], |r| r.get(0),
+        )?;
+        let paid: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(amount_fcfa),0) FROM payments WHERE branch_id = ?1 AND partner_type='SUPPLIER' AND partner_id=?2",
+            params![a.branch_id, partner_id], |r| r.get(0),
+        )?;
+        let balance: i64 = conn.query_row(
+            "SELECT COALESCE(financial_debt_fcfa,0) FROM suppliers WHERE id = ?1",
+            params![partner_id], |r| r.get(0),
+        )?;
+        (purchases, paid, balance)
+    };
+    let mut stmt = conn.prepare(
+        "SELECT method, amount_fcfa, occurred_at, reference FROM payments
+         WHERE branch_id=?1 AND partner_type=?2 AND partner_id=?3 ORDER BY occurred_at DESC LIMIT 100",
+    )?;
+    let payments: Vec<Value> = stmt.query_map(params![a.branch_id, partner_type, partner_id], |r| Ok(json!({
+        "method": r.get::<_, String>(0)?,
+        "amount_fcfa": r.get::<_, i64>(1)?,
+        "occurred_at": r.get::<_, i64>(2)?,
+        "reference": r.get::<_, Option<String>>(3)?
+    })))?.collect::<Result<_, _>>()?;
+    let mut stmt = conn.prepare(
+        "SELECT item_kind, ref_id, direction, qty, reason, occurred_at FROM partner_packaging_ledger
+         WHERE branch_id=?1 AND partner_type=?2 AND partner_id=?3 ORDER BY occurred_at DESC LIMIT 100",
+    )?;
+    let packaging: Vec<Value> = stmt.query_map(params![a.branch_id, partner_type, partner_id], |r| Ok(json!({
+        "item_kind": r.get::<_, String>(0)?,
+        "ref_id": r.get::<_, String>(1)?,
+        "direction": r.get::<_, String>(2)?,
+        "qty": r.get::<_, i64>(3)?,
+        "reason": r.get::<_, String>(4)?,
+        "occurred_at": r.get::<_, i64>(5)?
+    })))?.collect::<Result<_, _>>()?;
+    Ok(json!({
+        "partner_type": partner_type,
+        "partner_id": partner_id,
+        "purchases_fcfa": purchases,
+        "paid_fcfa": paid,
+        "balance_fcfa": balance,
+        "payments": payments,
+        "packaging_ledger": packaging,
+        "is_bordereau_local": true
+    }))
+}
+
 pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreResult<Value> {
     match command {
         "authenticate" | "authenticateUser" => authenticate(conn, payload),
@@ -1116,6 +1387,34 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "getReports" | "get_reports" => get_reports(conn, payload),
         "getConflicts" | "get_conflicts" => get_conflicts(conn, payload),
         "resetStaleSyncing" | "reset_stale_syncing" => reset_stale_syncing(conn, payload),
+        "saveProductVariant" | "save_product_variant" => save_product_variant(conn, payload),
+        "updateVariantPrices" | "update_variant_prices" => update_variant_prices(conn, payload),
+        "archiveProductVariant" | "archive_product_variant" => archive_product_variant(conn, payload),
+        "createCrateType" | "create_crate_type" => create_crate_type(conn, payload),
+        "getPackagingStock" | "get_packaging_stock" => get_packaging_stock(conn, payload),
+        "getPartnerStatement" | "get_partner_statement" => get_partner_statement(conn, payload),
         other => Err(CoreError::new("UNKNOWN_COMMAND", format!("Commande inconnue : {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_edition_requires_management_role() {
+        assert!(assert_catalog_role("OWNER").is_ok());
+        assert!(assert_catalog_role("ADMIN").is_ok());
+        assert!(assert_catalog_role("MANAGER").is_ok());
+        assert!(assert_catalog_role("CASHIER").is_err());
+        assert!(assert_catalog_role("READ_ONLY").is_err());
+    }
+
+    #[test]
+    fn negative_price_is_refused_before_any_write() {
+        assert!(assert_non_negative_prices(0, 0, 0).is_ok());
+        assert_eq!(assert_non_negative_prices(-1, 0, 0).unwrap_err().code, "INVALID_PRICE");
+        assert_eq!(assert_non_negative_prices(100, -1, 0).unwrap_err().code, "INVALID_PRICE");
+        assert_eq!(assert_non_negative_prices(100, 100, -1).unwrap_err().code, "INVALID_PRICE");
     }
 }
