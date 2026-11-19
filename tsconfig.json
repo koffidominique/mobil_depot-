@@ -14,5 +14,5 @@
     "types": ["react", "jest"]
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", "Pods", "legacy", "android", "ios", "rust", "__tests__"]
+  "exclude": ["node_modules", "Pods", "legacy", "android", "ios", "rust", "__tests__", "web"]
 }

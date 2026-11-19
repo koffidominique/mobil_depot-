@@ -17,6 +17,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run web:typecheck
+      - run: node scripts/verify-web-preview.mjs
       - run: npm test -- --runInBand
       - run: npm run bundle:check
       - run: npx eslint . --ext .ts,.tsx --quiet
