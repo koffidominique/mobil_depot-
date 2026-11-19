@@ -32,7 +32,7 @@ fn execute_inner(input: &str) -> CoreResult<String> {
         let mut path_guard = DB_PATH.get_or_init(|| Mutex::new(String::new())).lock()
             .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?;
         *path_guard = path.to_string();
-        return Ok(json!({"ok": true, "data": {"database": path, "schema_version": 7}}).to_string());
+        return Ok(json!({"ok": true, "data": {"database": path, "schema_version": 8}}).to_string());
     }
 
     if command == "backupDatabase" || command == "backup_database" {
@@ -40,6 +40,9 @@ fn execute_inner(input: &str) -> CoreResult<String> {
         let conn = guard
             .as_mut()
             .ok_or_else(|| CoreError::new("DB_NOT_INITIALIZED", "initializeDatabase doit être appelé en premier."))?;
+        if !commands::check_permission(conn, &payload, "security.admin")? {
+            return Err(CoreError::new("PERMISSION_DENIED", "Sauvegarde réservée aux administrateurs."));
+        }
         let current = DB_PATH.get_or_init(|| Mutex::new(String::new())).lock()
             .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?.clone();
         let destination = field_str_opt(&payload, "destination_path").map(str::to_string)
@@ -63,6 +66,9 @@ fn execute_inner(input: &str) -> CoreResult<String> {
         {
             let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
             let conn = guard.as_mut().ok_or_else(|| CoreError::new("DB_NOT_INITIALIZED", "Base absente."))?;
+            if !commands::check_permission(conn, &payload, "security.admin")? {
+                return Err(CoreError::new("PERMISSION_DENIED", "Restauration réservée aux administrateurs."));
+            }
             conn.execute("VACUUM INTO ?1", params![safety])?;
             *guard = None;
         }

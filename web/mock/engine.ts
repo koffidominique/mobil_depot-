@@ -119,8 +119,18 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       };
       const user = users[String(payload.username ?? '')];
       if (!user || user[0] !== payload.pin) throw new Error('INVALID_CREDENTIALS:PIN incorrect');
-      return { token: `preview_${payload.username}_${Date.now()}`, user_id: `usr_${payload.username}`, tenant_id: 'tenant_ci_01', full_name: user[1], role: user[2], branch_id: payload.branch_id ?? 'branch_marcory_01', device_id: payload.device_id ?? 'dev_mobile_01', expires_at: Date.now() + 8 * 3600000 };
+      return { token: `preview_${payload.username}_${Date.now()}`, user_id: `usr_${payload.username}`, tenant_id: 'tenant_ci_01', full_name: user[1], role: user[2], branch_id: payload.branch_id ?? 'branch_marcory_01', device_id: payload.device_id ?? 'dev_mobile_01', expires_at: Date.now() + 8 * 3600000, pin_required: true, auto_lock_ms: 5 * 60 * 1000 };
     }
+    case 'getSecurityPolicy': return { tenant_id: 'tenant_ci_01', branch_id: 'branch_marcory_01', role: 'MANAGER', session_duration_ms: 28800000, auto_lock_ms: 300000, pin_required: true, max_failed_attempts: 5, lockout_ms: 900000, backup_encryption_required: true };
+    case 'checkPermission': return { permission: payload.permission, allowed: ['read', 'sales.write', 'cash.write', 'purchase.write', 'inventory.write', 'catalog.write'].includes(String(payload.permission)) };
+    case 'lockSession': return { status: 'LOCKED' };
+    case 'unlockSession': return { status: 'UNLOCKED' };
+    case 'renewSession': return { token: 'preview_renewed', user_id: 'usr_gerant', role: 'MANAGER', branch_id: 'branch_marcory_01', device_id: 'dev_mobile_01', expires_at: Date.now() + 28800000 };
+    case 'revokeSession': return { status: 'REVOKED', reason: payload.reason };
+    case 'setSecurityPolicy': return execute('getSecurityPolicy', payload);
+    case 'setRolePermission': return { role: payload.role, permission: payload.permission, allowed: payload.allowed, branch_id: payload.branch_id };
+    case 'revokeDevice': return { device_id: payload.device_id, status: 'REVOKED' };
+    case 'getAuditLog': return { entries: [{ id: 'aud_web_1', branch_id: 'branch_marcory_01', user_id: 'usr_gerant', device_id: 'dev_mobile_01', action: 'LOGIN', severity: 'INFO', category: 'AUTHENTICATION', occurred_at: now - 60000 }] };
     case 'getDashboard': return dashboard();
     case 'getInventory': return { full_drinks: variants, empty_bottles_qty: 48, empty_crates_qty: 18 };
     case 'getCustomers': return { customers: customers.map(({ total_purchases_fcfa: _total_purchases_fcfa, total_paid_fcfa: _total_paid_fcfa, ...rest }) => ({ ...rest, outstanding_fcfa: rest.financial_balance_fcfa, available_credit_fcfa: Math.max(0, rest.credit_limit_fcfa - rest.financial_balance_fcfa) })) };

@@ -4,6 +4,7 @@ import React from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Card, Screen, useColors } from '../components/ui';
 import type { RootStackParamList } from '../navigation/types';
+import { depot } from '../core/client';
 import { useAppStore } from '../store/useAppStore';
 
 type Destination = Exclude<keyof RootStackParamList, 'Login' | 'Main'>;
@@ -11,6 +12,7 @@ type Destination = Exclude<keyof RootStackParamList, 'Login' | 'Main'>;
 export function MenuScreen() {
   const c = useColors();
   const session = useAppStore((state) => state.session);
+  const setLocked = useAppStore((state) => state.setLocked);
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const entries: Array<{ label: string; detail: string; screen: Destination }> = [
@@ -23,6 +25,10 @@ export function MenuScreen() {
     { label: 'Bordereaux', detail: 'Relevés clients/fournisseurs et registre emballages', screen: 'Statement' },
     { label: 'Synchronisation & paramètres', detail: 'Appareils, conflits et serveur Axum', screen: 'Sync' },
   ];
+  const lock = () => {
+    if (session?.token) void depot.lockSession(session.token).catch(() => undefined);
+    setLocked(true);
+  };
 
   return (
     <Screen title="Menu" subtitle={`${session?.full_name ?? 'Utilisateur'} · ${session?.role ?? ''}`}>
@@ -35,6 +41,12 @@ export function MenuScreen() {
             </View>
           </Pressable>
         ))}
+        <Pressable onPress={lock}>
+          <View style={{ paddingVertical: 10 }}>
+            <Text style={{ color: c.danger, fontWeight: '700' }}>Verrouiller la session →</Text>
+            <Text style={{ color: c.subtitle, fontSize: 12 }}>Demande le code PIN à la reprise.</Text>
+          </View>
+        </Pressable>
       </Card>
     </Screen>
   );

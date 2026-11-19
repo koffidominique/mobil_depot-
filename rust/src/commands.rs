@@ -26,11 +26,151 @@ pub fn actor(conn: &Connection, payload: &Value) -> CoreResult<Actor> {
     Ok(Actor { user_id, tenant_id, branch_id, device_id, role })
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SecuritySettings {
+    session_duration_ms: i64,
+    auto_lock_ms: i64,
+    pin_required: bool,
+    max_failed_attempts: i64,
+    lockout_ms: i64,
+    backup_encryption_required: bool,
+}
+
+fn security_settings(conn: &Connection, tenant: &str, branch: &str) -> CoreResult<SecuritySettings> {
+    let read = |scope: &str| -> CoreResult<Option<SecuritySettings>> {
+        conn.query_row(
+            "SELECT session_duration_ms, auto_lock_ms, pin_required, max_failed_attempts,
+                    lockout_ms, backup_encryption_required
+             FROM security_settings WHERE tenant_id=?1 AND branch_id=?2",
+            params![tenant, scope],
+            |row| Ok(SecuritySettings {
+                session_duration_ms: row.get(0)?,
+                auto_lock_ms: row.get(1)?,
+                pin_required: row.get::<_, i64>(2)? == 1,
+                max_failed_attempts: row.get(3)?,
+                lockout_ms: row.get(4)?,
+                backup_encryption_required: row.get::<_, i64>(5)? == 1,
+            }),
+        )
+        .optional()
+        .map_err(CoreError::from)
+    };
+    if let Some(settings) = read(branch)? {
+        return Ok(settings);
+    }
+    if let Some(settings) = read("*")? {
+        return Ok(settings);
+    }
+    Ok(SecuritySettings {
+        session_duration_ms: 8 * 60 * 60 * 1000,
+        auto_lock_ms: 5 * 60 * 1000,
+        pin_required: true,
+        max_failed_attempts: 5,
+        lockout_ms: 15 * 60 * 1000,
+        backup_encryption_required: true,
+    })
+}
+
+/// Droits configurables par établissement puis point de vente, avec repli `*`.
+pub fn has_permission(
+    conn: &Connection,
+    tenant: &str,
+    branch: &str,
+    role: &str,
+    permission: &str,
+) -> CoreResult<bool> {
+    let allowed: Option<i64> = conn
+        .query_row(
+            "SELECT allowed FROM role_permissions
+             WHERE tenant_id=?1 AND role=?2 AND permission=?3 AND branch_id IN (?4,'*')
+             ORDER BY CASE WHEN branch_id=?4 THEN 1 ELSE 0 END DESC LIMIT 1",
+            params![tenant, role, permission, branch],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(allowed.unwrap_or(0) == 1)
+}
+
+pub fn check_permission(conn: &Connection, payload: &Value, permission: &str) -> CoreResult<bool> {
+    let a = actor(conn, payload)?;
+    has_permission(conn, &a.tenant_id, &a.branch_id, &a.role, permission)
+}
+
+fn assert_permission(conn: &Connection, a: &Actor, permission: &str) -> CoreResult<()> {
+    if has_permission(conn, &a.tenant_id, &a.branch_id, &a.role, permission)? {
+        Ok(())
+    } else {
+        let _ = db::audit_security(
+            conn, &a.branch_id, &a.user_id, Some(&a.device_id),
+            "PERMISSION_DENIED", permission, "WARN", "AUTHORIZATION",
+        );
+        Err(CoreError::new("PERMISSION_DENIED", "Droit insuffisant pour cette commande."))
+    }
+}
+
+/// Contrôle central : aucune commande sensible n'atteint le métier sans ce filtre.
+fn permission_for_command(command: &str) -> Option<&'static str> {
+    match command {
+        "authenticate" | "authenticateUser" | "initializeDatabase" | "initialize_database"
+        | "renewSession" | "revokeSession" | "lockSession" | "unlockSession" => None,
+        "getSecurityPolicy" | "checkPermission" | "getDashboard" | "get_dashboard" | "getInventory" | "get_inventory"
+        | "getCustomers" | "get_customers" | "getSuppliers" | "get_suppliers" | "getSales"
+        | "get_sales" | "getCustomerAccount" | "get_customer_account" | "getSupplierAccount"
+        | "get_supplier_account" | "getStockMovements" | "get_stock_movements"
+        | "getPurchaseVariance" | "get_purchase_variance" | "getPurchaseOrders"
+        | "get_purchase_orders" | "getSaleReceipt" | "get_sale_receipt" | "getCashSession"
+        | "get_cash_session" | "getReports" | "get_reports" | "getConflicts" | "get_conflicts"
+        | "getCrateTypes" | "get_crate_types" | "getPackagingStock" | "get_packaging_stock"
+        | "getPartnerStatement" | "get_partner_statement" | "getPackagingAccount"
+        | "get_packaging_account" | "getSyncHistory" | "get_sync_history"
+        | "getSynchronizationStatus" | "get_synchronization_status" | "getPendingOperations"
+        | "get_pending_operations" | "startSynchronization" | "start_synchronization"
+        | "backupDatabase" | "backup_database" | "getAuditLog" => Some("read"),
+        "createSale" | "create_sale" | "validateSale" | "validate_sale" | "createMixedOrder"
+        | "create_mixed_order" => Some("sales.write"),
+        "recordPayment" | "record_payment" | "recordCashMovement" | "record_cash_movement"
+        | "openCashSession" | "open_cash_session" | "closeCashSession" | "close_cash_session" => Some("cash.write"),
+        "createPurchaseOrder" | "create_purchase_order" | "receivePurchase" | "receive_purchase"
+        | "registerPackagingReturn" | "register_packaging_return"
+        | "correctPackagingMovement" | "correct_packaging_movement" => Some("purchase.write"),
+        "recordInventoryCount" | "record_inventory_count" => Some("inventory.write"),
+        "saveProductVariant" | "save_product_variant" | "updateVariantPrices"
+        | "update_variant_prices" | "archiveProductVariant" | "archive_product_variant"
+        | "createCrateType" | "create_crate_type" | "updateCrateType" | "update_crate_type"
+        | "configureDeviceQuota" | "configure_device_quota" => Some("catalog.write"),
+        "resolveConflict" | "resolve_conflict" => Some("conflict.resolve"),
+        "setSecurityPolicy" | "setRolePermission" | "revokeDevice" | "configureSyncServer"
+        | "configure_sync_server" => Some("security.admin"),
+        _ => Some("read"),
+    }
+}
+
 pub fn authenticate(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let username = field_str(payload, "username")?;
     let pin = field_str(payload, "pin")?;
     let branch_id = field_str(payload, "branch_id")?;
     let device_id = field_str(payload, "device_id").unwrap_or(db::DEVICE_ID);
+    let settings = security_settings(conn, db::TENANT_ID, branch_id)?;
+    let now = now_ms();
+
+    let locked: i64 = conn
+        .query_row(
+            "SELECT locked_until FROM login_attempts WHERE username=?1 AND device_id=?2",
+            params![username, device_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    if locked > now {
+        let _ = db::audit_security(
+            conn, branch_id, username, Some(device_id),
+            "LOGIN_THROTTLED", "Tentatives verrouillées", "WARN", "AUTHENTICATION",
+        );
+        return Err(CoreError::new(
+            "TOO_MANY_ATTEMPTS",
+            format!("Trop de tentatives. Réessayez dans {} ms.", locked - now),
+        ));
+    }
 
     let row: Option<(String, String, String, String, i64)> = conn
         .query_row(
@@ -44,25 +184,84 @@ pub fn authenticate(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     if active != 1 {
         return Err(CoreError::new("USER_DISABLED", "Utilisateur désactivé."));
     }
+
+    let branch_allowed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM user_branch_access WHERE user_id=?1 AND branch_id=?2",
+            params![user_id, branch_id],
+            |row| row.get(0),
+        )?;
+    let has_any_access: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM user_branch_access WHERE user_id=?1",
+            params![user_id],
+            |row| row.get(0),
+        )?;
+    if has_any_access > 0 && branch_allowed == 0 {
+        return Err(CoreError::new("BRANCH_FORBIDDEN", "Accès refusé pour ce point de vente."));
+    }
+
+    let device: Option<(i64, Option<i64>)> = conn
+        .query_row(
+            "SELECT is_authorized, revoked_at FROM devices WHERE id=?1",
+            params![device_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    match device {
+        Some((authorized, revoked_at)) if authorized == 1 && revoked_at.is_none() => {}
+        _ => return Err(CoreError::new("DEVICE_REVOKED", "Appareil révoqué pour ce dépôt.")),
+    }
+
     let stored: String = conn.query_row("SELECT pin_hash FROM users WHERE id = ?1", params![user_id], |r| r.get(0))?;
-    if stored != db::pin_hash(pin) {
+    let mut valid_pin = stored == db::pin_hash(pin);
+    if !settings.pin_required && stored == db::pin_hash("") {
+        valid_pin = true;
+    }
+    if !valid_pin {
+        let failures: i64 = conn
+            .query_row(
+                "SELECT failures FROM login_attempts WHERE username=?1 AND device_id=?2",
+                params![username, device_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0)
+            + 1;
+        let until = if failures >= settings.max_failed_attempts { now + settings.lockout_ms } else { 0 };
+        conn.execute(
+            "INSERT INTO login_attempts (username, device_id, failures, locked_until, updated_at)
+             VALUES (?1,?2,?3,?4,?5)
+             ON CONFLICT(username, device_id) DO UPDATE SET
+               failures=excluded.failures, locked_until=excluded.locked_until, updated_at=excluded.updated_at",
+            params![username, device_id, failures, until, now],
+        )?;
+        let _ = db::audit_security(
+            conn, branch_id, &user_id, Some(device_id),
+            "LOGIN_FAILED", "Code PIN incorrect", "WARN", "AUTHENTICATION",
+        );
         return Err(CoreError::new("INVALID_CREDENTIALS", "Identifiant ou code PIN incorrect."));
     }
-    let authorized: i64 = conn.query_row(
-        "SELECT is_authorized FROM devices WHERE id = ?1",
-        params![device_id],
-        |r| r.get(0),
-    )?;
-    if authorized != 1 {
-        return Err(CoreError::new("DEVICE_REVOKED", "Appareil révoqué pour ce dépôt."));
-    }
-    let token = new_id("tok");
-    let expires = now_ms() + 8 * 60 * 60 * 1000;
+
     conn.execute(
-        "INSERT INTO sessions (token, user_id, branch_id, device_id, expires_at, created_at) VALUES (?1,?2,?3,?4,?5,?6)",
-        params![token, user_id, branch_id, device_id, expires, now_ms()],
+        "DELETE FROM login_attempts WHERE username=?1 AND device_id=?2",
+        params![username, device_id],
     )?;
-    db::audit(conn, branch_id, &user_id, "LOGIN", "Connexion mobile par code PIN")?;
+    let token = new_id("tok");
+    let expires = now + settings.session_duration_ms;
+    conn.execute(
+        "INSERT INTO sessions (token, user_id, branch_id, device_id, expires_at, created_at, locked, last_activity_at)
+         VALUES (?1,?2,?3,?4,?5,?6,0,?6)",
+        params![token, user_id, branch_id, device_id, expires, now],
+    )?;
+    conn.execute(
+        "UPDATE devices SET last_seen_at=?1 WHERE id=?2",
+        params![now, device_id],
+    )?;
+    db::audit_security(
+        conn, branch_id, &user_id, Some(device_id),
+        "LOGIN", "Connexion mobile", "INFO", "AUTHENTICATION",
+    )?;
 
     Ok(json!({
         "token": token,
@@ -72,7 +271,9 @@ pub fn authenticate(conn: &Connection, payload: &Value) -> CoreResult<Value> {
         "role": role,
         "branch_id": branch_id,
         "device_id": device_id,
-        "expires_at": expires
+        "expires_at": expires,
+        "pin_required": settings.pin_required,
+        "auto_lock_ms": settings.auto_lock_ms
     }))
 }
 
@@ -2166,9 +2367,217 @@ pub fn get_partner_statement(conn: &Connection, payload: &Value) -> CoreResult<V
     }))
 }
 
+fn session_record(conn: &Connection, token: &str) -> CoreResult<(String, String, String, String, i64, i64)> {
+    conn.query_row(
+        "SELECT s.user_id, s.branch_id, s.device_id, u.role, s.expires_at, s.locked
+         FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?1",
+        params![token],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get::<_, i64>(5)?)),
+    )
+    .optional()?
+    .ok_or_else(|| CoreError::new("SESSION_INVALID", "Session introuvable."))
+}
+
+fn session_dto(token: &str, user: &str, role: &str, branch: &str, device: &str, expires: i64) -> Value {
+    json!({
+        "token": token, "user_id": user, "role": role, "branch_id": branch,
+        "device_id": device, "expires_at": expires
+    })
+}
+
+/// Renouvellement par rotation : l'ancien jeton est révoqué, jamais réutilisé.
+pub fn renew_session(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let token = field_str(payload, "token")?;
+    let (user, branch, device, role, expires, locked) = session_record(conn, token)?;
+    if locked == 1 || expires <= now_ms() {
+        return Err(CoreError::new("SESSION_INVALID", "Session expirée ou verrouillée."));
+    }
+    let revoked: i64 = conn.query_row("SELECT revoked FROM sessions WHERE token=?1", params![token], |r| r.get(0))?;
+    if revoked == 1 {
+        return Err(CoreError::new("SESSION_INVALID", "Session révoquée."));
+    }
+    let settings = security_settings(conn, db::TENANT_ID, &branch)?;
+    let next = new_id("tok");
+    let next_expiry = now_ms() + settings.session_duration_ms;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE sessions SET revoked=1, revoked_at=?2, revocation_reason='ROTATED' WHERE token=?1",
+        params![token, now_ms()],
+    )?;
+    tx.execute(
+        "INSERT INTO sessions (token, user_id, branch_id, device_id, expires_at, created_at, locked, last_activity_at)
+         VALUES (?1,?2,?3,?4,?5,?6,0,?6)",
+        params![next, user, branch, device, next_expiry, now_ms()],
+    )?;
+    db::audit_security(&tx, &branch, &user, Some(device), "SESSION_ROTATED", "Jeton renouvelé", "INFO", "AUTHENTICATION")?;
+    tx.commit()?;
+    Ok(session_dto(&next, &user, &role, &branch, &device, next_expiry))
+}
+
+pub fn revoke_session(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let token = field_str(payload, "token")?;
+    let reason = field_str_opt(payload, "reason").unwrap_or("LOST_DEVICE");
+    let (user, branch, device, _role, _expires, _locked) = session_record(conn, token)?;
+    conn.execute(
+        "UPDATE sessions SET revoked=1, revoked_at=?2, revocation_reason=?3 WHERE token=?1",
+        params![token, now_ms(), reason],
+    )?;
+    db::audit_security(conn, &branch, &user, Some(device), "SESSION_REVOKED", reason, "WARN", "AUTHENTICATION")?;
+    Ok(json!({ "status": "REVOKED", "reason": reason }))
+}
+
+pub fn lock_session(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let token = field_str(payload, "token")?;
+    let (user, branch, device, _role, _expires, _locked) = session_record(conn, token)?;
+    conn.execute("UPDATE sessions SET locked=1 WHERE token=?1", params![token])?;
+    db::audit_security(conn, &branch, &user, Some(device), "SESSION_LOCKED", "Verrouillage automatique ou manuel", "INFO", "AUTHENTICATION")?;
+    Ok(json!({ "status": "LOCKED" }))
+}
+
+pub fn unlock_session(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let token = field_str(payload, "token")?;
+    let pin = field_str(payload, "pin")?;
+    let (user, branch, device, _role, _expires, _locked) = session_record(conn, token)?;
+    let stored: String = conn.query_row("SELECT pin_hash FROM users WHERE id=?1", params![user], |r| r.get(0))?;
+    if stored != db::pin_hash(pin) {
+        db::audit_security(conn, &branch, &user, Some(device), "UNLOCK_FAILED", "PIN invalide", "WARN", "AUTHENTICATION")?;
+        return Err(CoreError::new("INVALID_PIN", "Code PIN incorrect."));
+    }
+    conn.execute("UPDATE sessions SET locked=0, last_activity_at=?2 WHERE token=?1", params![token, now_ms()])?;
+    db::audit_security(conn, &branch, &user, Some(device), "UNLOCKED", "Session déverrouillée", "INFO", "AUTHENTICATION")?;
+    Ok(json!({ "status": "UNLOCKED" }))
+}
+
+pub fn check_permission_command(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let permission = field_str(payload, "permission")?;
+    let allowed = check_permission(conn, payload, permission)?;
+    Ok(json!({ "permission": permission, "allowed": allowed }))
+}
+
+pub fn get_security_policy(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let settings = security_settings(conn, &a.tenant_id, &a.branch_id)?;
+    Ok(json!({
+        "tenant_id": a.tenant_id, "branch_id": a.branch_id, "role": a.role,
+        "session_duration_ms": settings.session_duration_ms,
+        "auto_lock_ms": settings.auto_lock_ms,
+        "pin_required": settings.pin_required,
+        "max_failed_attempts": settings.max_failed_attempts,
+        "lockout_ms": settings.lockout_ms,
+        "backup_encryption_required": settings.backup_encryption_required
+    }))
+}
+
+pub fn set_security_policy(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_permission(conn, &a, "security.admin")?;
+    let branch = field_str_opt(payload, "branch_id").unwrap_or(&a.branch_id);
+    let current = security_settings(conn, &a.tenant_id, branch)?;
+    let duration = field_i64_or(payload, "session_duration_ms", current.session_duration_ms);
+    let auto_lock = field_i64_or(payload, "auto_lock_ms", current.auto_lock_ms);
+    let max_failed = field_i64_or(payload, "max_failed_attempts", current.max_failed_attempts);
+    let lockout = field_i64_or(payload, "lockout_ms", current.lockout_ms);
+    if duration < 60_000 || auto_lock < 0 || max_failed < 1 || lockout < 0 {
+        return Err(CoreError::new("INVALID_SECURITY_POLICY", "Politique de sécurité invalide."));
+    }
+    let pin_required = field_bool(payload, "pin_required", current.pin_required);
+    let encrypted = field_bool(payload, "backup_encryption_required", current.backup_encryption_required);
+    conn.execute(
+        "INSERT INTO security_settings (tenant_id, branch_id, session_duration_ms, auto_lock_ms,
+            pin_required, max_failed_attempts, lockout_ms, backup_encryption_required, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+         ON CONFLICT(tenant_id, branch_id) DO UPDATE SET
+           session_duration_ms=excluded.session_duration_ms, auto_lock_ms=excluded.auto_lock_ms,
+           pin_required=excluded.pin_required, max_failed_attempts=excluded.max_failed_attempts,
+           lockout_ms=excluded.lockout_ms, backup_encryption_required=excluded.backup_encryption_required,
+           updated_at=excluded.updated_at",
+        params![a.tenant_id, branch, duration, auto_lock, i64::from(pin_required), max_failed,
+                lockout, i64::from(encrypted), now_ms()],
+    )?;
+    db::audit_security(conn, &a.branch_id, &a.user_id, Some(&a.device_id), "SECURITY_POLICY_UPDATED", branch, "WARN", "ADMIN")?;
+    get_security_policy(conn, payload)
+}
+
+pub fn set_role_permission(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_permission(conn, &a, "security.admin")?;
+    let branch = field_str(payload, "branch_id")?;
+    let role = field_str(payload, "role")?;
+    let permission = field_str(payload, "permission")?;
+    let allowed = payload
+        .get("allowed")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| CoreError::new("MISSING_FIELD", "Champ booléen requis : allowed"))?;
+    if branch != "*" && !matches!(role, "OWNER" | "ADMIN" | "MANAGER" | "CASHIER" | "WAREHOUSE" | "ACCOUNTANT" | "READ_ONLY") {
+        return Err(CoreError::new("INVALID_ROLE", "Rôle inconnu."));
+    }
+    conn.execute(
+        "INSERT INTO role_permissions (tenant_id, branch_id, role, permission, allowed, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(tenant_id, branch_id, role, permission) DO UPDATE SET
+           allowed=excluded.allowed, updated_at=excluded.updated_at",
+        params![a.tenant_id, branch, role, permission, i64::from(allowed), now_ms()],
+    )?;
+    db::audit_security(conn, &a.branch_id, &a.user_id, Some(&a.device_id), "ROLE_PERMISSION_UPDATED", &format!("{role}:{permission}={allowed}@{branch}"), "WARN", "ADMIN")?;
+    Ok(json!({ "role": role, "permission": permission, "allowed": allowed, "branch_id": branch }))
+}
+
+/// Révocation d'un téléphone perdu : appareil et toutes ses sessions sont invalidés.
+pub fn revoke_device(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_permission(conn, &a, "security.admin")?;
+    let device_id = field_str(payload, "device_id")?;
+    let reason = field_str_opt(payload, "reason").unwrap_or("LOST_DEVICE");
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE devices SET is_authorized=0, revoked_at=?2 WHERE id=?1",
+        params![device_id, now_ms()],
+    )?;
+    tx.execute(
+        "UPDATE sessions SET revoked=1, revoked_at=?2, revocation_reason=?3 WHERE device_id=?1 AND revoked=0",
+        params![device_id, now_ms(), reason],
+    )?;
+    db::audit_security(&tx, &a.branch_id, &a.user_id, Some(&a.device_id), "DEVICE_REVOKED", &format!("{device_id}:{reason}"), "WARN", "ADMIN")?;
+    tx.commit()?;
+    Ok(json!({ "device_id": device_id, "status": "REVOKED", "sessions_revoked": true }))
+}
+
+pub fn get_audit_log(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_permission(conn, &a, "read")?;
+    let since = field_i64_or(payload, "since_ms", 0);
+    let category = field_str_opt(payload, "category").unwrap_or("SECURITY");
+    let mut stmt = conn.prepare(
+        "SELECT id, branch_id, user_id, device_id, action, severity, category, occurred_at
+         FROM audit_logs WHERE branch_id=?1 AND occurred_at>=?2 AND category=?3
+         ORDER BY occurred_at DESC LIMIT 100",
+    )?;
+    let entries = stmt.query_map(params![a.branch_id, since, category], |row| Ok(json!({
+        "id": row.get::<_, String>(0)?, "branch_id": row.get::<_, String>(1)?,
+        "user_id": row.get::<_, String>(2)?, "device_id": row.get::<_, Option<String>>(3)?,
+        "action": row.get::<_, String>(4)?, "severity": row.get::<_, String>(5)?,
+        "category": row.get::<_, String>(6)?, "occurred_at": row.get::<_, i64>(7)?
+    })))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({ "entries": entries }))
+}
+
 pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreResult<Value> {
+    if let Some(permission) = permission_for_command(command) {
+        let a = actor(conn, payload)?;
+        assert_permission(conn, &a, permission)?;
+    }
     match command {
         "authenticate" | "authenticateUser" => authenticate(conn, payload),
+        "renewSession" | "renew_session" => renew_session(conn, payload),
+        "revokeSession" | "revoke_session" => revoke_session(conn, payload),
+        "lockSession" | "lock_session" => lock_session(conn, payload),
+        "unlockSession" | "unlock_session" => unlock_session(conn, payload),
+        "checkPermission" | "check_permission" => check_permission_command(conn, payload),
+        "getSecurityPolicy" | "get_security_policy" => get_security_policy(conn, payload),
+        "setSecurityPolicy" | "set_security_policy" => set_security_policy(conn, payload),
+        "setRolePermission" | "set_role_permission" => set_role_permission(conn, payload),
+        "revokeDevice" | "revoke_device" => revoke_device(conn, payload),
+        "getAuditLog" | "get_audit_log" => get_audit_log(conn, payload),
         "getDashboard" | "get_dashboard" => get_dashboard(conn, payload),
         "validateSale" | "validate_sale" => validate_sale(conn, payload),
         "createSale" | "create_sale" => create_sale(conn, payload),

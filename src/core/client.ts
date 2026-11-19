@@ -1,5 +1,6 @@
 import type { ZodType } from 'zod';
 import NativeDepotCore from '../specs/NativeDepotCore';
+import { assertHttpsUrl } from './security';
 import { loginSchema, saleSchema } from './schemas';
 import type {
   AuthSession,
@@ -101,6 +102,47 @@ async function call<T>(command: string, payload: object = {}): Promise<T> {
 export const depot = {
   initializeDatabase: (path: string) =>
     call<{ database: string; schema_version: number }>('initializeDatabase', { path }),
+
+  renewSession: (token: string) =>
+    call<AuthSession & { token: string }>('renewSession', { token }),
+
+  revokeSession: (token: string, reason: 'LOST_DEVICE' | 'LOGOUT' | 'OTHER') =>
+    call<{ status: string; reason: string }>('revokeSession', { token, reason }),
+
+  lockSession: (token: string) => call<{ status: string }>('lockSession', { token }),
+
+  unlockSession: (token: string, pin: string) =>
+    call<{ status: string }>('unlockSession', { token, pin }),
+
+  getSecurityPolicy: () => call<{
+    tenant_id: string; branch_id: string; role: string; session_duration_ms: number;
+    auto_lock_ms: number; pin_required: boolean; max_failed_attempts: number;
+    lockout_ms: number; backup_encryption_required: boolean;
+  }>('getSecurityPolicy'),
+
+  checkPermission: (permission: string) =>
+    call<{ permission: string; allowed: boolean }>('checkPermission', { permission }),
+
+  getAuditLog: (sinceMs = 0, category = 'SECURITY') =>
+    call<{ entries: Array<{
+      id: string; branch_id: string; user_id: string; device_id: string | null;
+      action: string; severity: string; category: string; occurred_at: number;
+    }> }>('getAuditLog', { since_ms: sinceMs, category }),
+
+  setSecurityPolicy: (input: {
+    branch_id?: string; session_duration_ms?: number; auto_lock_ms?: number;
+    pin_required?: boolean; max_failed_attempts?: number; lockout_ms?: number;
+    backup_encryption_required?: boolean;
+  }) => call<{ session_duration_ms: number; auto_lock_ms: number; pin_required: boolean }>(
+    'setSecurityPolicy', input,
+  ),
+
+  setRolePermission: (input: {
+    branch_id: string; role: string; permission: string; allowed: boolean;
+  }) => call<{ role: string; permission: string; allowed: boolean }>('setRolePermission', input),
+
+  revokeDevice: (deviceId: string, reason: string) =>
+    call<{ device_id: string; status: string }>('revokeDevice', { device_id: deviceId, reason }),
 
   authenticate: async (username: string, pin: string, branchId: string, deviceId: string) => {
     const valid = await validateInterface(loginSchema, { username, pin, branchId }, 'Connexion');
@@ -276,8 +318,10 @@ export const depot = {
     }>;
     audit: Array<{ action: string; details: string; occurred_at: number }>;
   }>('getSyncHistory'),
-  configureSyncServer: (serverUrl: string) =>
-    call<{ server_url: string; https_only: boolean }>('configureSyncServer', { server_url: serverUrl }),
+  configureSyncServer: async (serverUrl: string) =>
+    call<{ server_url: string; https_only: boolean }>('configureSyncServer', {
+      server_url: assertHttpsUrl(serverUrl),
+    }),
   applySyncAcknowledgements: (results: SyncAcknowledgement[], serverSequence: number) =>
     call<{ applied: number }>('applySyncAcknowledgements', {
       results,

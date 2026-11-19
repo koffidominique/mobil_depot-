@@ -1,5 +1,6 @@
 export type RootStackParamList = {
   Login: undefined;
+  Unlock: undefined;
   Main: undefined;
   Sync: undefined;
   Purchases: undefined;

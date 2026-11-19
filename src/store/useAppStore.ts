@@ -5,6 +5,7 @@ export type ThemeMode = 'light' | 'dark';
 
 interface AppState {
   session: AuthSession | null;
+  locked: boolean;
   themeMode: ThemeMode;
   cartLines: CartLineInput[];
   mixedCases: MixedCaseInput[];
@@ -13,6 +14,7 @@ interface AppState {
   favoriteVariantIds: string[];
   lastMessage: string | null;
   setSession: (session: AuthSession | null) => void;
+  setLocked: (locked: boolean) => void;
   setThemeMode: (mode: ThemeMode) => void;
   setCustomer: (id: string | null) => void;
   addLine: (line: CartLineInput) => void;
@@ -26,6 +28,7 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set) => ({
   session: null,
+  locked: false,
   themeMode: 'light',
   cartLines: [],
   mixedCases: [],
@@ -34,7 +37,8 @@ export const useAppStore = create<AppState>((set) => ({
   favoriteVariantIds: [],
   lastMessage: null,
 
-  setSession: (session) => set({ session }),
+  setSession: (session) => set({ session, locked: false }),
+  setLocked: (locked) => set({ locked }),
   setThemeMode: (themeMode) => set({ themeMode }),
   setCustomer: (selectedCustomerId) => set({ selectedCustomerId }),
   addLine: (line) =>

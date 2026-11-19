@@ -8,6 +8,7 @@ import NetInfo from '@react-native-community/netinfo';
 import RNFS from 'react-native-fs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { depot } from './core/client';
+import { DEFAULT_AUTO_LOCK_MS, shouldAutoLock } from './core/security';
 import { useSyncStatus, useSynchronization } from './hooks/useCore';
 import { restoreSession } from './core/session';
 import { useAppStore } from './store/useAppStore';
@@ -20,6 +21,7 @@ import { StockScreen } from './screens/StockScreen';
 import { CustomersScreen } from './screens/CustomersScreen';
 import { MenuScreen } from './screens/MenuScreen';
 import { LoginScreen } from './screens/LoginScreen';
+import { UnlockScreen } from './screens/UnlockScreen';
 import { SyncScreen } from './screens/SyncScreen';
 import { PurchasesScreen } from './screens/PurchasesScreen';
 import { SuppliersScreen } from './screens/SuppliersScreen';
@@ -95,12 +97,44 @@ function AutoSync() {
   return null;
 }
 
+/** Verrouille la session après un passage en arrière-plan trop long. */
+function AutoLock() {
+  const session = useAppStore((state) => state.session);
+  const setLocked = useAppStore((state) => state.setLocked);
+  const backgroundAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    let autoLockMs = DEFAULT_AUTO_LOCK_MS;
+    void depot.getSecurityPolicy().then((policy) => {
+      autoLockMs = policy.auto_lock_ms || DEFAULT_AUTO_LOCK_MS;
+    }).catch(() => undefined);
+    const onForeground = (next: AppStateStatus) => {
+      if (next === 'background' || next === 'inactive') {
+        backgroundAt.current = Date.now();
+        return;
+      }
+      if (next === 'active' && backgroundAt.current != null) {
+        if (shouldAutoLock(backgroundAt.current, autoLockMs)) {
+          if (session?.token) void depot.lockSession(session.token).catch(() => undefined);
+          setLocked(true);
+        }
+        backgroundAt.current = null;
+      }
+    };
+    const subscription = AppState.addEventListener('change', onForeground);
+    return () => subscription.remove();
+  }, [session?.token, setLocked]);
+
+  return null;
+}
+
 function Bootstrap() {
   const [ready, setReady] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
   const session = useAppStore((state) => state.session);
   const setSession = useAppStore((state) => state.setSession);
   const themeMode = useAppStore((state) => state.themeMode);
+  const locked = useAppStore((state) => state.locked);
 
   useEffect(() => {
     let mounted = true;
@@ -142,9 +176,11 @@ function Bootstrap() {
 
   return (
     <NavigationContainer theme={themeMode === 'dark' ? DarkTheme : DefaultTheme}>
-      {session ? <AutoSync /> : null}
+      {session ? <><AutoSync /><AutoLock /></> : null}
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {session ? (
+        {locked ? (
+          <Stack.Screen name="Unlock" component={UnlockScreen} />
+        ) : session ? (
           <>
             <Stack.Screen name="Main" component={MainTabs} />
             <Stack.Screen

@@ -1,5 +1,6 @@
 import * as Keychain from 'react-native-keychain';
 import { setAuthToken } from './client';
+import { isSessionExpired } from './security';
 import type { AuthSession } from './types';
 
 const SERVICE = 'com.depotpro.mobile.session';
@@ -17,7 +18,7 @@ export async function restoreSession(): Promise<AuthSession | null> {
   if (!stored) return null;
   try {
     const session = JSON.parse(stored.password) as AuthSession;
-    if (!session.token || session.expires_at <= Date.now()) {
+    if (!session.token || isSessionExpired(session.expires_at)) {
       await clearSession();
       return null;
     }

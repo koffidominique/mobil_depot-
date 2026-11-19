@@ -429,6 +429,109 @@ pub const MIGRATION_7: &str = r#"
           END;
         "#;
 
+/// Migration 8 — sécurité : rôles complets, droits configurables par établissement,
+/// politique de session, verrouillage, tentative de connexion et audit étendu.
+pub const MIGRATION_8: &str = r#"
+        INSERT OR IGNORE INTO roles (id, name, level) VALUES
+          ('role_warehouse','WAREHOUSE',10), ('role_accountant','ACCOUNTANT',7);
+        CREATE TABLE IF NOT EXISTS role_permissions (
+          tenant_id TEXT NOT NULL, branch_id TEXT NOT NULL, role TEXT NOT NULL,
+          permission TEXT NOT NULL, allowed INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (tenant_id, branch_id, role, permission)
+        );
+        CREATE TABLE IF NOT EXISTS security_settings (
+          tenant_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+          session_duration_ms INTEGER NOT NULL DEFAULT 28800000,
+          auto_lock_ms INTEGER NOT NULL DEFAULT 300000,
+          pin_required INTEGER NOT NULL DEFAULT 1,
+          max_failed_attempts INTEGER NOT NULL DEFAULT 5,
+          lockout_ms INTEGER NOT NULL DEFAULT 900000,
+          backup_encryption_required INTEGER NOT NULL DEFAULT 1,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (tenant_id, branch_id)
+        );
+        CREATE TABLE IF NOT EXISTS login_attempts (
+          username TEXT NOT NULL, device_id TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0,
+          locked_until INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
+          PRIMARY KEY (username, device_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_role_permissions_lookup
+          ON role_permissions(tenant_id, branch_id, role, permission);
+        CREATE INDEX IF NOT EXISTS idx_login_attempts_key ON login_attempts(username, device_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_device ON sessions(device_id, revoked);
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_occurred ON audit_logs(occurred_at DESC);
+
+        WITH p(code) AS (VALUES
+          ('read'),('sales.write'),('purchase.write'),('inventory.write'),
+          ('cash.write'),('catalog.write'),('conflict.resolve'),
+          ('device.revoke'),('reports.read'),('security.admin'))
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        SELECT 'tenant_ci_01', '*', 'OWNER', code, 1, 0 FROM p;
+        WITH p(code) AS (VALUES
+          ('read'),('sales.write'),('purchase.write'),('inventory.write'),
+          ('cash.write'),('catalog.write'),('conflict.resolve'),
+          ('device.revoke'),('reports.read'),('security.admin'))
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        SELECT 'tenant_ci_01', '*', 'ADMIN', code, 1, 0 FROM p;
+        WITH p(code) AS (VALUES
+          ('read'),('sales.write'),('purchase.write'),('inventory.write'),
+          ('cash.write'),('catalog.write'),('conflict.resolve'),('reports.read'))
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        SELECT 'tenant_ci_01', '*', 'MANAGER', code, 1, 0 FROM p;
+        WITH p(code) AS (VALUES ('read'),('sales.write'),('cash.write'),('reports.read'))
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        SELECT 'tenant_ci_01', '*', 'CASHIER', code, 1, 0 FROM p;
+        WITH p(code) AS (VALUES ('read'),('purchase.write'),('inventory.write'),('reports.read'))
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        SELECT 'tenant_ci_01', '*', 'WAREHOUSE', code, 1, 0 FROM p;
+        WITH p(code) AS (VALUES ('read'),('reports.read'))
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        SELECT 'tenant_ci_01', '*', 'ACCOUNTANT', code, 1, 0 FROM p;
+        WITH p(code) AS (VALUES ('read'))
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        SELECT 'tenant_ci_01', '*', 'READ_ONLY', code, 1, 0 FROM p;
+
+        INSERT OR IGNORE INTO security_settings
+          (tenant_id, branch_id, session_duration_ms, auto_lock_ms, pin_required,
+           max_failed_attempts, lockout_ms, backup_encryption_required, updated_at)
+        VALUES ('tenant_ci_01', '*', 28800000, 300000, 1, 5, 900000, 1, 0);
+        "#;
+
+/// Ajout de colonne idempotent (SQLite n'a pas `ADD COLUMN IF NOT EXISTS`).
+fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> CoreResult<()> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let names = rows.collect::<Result<Vec<_>, _>>()?;
+    let exists = names.iter().any(|name| name == column);
+    drop(stmt);
+    if !exists {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {definition}"), [])?;
+    }
+    Ok(())
+}
+
+/// Colonnes de sécurité, appliquées après chaque migration pour rester réversibles.
+pub fn ensure_security_columns(conn: &Connection) -> CoreResult<()> {
+    ensure_column(conn, "sessions", "locked", "locked INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "sessions", "last_activity_at", "last_activity_at INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "sessions", "revoked_at", "revoked_at INTEGER")?;
+    ensure_column(conn, "sessions", "revocation_reason", "revocation_reason TEXT")?;
+    ensure_column(conn, "devices", "revoked_at", "revoked_at INTEGER")?;
+    ensure_column(conn, "devices", "last_seen_at", "last_seen_at INTEGER")?;
+    ensure_column(conn, "audit_logs", "device_id", "device_id TEXT")?;
+    ensure_column(conn, "audit_logs", "severity", "severity TEXT NOT NULL DEFAULT 'INFO'")?;
+    ensure_column(conn, "audit_logs", "category", "category TEXT NOT NULL DEFAULT 'SECURITY'")
+}
+
 /// Applique les migrations ordonnées et enregistre leur version dans la base locale.
 pub fn migrate(conn: &Connection) -> CoreResult<()> {
     conn.execute_batch(
@@ -438,9 +541,9 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 7] = [
+    let migrations: [(i64, &str); 8] = [
         (1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4),
-        (5, MIGRATION_5), (6, MIGRATION_6), (7, MIGRATION_7),
+        (5, MIGRATION_5), (6, MIGRATION_6), (7, MIGRATION_7), (8, MIGRATION_8),
     ];
     for (version, sql) in migrations {
         if version <= current {
@@ -454,6 +557,7 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
         )?;
         tx.commit()?;
     }
+    ensure_security_columns(conn)?;
     Ok(())
 }
 
@@ -590,12 +694,36 @@ pub fn seed(conn: &mut Connection) -> CoreResult<()> {
 
 pub fn session_user(conn: &Connection, token: &str) -> CoreResult<(String, String, String, String)> {
     conn.query_row(
-        "SELECT s.user_id, s.branch_id, s.device_id, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1 AND s.revoked = 0 AND s.expires_at > ?2",
+        "SELECT s.user_id, s.branch_id, s.device_id, u.role FROM sessions s
+         JOIN users u ON u.id = s.user_id
+         JOIN devices d ON d.id = s.device_id
+         WHERE s.token = ?1 AND s.revoked = 0 AND s.locked = 0
+           AND s.expires_at > ?2 AND d.is_authorized = 1
+           AND (d.revoked_at IS NULL OR d.revoked_at > ?2)",
         params![token, now_ms()],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )
     .optional()?
-    .ok_or_else(|| CoreError::new("UNAUTHORIZED", "Session expirée ou révoquée."))
+    .ok_or_else(|| CoreError::new("UNAUTHORIZED", "Session expirée, révoquée ou verrouillée."))
+}
+
+/// Journal d'activité de sécurité. Aucun secret n'est jamais passé dans `details`.
+pub fn audit_security(
+    conn: &Connection,
+    branch: &str,
+    user: &str,
+    device: Option<&str>,
+    action: &str,
+    details: &str,
+    severity: &str,
+    category: &str,
+) -> CoreResult<()> {
+    conn.execute(
+        "INSERT INTO audit_logs (id, branch_id, user_id, device_id, action, details, severity, category, occurred_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![new_id("aud"), branch, user, device, action, details, severity, category, now_ms()],
+    )?;
+    Ok(())
 }
 
 pub fn audit(conn: &Connection, branch: &str, user: &str, action: &str, details: &str) -> CoreResult<()> {

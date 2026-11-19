@@ -1,5 +1,6 @@
 /** Appels d'administration de l'adaptateur Axum. Aucune règle métier ici. */
 import { parseDeviceList } from './apiContracts';
+import { assertHttpsUrl } from './security';
 import { getAuthToken } from './client';
 
 export interface DeviceInfo {
@@ -10,11 +11,7 @@ export interface DeviceInfo {
 }
 
 function requireHttps(baseUrl: string): string {
-  const base = baseUrl.replace(/\/$/, '');
-  if (!base.startsWith('https://')) {
-    throw new Error('La gestion des appareils exige une URL HTTPS.');
-  }
-  return base;
+  return assertHttpsUrl(baseUrl);
 }
 
 function headers(): Record<string, string> {
