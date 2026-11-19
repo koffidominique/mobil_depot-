@@ -20,6 +20,10 @@ const EMPTY_VARIANT: VariantSaveInput = {
   retail_bottle_fcfa: 0,
   bottle_profile_id: null,
   crate_type_id: null,
+  category: '',
+  description: '',
+  photo_path: '',
+  is_returnable: false,
 };
 
 export function CatalogScreen() {

@@ -27,6 +27,7 @@ import type {
   SalesReport,
   SupplierAccount,
   SyncConflict,
+  PackagingAccount,
   PackagingStock,
   PartnerStatement,
   VariantSaveInput,
@@ -150,11 +151,12 @@ export const depot = {
   registerPackagingReturn: (input: {
     partner_type: 'CUSTOMER' | 'SUPPLIER';
     partner_id: string;
-    item_kind: 'BOTTLE' | 'CRATE';
+    item_kind: 'BOTTLE_PROFILE' | 'CRATE';
     ref_id: string;
     qty: number;
     reason: string;
-  }) => call<{ status: string; qty: number }>('registerPackagingReturn', input),
+    document_id?: string;
+  }) => call<{ status: string; qty: number; document_id: string }>('registerPackagingReturn', input),
 
   createPurchaseOrder: (input: {
     supplier_id: string;
@@ -193,6 +195,16 @@ export const depot = {
       partner_id: partnerId,
     }),
   getCrateTypes: () => call<{ crate_types: CrateTypeInfo[] }>('getCrateTypes'),
+  updateCrateType: (input: { crate_type_id: string } & Partial<import('./types').CrateTypeInput>) =>
+    call<{ crate_type_id: string; capacity: number }>('updateCrateType', input),
+  getPackagingAccount: (partnerType: 'CUSTOMER' | 'SUPPLIER', partnerId: string) =>
+    call<PackagingAccount>('getPackagingAccount', {
+      partner_type: partnerType, partner_id: partnerId,
+    }),
+  correctPackagingMovement: (movementId: string, reason: string) =>
+    call<{ correction_id: string; reversal_of: string; original_kept: boolean }>(
+      'correctPackagingMovement', { movement_id: movementId, reason },
+    ),
   getPurchaseOrders: () => call<{ orders: PurchaseOrderRecord[] }>('getPurchaseOrders'),
   getSaleReceipt: (saleId: string) =>
     call<SaleReceipt>('getSaleReceipt', { sale_id: saleId }),

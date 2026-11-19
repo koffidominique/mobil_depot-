@@ -187,6 +187,33 @@ pub const MIGRATION_3: &str = r#"
         ALTER TABLE sync_conflicts ADD COLUMN resolved_at INTEGER;
         "#;
 
+/// Migration 4 : modèle métier complet du dépôt de boissons (PARTIE 5).
+/// Ajouts uniquement : aucune colonne ni donnée existante n'est modifiée.
+pub const MIGRATION_4: &str = r#"
+        ALTER TABLE product_variants ADD COLUMN category TEXT;
+        ALTER TABLE product_variants ADD COLUMN description TEXT;
+        ALTER TABLE product_variants ADD COLUMN photo_path TEXT;
+        ALTER TABLE product_variants ADD COLUMN is_returnable INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE crate_types ADD COLUMN name TEXT;
+        ALTER TABLE crate_types ADD COLUMN compartments INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE crate_types ADD COLUMN dimensions TEXT;
+        ALTER TABLE crate_types ADD COLUMN deposit_value_fcfa INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE crate_types ADD COLUMN physical_profile_id TEXT;
+        ALTER TABLE partner_packaging_ledger ADD COLUMN user_id TEXT;
+        ALTER TABLE partner_packaging_ledger ADD COLUMN device_id TEXT;
+        ALTER TABLE partner_packaging_ledger ADD COLUMN reversal_of TEXT;
+        CREATE TABLE IF NOT EXISTS packaging_expectations (
+          id TEXT PRIMARY KEY, branch_id TEXT NOT NULL, partner_type TEXT NOT NULL,
+          partner_id TEXT NOT NULL, document_id TEXT NOT NULL, item_kind TEXT NOT NULL,
+          ref_id TEXT NOT NULL, expected_qty INTEGER NOT NULL, received_qty INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'EXPECTED', created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_packaging_expectations_doc
+          ON packaging_expectations(branch_id, document_id);
+        CREATE INDEX IF NOT EXISTS idx_packaging_expectations_partner
+          ON packaging_expectations(branch_id, partner_type, partner_id);
+        "#;
+
 /// Applique les migrations ordonnées et enregistre leur version dans la base locale.
 pub fn migrate(conn: &Connection) -> CoreResult<()> {
     conn.execute_batch(
@@ -196,7 +223,7 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 3] = [(1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3)];
+    let migrations: [(i64, &str); 4] = [(1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4)];
     for (version, sql) in migrations {
         if version <= current {
             continue;

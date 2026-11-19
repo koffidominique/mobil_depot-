@@ -501,6 +501,38 @@ mod tests {
     }
 
     #[test]
+    fn mixed_case_accepts_four_plus_four_plus_four() {
+        let line = |id: &str, group: &str| json!({
+            "variant_id": id, "variant_name": id, "quantity_bottles": 4,
+            "unit_price_fcfa": 600, "compatibility_group_id": group,
+            "bottle_profile_id": id, "is_reusable": true
+        });
+        let payload = json!({
+            "crate_type_id": "crate_b24_33", "is_half_case": false,
+            "lines": [line("a", "G_B24_33"), line("b", "G_B24_33"), line("c", "G_B24_33")]
+        });
+        let result = validate_mixed_case(&payload).expect("4+4+4 valide");
+        assert_eq!(result["slot_capacity"], json!(24));
+        assert_eq!(result["expected_crates_count"], json!(1));
+    }
+
+    #[test]
+    fn half_case_uses_real_capacity_and_integer_bottles() {
+        let payload = json!({
+            "crate_type_id": "crate_b24_33", "is_half_case": true,
+            "lines": [{
+                "variant_id": "a", "variant_name": "A", "quantity_bottles": 12,
+                "unit_price_fcfa": 600, "compatibility_group_id": "G_B24_33",
+                "bottle_profile_id": "a", "is_reusable": true
+            }]
+        });
+        assert_eq!(validate_mixed_case(&payload).unwrap()["slot_capacity"], json!(12));
+        let mut fractional = payload.clone();
+        fractional["lines"][0]["quantity_bottles"] = json!(11.5);
+        assert_eq!(validate_mixed_case(&fractional).unwrap_err().code, "INVALID_BOTTLE_QTY");
+    }
+
+    #[test]
     fn sync_backoff_is_bounded() {
         assert!(backoff_ms(50, 0) == backoff_ms(10, 0));
         assert!(backoff_ms(1, 0) < backoff_ms(2, 0));

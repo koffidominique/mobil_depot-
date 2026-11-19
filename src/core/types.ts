@@ -229,6 +229,12 @@ export interface CrateTypeInfo {
   allow_half_case: boolean;
   replacement_value_fcfa: number;
   empty_crates_qty: number;
+  name: string;
+  compartments: number;
+  dimensions: string | null;
+  deposit_value_fcfa: number;
+  physical_profile_id: string | null;
+  is_reusable: boolean;
 }
 
 export interface PurchaseOrderRecord {
@@ -361,6 +367,10 @@ export interface VariantSaveInput {
   retail_bottle_fcfa: number;
   bottle_profile_id: string | null;
   crate_type_id: string | null;
+  category?: string;
+  description?: string;
+  photo_path?: string;
+  is_returnable?: boolean;
 }
 
 export interface CrateTypeInput {
@@ -369,4 +379,39 @@ export interface CrateTypeInput {
   compatibility_group_id: string;
   allow_half_case: boolean;
   replacement_value_fcfa: number;
+  name?: string;
+  compartments?: number;
+  dimensions?: string;
+  deposit_value_fcfa?: number;
+  physical_profile_id?: string;
+  is_reusable?: boolean;
+}
+
+export interface PackagingAccount {
+  partner_type: 'CUSTOMER' | 'SUPPLIER';
+  partner_id: string;
+  balances: Array<{
+    item_kind: string;
+    ref_id: string;
+    expected_qty: number;
+    received_qty: number;
+    outstanding_qty: number;
+    status: 'EXPECTED' | 'PARTIAL' | 'RETURNED';
+  }>;
+  movements: Array<{
+    movement_id: string;
+    item_kind: string;
+    ref_id: string;
+    direction: string;
+    qty: number;
+    document_id: string;
+    reason: string;
+    occurred_at: number;
+    user_id: string;
+    device_id: string;
+    reversal_of: string;
+  }>;
+  financial_value_fcfa: number;
+  has_billing_rule: boolean;
+  is_immutable_ledger: boolean;
 }

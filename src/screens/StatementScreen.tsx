@@ -4,7 +4,7 @@ import { Pressable, Text, View } from 'react-native';
 import { Banner, Card, Row, Screen, useColors } from '../components/ui';
 import { depot } from '../core/client';
 import { formatFcfa, formatTimestamp } from '../core/format';
-import type { PartnerStatement } from '../core/types';
+import type { PackagingAccount, PartnerStatement } from '../core/types';
 import { useCustomers, useSuppliers } from '../hooks/useCore';
 
 export function StatementScreen() {
@@ -18,6 +18,12 @@ export function StatementScreen() {
     queryKey: ['partner-statement', partnerType, partnerId],
     enabled: Boolean(partnerId),
     queryFn: () => depot.getPartnerStatement(partnerType, partnerId),
+  });
+
+  const packaging = useQuery<PackagingAccount, Error>({
+    queryKey: ['packaging-account', partnerType, partnerId],
+    enabled: Boolean(partnerId),
+    queryFn: () => depot.getPackagingAccount(partnerType, partnerId),
   });
 
   const list = partnerType === 'CUSTOMER'
@@ -60,6 +66,20 @@ export function StatementScreen() {
                 value={formatFcfa(payment.amount_fcfa)}
               />
             ))}
+          </Card>
+          <Card>
+            <Text style={{ color: c.text, fontWeight: '800' }}>Compte emballages</Text>
+            {(packaging.data?.balances ?? []).map((balance) => (
+              <Row
+                key={`${balance.item_kind}-${balance.ref_id}`}
+                label={`${balance.item_kind} · ${balance.ref_id} · ${balance.status}`}
+                value={`${balance.received_qty}/${balance.expected_qty} · reste ${balance.outstanding_qty}`}
+              />
+            ))}
+            <Text style={{ color: c.subtitle, fontSize: 11 }}>
+              Registre immuable : aucune valeur financière n'est ajoutée automatiquement
+              ({formatFcfa(packaging.data?.financial_value_fcfa ?? 0)}).
+            </Text>
           </Card>
           <Card>
             <Text style={{ color: c.text, fontWeight: '800' }}>Registre emballages</Text>

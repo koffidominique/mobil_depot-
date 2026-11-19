@@ -15,7 +15,7 @@ export function CustomersScreen() {
   const [amount, setAmount] = useState('1000');
   const [returnRef, setReturnRef] = useState('bp_beaufort_50');
   const [returnQty, setReturnQty] = useState('1');
-  const [returnKind, setReturnKind] = useState<'BOTTLE' | 'CRATE'>('BOTTLE');
+  const [returnKind, setReturnKind] = useState<'BOTTLE_PROFILE' | 'CRATE'>('BOTTLE_PROFILE');
   const [error, setError] = useState<string | null>(null);
 
   const account = useQuery<CustomerAccount, Error>({
@@ -81,7 +81,7 @@ export function CustomersScreen() {
           <View style={{ marginTop: 8, gap: 8 }}>
             <Field label="Règlement espèces (FCFA)" value={amount} keyboardType="numeric" onChangeText={setAmount} />
             <PrimaryButton label="Enregistrer le paiement" loading={pay.isPending} onPress={() => pay.mutate()} />
-            <Field label="Type d'emballage" value={returnKind} onChangeText={(v) => setReturnKind(v === 'CRATE' ? 'CRATE' : 'BOTTLE')} />
+            <Field label="Type d'emballage" value={returnKind} onChangeText={(v) => setReturnKind(v === 'CRATE' ? 'CRATE' : 'BOTTLE_PROFILE')} />
             <Field label="Référence exacte" value={returnRef} onChangeText={setReturnRef} />
             <Field label="Quantité retournée" value={returnQty} keyboardType="numeric" onChangeText={setReturnQty} />
             <PrimaryButton
