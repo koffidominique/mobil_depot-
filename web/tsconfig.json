@@ -1,0 +1,67 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": [
+      "vite/client"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "react-native": [
+        "shims/react-native.ts"
+      ],
+      "react-native-gesture-handler": [
+        "shims/empty.ts"
+      ],
+      "react-native-safe-area-context": [
+        "shims/safe-area.tsx"
+      ],
+      "@react-native-community/netinfo": [
+        "shims/netinfo.ts"
+      ],
+      "react-native-fs": [
+        "shims/fs.ts"
+      ],
+      "react-native-keychain": [
+        "shims/keychain.ts"
+      ],
+      "@react-navigation/native": [
+        "shims/navigation.tsx"
+      ],
+      "@react-navigation/bottom-tabs": [
+        "shims/navigation.tsx"
+      ],
+      "@react-navigation/native-stack": [
+        "shims/navigation.tsx"
+      ],
+      "*/NativeDepotCore": [
+        "mock/NativeDepotCore.ts"
+      ],
+      "*/NativeReceiptPrinter": [
+        "mock/NativeReceiptPrinter.ts"
+      ]
+    },
+    "ignoreDeprecations": "6.0",
+    "noImplicitAny": false
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "../vite.config.ts"
+  ],
+  "exclude": [
+    "../node_modules"
+  ]
+}
