@@ -88,3 +88,10 @@ Voir `server/README.md`. Le parent reste le seul serveur métier : ce crate est 
 `sync_sequence`, `sync_idempotency`, `sync_events`, `sync_devices`, `sync_conflicts`, `sync_audit`.
 
 L'idempotence et l'incrémentation du curseur sont **atomiques** avec l'exécution de l'opération : l'`OperationExecutor` reçoit la transaction ouverte par le kernel. Un accusé `ACCEPTED` porte toujours le `server_sequence` qui a été persisté. Un conflit est persisté avant d'être renvoyé au mobile, donc jamais masqué.
+
+## Évolution client PARTIE 4 (2026-11-19)
+
+- Push par lots ordonnés (`limit`, `after_sequence`) et prévol auth/réseau avant marquage `SYNCING`.
+- Un accusé manquant est traité comme `REJECTED` localement et bloque l'avancement du curseur pour le cycle en cours.
+- Pull paginé : la réponse `PullResponse { server_sequence, changes, has_more }` est appliquée par la commande Rust `applySyncUpdates`, qui gère versions, tombstones et idempotence. Le curseur n'avance qu'après commit local réussi.
+- Les conflits sont résolus via `resolveConflict` (rôles OWNER/ADMIN/MANAGER) avec trace d'audit ; les opérations locales sont conservées.

@@ -202,3 +202,15 @@
 - `docs/FFI_AND_PROTOTYPE.md` mis à jour avec ces éléments de preuve et la limite restante.
 - **Vérifications exécutées ici** : `npx tsc --noEmit` OK, `npx jest --runInBand` 3 suites/12 tests OK, ESLint OK, tree-sitter Rust OK, `git diff --check` OK.
 - **Non exécuté ici** : `cargo test` et les builds natifs (toolchains absentes) ; le test Rust est validé syntaxiquement seulement.
+
+
+## LOT 26 — PARTIE 4 : offline-first et réplication descendante
+
+- **Ordre et lots** : `getPendingOperations`/`startSynchronization` ordonnent les opérations par dépendance, acceptent `limit` et `after_sequence`, renvoient `has_more` ; le hook React Native borne les lots (20) et les pages de pull (50 × 100 événements).
+- **Prévol** : URL HTTPS, réseau, session et `device_id` vérifiés avant de marquer quoi que ce soit en `SYNCING`.
+- **ACK/curseur** : `cursorAfterPush` refuse d'avancer si un accusé manque ; le backoff Rust est recalculé depuis l'`attempt_count` réel (exponentiel, 15 min max, jitter).
+- **Descente** : `MIGRATION_3` + commande `applySyncUpdates` atomique et versionnée, tombstones logiques, contrôle tenant/branch, curseur après commit. Le hook applique réellement les `changes` du pull.
+- **Conflits** : `resolveConflict` restreint aux rôles de gestion, audit obligatoire, opérations conservées ; `configureDeviceQuota` permet les quotas par appareil.
+- **Interface** : `SyncIndicator` six états, last sync/politique/non confirmés dans `SyncScreen` et `StockScreen`, `PosScreen` distingue vente locale et confirmation serveur.
+- **Vérifications exécutées** : tsc OK, Jest 4 suites/17 tests, ESLint OK, codegen OK, tree-sitter Rust OK, `git diff --check` OK.
+- **Non exécuté** : `cargo test` (toolchain absente), builds natifs. Le parent n'expose toujours pas `/api/v1/sync/*`.

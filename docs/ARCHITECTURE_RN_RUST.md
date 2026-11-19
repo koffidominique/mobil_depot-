@@ -92,3 +92,5 @@ npm run ios
 - Le pont iOS utilise un `RCTBridgeModule` qui exécute Rust sur une file série et résout la promesse sur le thread principal ; un wrapper Swift typé (`DepotCoreSwift.swift`) et un bridging header sont fournis. La spec TurboModule est générée par `scripts/codegen.sh`. Voir `docs/FFI_AND_PROTOTYPE.md`.
 - Les écrans « Achats, Fournisseurs, Caisse, Rapports, Catalogue, Reçus » sont câblés sur les commandes Rust correspondantes ; la confirmation des paiements Mobile Money et l'impression/partage des reçus restent à brancher sur des services natifs.
 - `npm run rust:test` nécessite un toolchain Rust absent de l'environnement de cette session ; la syntaxe des fichiers Rust a été validée par analyseur tree-sitter et la syntaxe/types TypeScript par `tsc --noEmit`.
+
+Voir `docs/PART4_OFFLINE.md` pour le fonctionnement offline-first, la réplication descendante versionnée et la gestion des conflits.
