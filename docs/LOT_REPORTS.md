@@ -339,3 +339,12 @@
 - **Livrables** : `docs/PART15_DELIVERABLES.md` dresse l'inventaire des 20 éléments et l'état réel des critères finaux.
 - **Validation** : tsc, web:typecheck, ESLint, Jest 16 suites/51 tests, syntaxe Rust, codegen, bundle, aperçu JSDOM et `git diff --check` OK.
 - **Non exécuté** : `cargo test`, `cargo fmt`, `cargo clippy`, builds Android/iOS, E2E natifs, sync réelle inter-appareils.
+
+
+## LOT 40 — PARTIE 16 : application des règles strictes
+
+- **Règle 17** : `shouldSeedDemo()` n'autorise le jeu pilote que dans l'aperçu web ; le mobile natif initialise sa base sans données de démonstration. Test Jest dédié.
+- **Règle 19** : le job Android de la CI n'est plus désactivé par `if: false` mais conditionné à `vars.ANDROID_NDK_READY`.
+- **Règle 24** : `docs/API_COMPATIBILITY.md` documente les changements de signatures et la migration 10.
+- **Rapport** : `docs/PART16_RULES.md` audite les 25 règles avec preuves et limites.
+- **Validation** : tsc, web:typecheck, ESLint, Jest 17 suites/52 tests, syntaxe Rust, codegen, bundle, aperçu JSDOM, `git diff --check` : OK.
