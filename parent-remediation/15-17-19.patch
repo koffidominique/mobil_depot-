@@ -1,0 +1,59 @@
+--- a/package.json
++++ b/package.json
+@@ -5,6 +5,7 @@
+   "type": "module",
+   "scripts": {
+     "dev": "tsx server.ts",
++    "desktop:dev": "vite --host 127.0.0.1 --port 3000",
+     "start": "node server.ts",
+     "build": "vite build",
+     "preview": "vite preview",
+--- a/src-tauri/tauri.conf.json
++++ b/src-tauri/tauri.conf.json
+@@ -4,7 +4,7 @@
+   "version": "3.0.0",
+   "identifier": "com.depotpro.erp",
+   "build": {
+-    "beforeDevCommand": "npm run dev",
++    "beforeDevCommand": "npm run desktop:dev",
+     "devUrl": "http://localhost:3000",
+     "beforeBuildCommand": "npm run build",
+     "frontendDist": "../dist"
+@@ -21,7 +21,7 @@
+       }
+     ],
+     "security": {
+-      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
++      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:3000 ws://localhost:3000"
+     }
+   },
+   "bundle": {
+--- a/tests/e2e/app.spec.ts
++++ b/tests/e2e/app.spec.ts
+@@ -64,7 +64,7 @@
+     await expect(page.getByRole('heading', { name: 'Session de caisse', level: 1 })).toBeVisible();
+     await page.getByRole('button', { name: /Ouvrir une session de caisse/i }).click();
+     const cashDialog = page.getByRole('dialog');
+-    await cashDialog.locator('input').first().fill('50000');
++    await cashDialog.getByLabel('Fond de caisse initial en espèces').fill('50000');
+     await cashDialog.getByRole('button', { name: "Confirmer l'ouverture" }).click();
+     await expect(page.getByRole('heading', { name: /Session active/i })).toBeVisible();
+ 
+@@ -74,7 +74,7 @@
+     ).toBeVisible();
+     await page.getByRole('button', { name: 'Nouveau produit' }).click();
+     const prodModal = page.getByRole('dialog');
+-    await prodModal.locator('input[type="text"]').first().fill('Youki Cocktail 50cl');
++    await prodModal.getByLabel(/Nom du produit/).fill('Youki Cocktail 50cl');
+     await prodModal.getByRole('button', { name: 'Enregistrer' }).click();
+     await expect(page.getByRole('cell', { name: /Youki Cocktail 50cl/i })).toBeVisible();
+ 
+@@ -152,7 +152,7 @@
+     await page.getByLabel('Phrase secrète de chiffrement').fill('DepotPro!2026');
+     await page.getByRole('button', { name: 'Chiffrer et sauvegarder' }).click();
+     await expect(
+-      page.getByText(/depotpro_backup_.*\.dpbkp$/i).first()
++      page.getByRole('cell', { name: /depotpro_backup_.*\.dpbkp$/i }).first()
+     ).toBeVisible();
+ 
+     expect(errors).toEqual([]);

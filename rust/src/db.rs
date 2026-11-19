@@ -1,6 +1,6 @@
 //! Schéma SQLite local, migrations non destructives et jeu pilote fr-CI.
 
-use crate::domain::{new_id, CoreError, CoreResult, CRATE_TYPES};
+use crate::{crypto, domain::{new_id, CoreError, CoreResult, CRATE_TYPES}};
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
@@ -15,9 +15,48 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-pub fn pin_hash(pin: &str) -> String {
+/// Ancien format non salé, conservé uniquement pour migrer les bases existantes.
+pub fn legacy_pin_hash(pin: &str) -> String {
     let digest = Sha256::digest(pin.as_bytes());
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn new_pin_salt() -> String {
+    crypto::hex_encode(&crypto::random_bytes())
+}
+
+/// Vérifie le PIN sans jamais réécrire d'ancienne donnée : le passage au KDF
+/// salé est fait explicitement par `upgrade_user_pin`.
+pub fn verify_user_pin(conn: &Connection, user_id: &str, pin: &str) -> CoreResult<bool> {
+    let (stored, salt, kdf): (String, Option<String>, String) = conn.query_row(
+        "SELECT pin_hash, pin_salt, pin_kdf FROM users WHERE id=?1",
+        params![user_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    match (kdf.as_str(), salt) {
+        ("PBKDF2_SHA256", Some(salt)) => crypto::verify_pin(pin, &salt, &stored),
+        _ => Ok(stored == legacy_pin_hash(pin)),
+    }
+}
+
+/// Écriture atomique du sel et du hash dérivé. Le verrou IMMEDIATE empêche
+/// deux changements concurrents du même PIN de se chevaucher.
+pub fn upgrade_user_pin(conn: &mut Connection, user_id: &str, pin: &str, old_pin: Option<&str>) -> CoreResult<()> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let valid = match old_pin {
+        Some(old) => verify_user_pin(&tx, user_id, old)?,
+        None => true,
+    };
+    if !valid {
+        return Err(CoreError::new("INVALID_PIN", "Ancien code PIN incorrect."));
+    }
+    let salt = new_pin_salt();
+    let derived = crypto::derive_pin_hash(pin, &salt)?;
+    tx.execute(
+        "UPDATE users SET pin_salt=?1, pin_hash=?2, pin_kdf='PBKDF2_SHA256' WHERE id=?3",
+        params![salt, derived, user_id],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn open(path: &str) -> CoreResult<Connection> {
@@ -564,8 +603,17 @@ pub fn ensure_security_columns(conn: &Connection) -> CoreResult<()> {
     ensure_column(conn, "devices", "last_seen_at", "last_seen_at INTEGER")?;
     ensure_column(conn, "audit_logs", "device_id", "device_id TEXT")?;
     ensure_column(conn, "audit_logs", "severity", "severity TEXT NOT NULL DEFAULT 'INFO'")?;
-    ensure_column(conn, "audit_logs", "category", "category TEXT NOT NULL DEFAULT 'SECURITY'")
+    ensure_column(conn, "audit_logs", "category", "category TEXT NOT NULL DEFAULT 'SECURITY'")?;
+    ensure_column(conn, "users", "pin_salt", "pin_salt TEXT")?;
+    ensure_column(conn, "users", "pin_kdf", "pin_kdf TEXT NOT NULL DEFAULT 'SHA256_LEGACY'")
 }
+
+/// Migration 10 : PIN salé (PBKDF2-HMAC-SHA256). Les hachages SHA-256 existants
+/// restent lisibles et sont migrés lors de la prochaine authentification réussie.
+pub const MIGRATION_10: &str = r#"
+        ALTER TABLE users ADD COLUMN pin_salt TEXT;
+        ALTER TABLE users ADD COLUMN pin_kdf TEXT NOT NULL DEFAULT 'SHA256_LEGACY';
+        "#;
 
 /// Applique les migrations ordonnées et enregistre leur version dans la base locale.
 pub fn migrate(conn: &Connection) -> CoreResult<()> {
@@ -576,10 +624,10 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 9] = [
+    let migrations: [(i64, &str); 10] = [
         (1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4),
         (5, MIGRATION_5), (6, MIGRATION_6), (7, MIGRATION_7), (8, MIGRATION_8),
-        (9, MIGRATION_9),
+        (9, MIGRATION_9), (10, MIGRATION_10),
     ];
     for (version, sql) in migrations {
         if version <= current {
@@ -632,9 +680,12 @@ pub fn seed(conn: &mut Connection) -> CoreResult<()> {
         ("usr_cashier", "caissier", "Lamine Traoré", "CASHIER", "0000"),
     ];
     for (id, username, name, role, pin) in users {
+        let salt = new_pin_salt();
+        let derived = crypto::derive_pin_hash(pin, &salt)?;
         tx.execute(
-            "INSERT OR IGNORE INTO users (id, tenant_id, username, full_name, role, pin_hash) VALUES (?1,?2,?3,?4,?5,?6)",
-            params![id, TENANT_ID, username, name, role, pin_hash(pin)],
+            "INSERT OR IGNORE INTO users (id, tenant_id, username, full_name, role, pin_hash, pin_salt, pin_kdf)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,'PBKDF2_SHA256')",
+            params![id, TENANT_ID, username, name, role, derived, salt],
         )?;
     }
 

@@ -112,7 +112,7 @@ fn assert_permission(conn: &Connection, a: &Actor, permission: &str) -> CoreResu
 fn permission_for_command(command: &str) -> Option<&'static str> {
     match command {
         "authenticate" | "authenticateUser" | "initializeDatabase" | "initialize_database"
-        | "renewSession" | "revokeSession" | "lockSession" | "unlockSession" => None,
+        | "renewSession" | "revokeSession" | "lockSession" | "unlockSession" | "changePin" => None,
         "getSecurityPolicy" | "checkPermission" | "getDashboard" | "get_dashboard" | "getInventory" | "get_inventory"
         | "getCustomers" | "get_customers" | "getSuppliers" | "get_suppliers" | "getSales"
         | "get_sales" | "getCustomerAccount" | "get_customer_account" | "getSupplierAccount"
@@ -149,7 +149,7 @@ fn permission_for_command(command: &str) -> Option<&'static str> {
     }
 }
 
-pub fn authenticate(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+pub fn authenticate(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let username = field_str(payload, "username")?;
     let pin = field_str(payload, "pin")?;
     let branch_id = field_str(payload, "branch_id")?;
@@ -217,10 +217,9 @@ pub fn authenticate(conn: &Connection, payload: &Value) -> CoreResult<Value> {
         _ => return Err(CoreError::new("DEVICE_REVOKED", "Appareil révoqué pour ce dépôt.")),
     }
 
-    let stored: String = conn.query_row("SELECT pin_hash FROM users WHERE id = ?1", params![user_id], |r| r.get(0))?;
-    let mut valid_pin = stored == db::pin_hash(pin);
-    if !settings.pin_required && stored == db::pin_hash("") {
-        valid_pin = true;
+    let mut valid_pin = db::verify_user_pin(conn, &user_id, pin)?;
+    if !settings.pin_required && !valid_pin {
+        valid_pin = db::verify_user_pin(conn, &user_id, "")?;
     }
     if !valid_pin {
         let failures: i64 = conn
@@ -245,6 +244,12 @@ pub fn authenticate(conn: &Connection, payload: &Value) -> CoreResult<Value> {
             "LOGIN_FAILED", "Code PIN incorrect", "WARN", "AUTHENTICATION",
         );
         return Err(CoreError::new("INVALID_CREDENTIALS", "Identifiant ou code PIN incorrect."));
+    }
+
+    // Migration opportuniste : une authentification réussie convertit un hash legacy.
+    let kdf: String = conn.query_row("SELECT pin_kdf FROM users WHERE id=?1", params![user_id], |r| r.get(0))?;
+    if kdf == "SHA256_LEGACY" {
+        db::upgrade_user_pin(conn, &user_id, pin, None)?;
     }
 
     conn.execute(
@@ -2525,14 +2530,36 @@ pub fn unlock_session(conn: &mut Connection, payload: &Value) -> CoreResult<Valu
     let token = field_str(payload, "token")?;
     let pin = field_str(payload, "pin")?;
     let (user, branch, device, _role, _expires, _locked) = session_record(conn, token)?;
-    let stored: String = conn.query_row("SELECT pin_hash FROM users WHERE id=?1", params![user], |r| r.get(0))?;
-    if stored != db::pin_hash(pin) {
+    if !db::verify_user_pin(conn, &user, pin)? {
         db::audit_security(conn, &branch, &user, Some(device), "UNLOCK_FAILED", "PIN invalide", "WARN", "AUTHENTICATION")?;
         return Err(CoreError::new("INVALID_PIN", "Code PIN incorrect."));
+    }
+    let kdf: String = conn.query_row("SELECT pin_kdf FROM users WHERE id=?1", params![user], |r| r.get(0))?;
+    if kdf == "SHA256_LEGACY" {
+        db::upgrade_user_pin(conn, &user, pin, None)?;
     }
     conn.execute("UPDATE sessions SET locked=0, last_activity_at=?2 WHERE token=?1", params![token, now_ms()])?;
     db::audit_security(conn, &branch, &user, Some(device), "UNLOCKED", "Session déverrouillée", "INFO", "AUTHENTICATION")?;
     Ok(json!({ "status": "UNLOCKED" }))
+}
+
+/// Changement de PIN sous verrou : ancien PIN vérifié, nouveau sel généré, audit.
+pub fn change_pin(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let old_pin = field_str(payload, "old_pin")?;
+    let new_pin = field_str(payload, "new_pin")?;
+    if new_pin.len() < 4 {
+        return Err(CoreError::new("WEAK_PIN", "Le code PIN doit contenir au moins 4 chiffres."));
+    }
+    db::upgrade_user_pin(conn, &a.user_id, new_pin, Some(old_pin))?;
+    db::audit_security(conn, &a.branch_id, &a.user_id, Some(&a.device_id), "PIN_CHANGED", "Code PIN mis à jour avec un sel aléatoire", "WARN", "AUTHENTICATION")?;
+    Ok(json!({ "status": "CHANGED", "kdf": "PBKDF2_SHA256" }))
+}
+
+/// Utilisé par la couche FFI avant une sauvegarde : la politique est appliquée.
+pub fn backup_encryption_required(conn: &Connection, payload: &Value) -> CoreResult<bool> {
+    let a = actor(conn, payload)?;
+    Ok(security_settings(conn, &a.tenant_id, &a.branch_id)?.backup_encryption_required)
 }
 
 pub fn check_permission_command(conn: &Connection, payload: &Value) -> CoreResult<Value> {
@@ -2856,6 +2883,7 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "getSyncHistory" | "get_sync_history" => get_sync_history(conn, payload),
         "configureSyncServer" | "configure_sync_server" => configure_sync_server(conn, payload),
         "applySyncAcknowledgements" | "apply_sync_acknowledgements" => apply_sync_ack(conn, payload),
+        "changePin" | "change_pin" => change_pin(conn, payload),
         "applySyncUpdates" | "apply_sync_updates" => apply_sync_updates(conn, payload),
         "resolveConflict" | "resolve_conflict" => resolve_conflict(conn, payload),
         "configureDeviceQuota" | "configure_device_quota" => configure_device_quota(conn, payload),

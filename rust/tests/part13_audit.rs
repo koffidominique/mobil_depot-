@@ -29,7 +29,7 @@ fn duplicate_purchase_lines_are_rejected_and_demo_seed_is_optional() {
     let seeded = ok(call("initializeDatabase", json!({ "path": clean.to_str().unwrap(), "seed_demo": false })));
     assert_eq!(seeded["seeded_demo"], false);
     assert_eq!(scalar(&clean, "SELECT COUNT(*) FROM product_variants"), 0);
-    assert_eq!(scalar(&clean, "SELECT COUNT(*) FROM schema_meta WHERE version=9"), 1);
+    assert_eq!(scalar(&clean, "SELECT COUNT(*) FROM schema_meta WHERE version=10"), 1);
 
     let path = std::env::temp_dir().join(format!("depot13-audit-{}.sqlite", std::process::id()));
     let _ = std::fs::remove_file(&path);

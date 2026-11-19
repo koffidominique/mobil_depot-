@@ -105,7 +105,7 @@ fn offline_sale_survives_restart_and_bulk_replay_is_bounded() {
         .collect();
     assert!(violations.is_empty(), "{violations:?}");
     let version: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0)).unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     drop(conn);
 
     let _ = std::fs::remove_file(&path);
@@ -138,7 +138,9 @@ fn backup_restore_and_transactional_rollback_keep_history() {
         initial_stock
     );
 
-    let backup = ok(call("backupDatabase", json!({ "auth": auth })));
+    let backup = ok(call("backupDatabase", json!({ "auth": auth, "passphrase": "phrase-de-restauration-2026" })));
+    assert_eq!(backup["encrypted"], true);
+    assert_eq!(backup["kdf"], "PBKDF2_HMAC_SHA256");
     let backup_path = backup["backup_path"].as_str().unwrap().to_string();
     assert!(std::path::Path::new(&backup_path).exists());
 
@@ -156,13 +158,13 @@ fn backup_restore_and_transactional_rollback_keep_history() {
     assert_eq!(counted["counted_qty"], 31);
     assert_eq!(count(&path, "SELECT full_units_qty FROM stock_balances WHERE variant_id='var_beaufort_50'"), 31);
 
-    ok(call("restoreDatabase", json!({ "auth": auth, "source_path": backup_path })));
+    ok(call("restoreDatabase", json!({ "auth": auth, "source_path": backup_path, "passphrase": "phrase-de-restauration-2026" })));
     assert_eq!(count(&path, "SELECT full_units_qty FROM stock_balances WHERE variant_id='var_beaufort_50'"), 240, "la sauvegarde est restaurée");
     let version: i64 = {
         let conn = Connection::open(&path).unwrap();
         conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0)).unwrap()
     };
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
 
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(format!("{path_str}.before-restore-0"));

@@ -2,6 +2,7 @@
 //! Interface C stable consommée par le TurboModule React Native.
 
 mod commands;
+mod crypto;
 mod db;
 mod domain;
 
@@ -34,7 +35,7 @@ fn execute_inner(input: &str) -> CoreResult<String> {
             .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?;
         *path_guard = path.to_string();
         return Ok(json!({"ok": true, "data": {
-            "database": path, "schema_version": 9, "seeded_demo": seed_demo
+            "database": path, "schema_version": 10, "seeded_demo": seed_demo
         }}).to_string());
     }
 
@@ -46,13 +47,35 @@ fn execute_inner(input: &str) -> CoreResult<String> {
         if !commands::check_permission(conn, &payload, "security.admin")? {
             return Err(CoreError::new("PERMISSION_DENIED", "Sauvegarde réservée aux administrateurs."));
         }
+        let required = commands::backup_encryption_required(conn, &payload)?;
+        let passphrase = field_str_opt(&payload, "passphrase").map(str::to_string);
+        if required && passphrase.is_none() {
+            return Err(CoreError::new("BACKUP_ENCRYPTION_REQUIRED", "Phrase de sauvegarde requise par la politique."));
+        }
         let current = DB_PATH.get_or_init(|| Mutex::new(String::new())).lock()
             .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?.clone();
+        let stamp = db::now_ms();
+        let plain = format!("{current}.plain-{stamp}");
         let destination = field_str_opt(&payload, "destination_path").map(str::to_string)
-            .unwrap_or_else(|| format!("{current}.backup-{}", db::now_ms()));
-        conn.execute("VACUUM INTO ?1", params![destination])?;
-        return Ok(json!({"ok": true, "data": {"backup_path": destination, "bytes": std::fs::metadata(&destination)
-            .map(|m| m.len() as i64).unwrap_or(0)}}).to_string());
+            .unwrap_or_else(|| format!("{current}.backup-{stamp}.dpbkp"));
+        conn.execute("VACUUM INTO ?1", params![plain])?;
+        let encrypted = match passphrase {
+            Some(phrase) => {
+                let result = crypto::encrypt(&std::fs::read(&plain)?, &phrase);
+                let _ = std::fs::remove_file(&plain);
+                result?
+            }
+            None => std::fs::read(&plain)?,
+        };
+        if passphrase.is_none() {
+            let _ = std::fs::remove_file(&plain);
+        }
+        std::fs::write(&destination, &encrypted).map_err(|e| CoreError::new("BACKUP_WRITE_FAILED", e.to_string()))?;
+        return Ok(json!({"ok": true, "data": {
+            "backup_path": destination, "bytes": encrypted.len() as i64,
+            "encrypted": passphrase.is_some(),
+            "kdf": if passphrase.is_some() { "PBKDF2_HMAC_SHA256" } else { "NONE" }
+        }}).to_string());
     }
 
     if command == "restoreDatabase" || command == "restore_database" {
@@ -65,21 +88,46 @@ fn execute_inner(input: &str) -> CoreResult<String> {
         if !std::path::Path::new(&source).is_file() {
             return Err(CoreError::new("BACKUP_NOT_FOUND", "Fichier de sauvegarde introuvable."));
         }
-        let safety = format!("{current}.before-restore-{}", db::now_ms());
         {
             let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
             let conn = guard.as_mut().ok_or_else(|| CoreError::new("DB_NOT_INITIALIZED", "Base absente."))?;
             if !commands::check_permission(conn, &payload, "security.admin")? {
                 return Err(CoreError::new("PERMISSION_DENIED", "Restauration réservée aux administrateurs."));
             }
-            conn.execute("VACUUM INTO ?1", params![safety])?;
-            *guard = None;
         }
-        std::fs::copy(&source, &current).map_err(|e| CoreError::new("RESTORE_FAILED", e.to_string()))?;
-        let reopened = db::open(&current)?;
-        let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
-        *guard = Some(reopened);
-        return Ok(json!({"ok": true, "data": {"restored_from": source, "safety_backup": safety}}).to_string());
+        let bytes = std::fs::read(&source)?;
+        let is_encrypted = bytes.len() >= 4 && &bytes[..4] == b"DPBK";
+        let mut decrypted = format!("{current}.decrypt-{}", db::now_ms());
+        let effective_source = if is_encrypted {
+            let phrase = field_str_opt(&payload, "passphrase")
+                .ok_or_else(|| CoreError::new("BACKUP_ENCRYPTION_REQUIRED", "Phrase de sauvegarde requise."))?;
+            let plain = crypto::decrypt(&bytes, phrase)?;
+            std::fs::write(&decrypted, &plain)?;
+            decrypted.as_str()
+        } else {
+            source.as_str()
+        };
+        let safety = format!("{current}.before-restore-{}", db::now_ms());
+        let result = (|| -> CoreResult<Value> {
+            {
+                let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
+                let conn = guard.as_mut().ok_or_else(|| CoreError::new("DB_NOT_INITIALIZED", "Base absente."))?;
+                conn.execute("VACUUM INTO ?1", params![safety])?;
+                *guard = None;
+            }
+            std::fs::copy(effective_source, &current).map_err(|e| CoreError::new("RESTORE_FAILED", e.to_string()))?;
+            let reopened = db::open(&current)?;
+            let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
+            *guard = Some(reopened);
+            Ok(json!({
+                "restored_from": source, "safety_backup": safety,
+                "decrypted": is_encrypted
+            }))
+        })();
+        if is_encrypted {
+            let _ = std::fs::remove_file(&decrypted);
+        }
+        return Ok(json!({"ok": true, "data": result?}).to_string());
     }
 
     let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;

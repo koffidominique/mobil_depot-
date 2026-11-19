@@ -113,7 +113,7 @@ function packagingAccount(partnerType: string, partnerId: string) {
 
 function execute(command: string, payload: AnyRecord = {}): unknown {
   switch (command) {
-    case 'initializeDatabase': return { database: payload.path ?? '/depotpro-preview/depotpro_local.db', schema_version: 7 };
+    case 'initializeDatabase': return { database: payload.path ?? '/depotpro-preview/depotpro_local.db', schema_version: 10, seeded_demo: payload.seed_demo !== false };
     case 'authenticate': {
       const users: Record<string, [string, string, string]> = {
         patron: ['9999', 'Koffi Dominique', 'OWNER'], gerant: ['1234', 'Aya Koné', 'MANAGER'], caissier: ['0000', 'Lamine Traoré', 'CASHIER'],
@@ -126,6 +126,7 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     case 'checkPermission': return { permission: payload.permission, allowed: ['read', 'sales.write', 'cash.write', 'purchase.write', 'inventory.write', 'catalog.write'].includes(String(payload.permission)) };
     case 'lockSession': return { status: 'LOCKED' };
     case 'unlockSession': return { status: 'UNLOCKED' };
+    case 'changePin': return { status: 'CHANGED', kdf: 'PBKDF2_SHA256' };
     case 'renewSession': return { token: 'preview_renewed', user_id: 'usr_gerant', role: 'MANAGER', branch_id: 'branch_marcory_01', device_id: 'dev_mobile_01', expires_at: Date.now() + 28800000 };
     case 'revokeSession': return { status: 'REVOKED', reason: payload.reason };
     case 'setSecurityPolicy': return execute('getSecurityPolicy', payload);
@@ -265,8 +266,8 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     case 'applySyncAcknowledgements': return { applied: 0 };
     case 'applySyncUpdates': return { applied: 0, skipped: 0, server_sequence: state.serverSequence };
     case 'resolveConflict': return { conflict_id: payload.conflict_id, status: 'ACKNOWLEDGED', operation_kept: true };
-    case 'backupDatabase': return { backup_path: `/depotpro-preview/backup-${Date.now()}.sqlite`, bytes: 245760 };
-    case 'restoreDatabase': return { restored_from: payload.source_path, safety_backup: '/depotpro-preview/safety.sqlite' };
+    case 'backupDatabase': return { backup_path: `/depotpro-preview/backup-${Date.now()}.dpbkp`, bytes: 245760, encrypted: true, kdf: 'PBKDF2_HMAC_SHA256' };
+    case 'restoreDatabase': return { restored_from: payload.source_path, safety_backup: '/depotpro-preview/safety.sqlite', decrypted: true };
     case 'saveProductVariant': return { variant_id: payload.variant_id ?? nextId('var'), synced: false };
     case 'updateVariantPrices': return { variant_id: payload.variant_id, price_revision: 2 };
     case 'archiveProductVariant': return { variant_id: payload.variant_id, status: 'ARCHIVED' };

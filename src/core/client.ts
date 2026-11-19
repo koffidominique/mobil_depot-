@@ -119,6 +119,9 @@ export const depot = {
   unlockSession: (token: string, pin: string) =>
     call<{ status: string }>('unlockSession', { token, pin }),
 
+  changePin: (oldPin: string, newPin: string) =>
+    call<{ status: string; kdf: string }>('changePin', { old_pin: oldPin, new_pin: newPin }),
+
   getSecurityPolicy: () => call<{
     tenant_id: string; branch_id: string; role: string; session_duration_ms: number;
     auto_lock_ms: number; pin_required: boolean; max_failed_attempts: number;
@@ -304,12 +307,15 @@ export const depot = {
   getConflicts: () => call<{ conflicts: SyncConflict[] }>('getConflicts'),
   resetStaleSyncing: (staleBeforeMs: number) =>
     call<{ reset: number }>('resetStaleSyncing', { stale_before_ms: staleBeforeMs }),
-  backupDatabase: (destinationPath?: string) =>
-    call<{ backup_path: string; bytes: number }>('backupDatabase',
-      destinationPath ? { destination_path: destinationPath } : {}),
-  restoreDatabase: (sourcePath: string) =>
-    call<{ restored_from: string; safety_backup: string }>('restoreDatabase', {
+  backupDatabase: (passphrase?: string, destinationPath?: string) =>
+    call<{ backup_path: string; bytes: number; encrypted: boolean; kdf: string }>('backupDatabase', {
+      ...(passphrase ? { passphrase } : {}),
+      ...(destinationPath ? { destination_path: destinationPath } : {}),
+    }),
+  restoreDatabase: (sourcePath: string, passphrase?: string) =>
+    call<{ restored_from: string; safety_backup: string; decrypted: boolean }>('restoreDatabase', {
       source_path: sourcePath,
+      ...(passphrase ? { passphrase } : {}),
     }),
   getPendingOperations: () => call<{ operations: SyncOperation[] }>('getPendingOperations'),
   startSynchronization: (afterSequence = 0, limit = 50) =>

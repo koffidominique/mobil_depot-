@@ -22,9 +22,24 @@ export function SyncScreen() {
   const [serverUrl, setServerUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [backupPath, setBackupPath] = useState('');
+  const [backupPassphrase, setBackupPassphrase] = useState('');
   const [restorePath, setRestorePath] = useState('');
+  const [restorePassphrase, setRestorePassphrase] = useState('');
+  const [oldPin, setOldPin] = useState('');
+  const [newPin, setNewPin] = useState('');
   const [ioMessage, setIoMessage] = useState<string | null>(null);
   const conflicts = useConflicts();
+
+  const changePinMutation = useMutation({
+    mutationFn: () => depot.changePin(oldPin, newPin),
+    onSuccess: (result) => {
+      setIoMessage(`Code PIN remplacé : ${result.kdf}, sel aléatoire enregistré.`);
+      setOldPin('');
+      setNewPin('');
+      setError(null);
+    },
+    onError: (err: Error) => setError(err.message),
+  });
 
   const resolve = useMutation({
     mutationFn: (input: { conflictId: string; resolution: 'ACKNOWLEDGE_SERVER' | 'ESCALATE' }) =>
@@ -70,16 +85,19 @@ export function SyncScreen() {
   });
 
   const backup = useMutation({
-    mutationFn: () => depot.backupDatabase(backupPath.trim() || undefined),
+    mutationFn: () => depot.backupDatabase(
+      backupPassphrase.trim() || undefined,
+      backupPath.trim() || undefined,
+    ),
     onSuccess: (result) => {
-      setIoMessage(`Sauvegarde créée : ${result.backup_path} (${result.bytes} octets).`);
+      setIoMessage(`Sauvegarde ${result.encrypted ? 'chiffrée' : 'non chiffrée'} : ${result.backup_path} (${result.bytes} octets).`);
       setError(null);
     },
     onError: (err: Error) => setError(err.message),
   });
 
   const restore = useMutation({
-    mutationFn: () => depot.restoreDatabase(restorePath.trim()),
+    mutationFn: () => depot.restoreDatabase(restorePath.trim(), restorePassphrase.trim() || undefined),
     onSuccess: async (result) => {
       setIoMessage(`Restauration effectuée. Sauvegarde de sécurité : ${result.safety_backup}.`);
       setError(null);
@@ -186,6 +204,13 @@ export function SyncScreen() {
       <Card>
         <Text style={{ color: c.text, fontWeight: '700' }}>Sauvegarde et restauration</Text>
         <Field
+          label="Phrase de chiffrement (obligatoire si la politique l'exige)"
+          value={backupPassphrase}
+          onChangeText={setBackupPassphrase}
+          secureTextEntry
+          placeholder="Au moins 8 caractères"
+        />
+        <Field
           label="Destination de la sauvegarde (facultatif)"
           value={backupPath}
           onChangeText={setBackupPath}
@@ -201,6 +226,12 @@ export function SyncScreen() {
           value={restorePath}
           onChangeText={setRestorePath}
         />
+        <Field
+          label="Phrase de déchiffrement"
+          value={restorePassphrase}
+          onChangeText={setRestorePassphrase}
+          secureTextEntry
+        />
         <PrimaryButton
           label="Restaurer (sauvegarde de sécurité automatique)"
           loading={restore.isPending}
@@ -208,6 +239,21 @@ export function SyncScreen() {
           onPress={() => restore.mutate()}
         />
         <Banner tone="info" message={ioMessage} />
+      </Card>
+
+      <Card>
+        <Text style={{ color: c.text, fontWeight: '800' }}>Sécurité du code PIN</Text>
+        <Text style={{ color: c.subtitle }}>
+          Le PIN est dérivé par PBKDF2-HMAC-SHA256 avec un sel aléatoire par utilisateur.
+        </Text>
+        <Field label="Ancien code PIN" value={oldPin} onChangeText={setOldPin} secureTextEntry keyboardType="number-pad" />
+        <Field label="Nouveau code PIN" value={newPin} onChangeText={setNewPin} secureTextEntry keyboardType="number-pad" />
+        <PrimaryButton
+          label="Changer le code PIN"
+          loading={changePinMutation.isPending}
+          disabled={!oldPin.trim() || newPin.trim().length < 4}
+          onPress={() => changePinMutation.mutate()}
+        />
       </Card>
 
       <Card>
