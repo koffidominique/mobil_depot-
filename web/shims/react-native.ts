@@ -3,6 +3,11 @@ const RN: any = require('react-native-web');
 import { mockShare } from '../mock/share';
 
 export const ActivityIndicator = RN.ActivityIndicator;
+export const Animated = RN.Animated ?? { View: RN.View, Value: class { setValue() {} }, timing: () => ({ start() {} }) };
+export const AccessibilityInfo = RN.AccessibilityInfo ?? {
+  isReduceMotionEnabled: async () => false,
+  addEventListener: () => ({ remove() {} }),
+};
 export const AppState = RN.AppState ?? {
   addEventListener: () => ({ remove: () => undefined }),
 };
@@ -15,6 +20,7 @@ export const View = RN.View;
 export const Image = RN.Image;
 export const Platform = RN.Platform ?? { OS: 'web', select: (values: Record<string, unknown>) => values.web };
 export const Dimensions = RN.Dimensions;
+export const useWindowDimensions = RN.useWindowDimensions ?? (() => Dimensions.get('window'));
 export const KeyboardAvoidingView = RN.KeyboardAvoidingView;
 export const Modal = RN.Modal;
 export const RefreshControl = RN.RefreshControl;

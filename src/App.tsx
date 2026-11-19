@@ -7,6 +7,7 @@ import { ActivityIndicator, AppState, Text, View, type AppStateStatus } from 're
 import NetInfo from '@react-native-community/netinfo';
 import RNFS from 'react-native-fs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { FeedbackToast } from './components/ui';
 import { depot } from './core/client';
 import { DEFAULT_AUTO_LOCK_MS, shouldAutoLock } from './core/security';
 import { useSyncStatus, useSynchronization } from './hooks/useCore';
@@ -208,6 +209,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
+        <FeedbackToast />
         <Bootstrap />
       </QueryClientProvider>
     </SafeAreaProvider>

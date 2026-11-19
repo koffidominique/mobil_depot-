@@ -2,7 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { useDashboard, useSales } from '../hooks/useCore';
 import { formatFcfa, formatTimestamp } from '../core/format';
-import { Banner, Card, Metric, Row, Screen } from '../components/ui';
+import { Banner, Card, EmptyState, LoadingState, Metric, Row, Screen } from '../components/ui';
 import { SyncIndicator } from '../components/SyncIndicator';
 
 export function HomeScreen() {
@@ -16,6 +16,7 @@ export function HomeScreen() {
     >
       <Banner message={dashboard.error?.message ?? null} />
       <SyncIndicator />
+      {dashboard.isPending && !dashboard.data ? <LoadingState label="Ouverture du tableau de bord…" /> : null}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
         <Metric
           label="CA du jour"
@@ -66,6 +67,9 @@ export function HomeScreen() {
       <Card>
         <View style={{ gap: 6 }}>
           <Row label="Activité récente" value={`${sales.data?.sales.length ?? 0} ventes locales`} />
+          {sales.data?.sales.length === 0 ? (
+            <EmptyState title="Aucune vente locale" message="Les ventes créées sur cet appareil apparaîtront ici." />
+          ) : null}
           {(sales.data?.sales ?? []).slice(0, 5).map((sale) => (
             <Row
               key={sale.id}

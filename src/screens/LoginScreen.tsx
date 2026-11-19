@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import React, { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { depot } from '../core/client';
 import { loginSchema } from '../core/schemas';
 import { saveSession } from '../core/session';
@@ -62,17 +62,23 @@ export function LoginScreen() {
         <View style={{ gap: 6 }}>
           <Text style={{ color: c.subtitle, fontSize: 12 }}>Point de vente</Text>
           {BRANCHES.map((branch) => (
-            <Text
+            <Pressable
               key={branch.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Point de vente ${branch.label}`}
+              accessibilityState={{ selected: branchId === branch.id }}
               onPress={() => setBranchId(branch.id)}
-              style={{
-                color: branchId === branch.id ? c.primary : c.text,
-                fontWeight: branchId === branch.id ? '800' : '500',
-                paddingVertical: 6,
-              }}
+              style={{ minHeight: 44, paddingVertical: 12, justifyContent: 'center' }}
             >
-              {branch.label}
-            </Text>
+              <Text
+                style={{
+                  color: branchId === branch.id ? c.primary : c.text,
+                  fontWeight: branchId === branch.id ? '800' : '500',
+                }}
+              >
+                {branch.label}
+              </Text>
+            </Pressable>
           ))}
         </View>
         <Banner message={error} />

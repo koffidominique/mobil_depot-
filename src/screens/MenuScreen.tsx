@@ -1,8 +1,8 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
-import { Card, Screen, useColors } from '../components/ui';
+
+import { ActionRow, Card, Screen } from '../components/ui';
 import type { RootStackParamList } from '../navigation/types';
 import { depot } from '../core/client';
 import { useAppStore } from '../store/useAppStore';
@@ -10,7 +10,6 @@ import { useAppStore } from '../store/useAppStore';
 type Destination = Exclude<keyof RootStackParamList, 'Login' | 'Main'>;
 
 export function MenuScreen() {
-  const c = useColors();
   const session = useAppStore((state) => state.session);
   const setLocked = useAppStore((state) => state.setLocked);
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -34,19 +33,19 @@ export function MenuScreen() {
     <Screen title="Menu" subtitle={`${session?.full_name ?? 'Utilisateur'} · ${session?.role ?? ''}`}>
       <Card>
         {entries.map((entry) => (
-          <Pressable key={entry.screen} onPress={() => navigation.navigate(entry.screen)}>
-            <View style={{ paddingVertical: 10 }}>
-              <Text style={{ color: c.primary, fontWeight: '700' }}>{entry.label} →</Text>
-              <Text style={{ color: c.subtitle, fontSize: 12 }}>{entry.detail}</Text>
-            </View>
-          </Pressable>
+          <ActionRow
+            key={entry.screen}
+            label={entry.label}
+            detail={entry.detail}
+            onPress={() => navigation.navigate(entry.screen)}
+          />
         ))}
-        <Pressable onPress={lock}>
-          <View style={{ paddingVertical: 10 }}>
-            <Text style={{ color: c.danger, fontWeight: '700' }}>Verrouiller la session →</Text>
-            <Text style={{ color: c.subtitle, fontSize: 12 }}>Demande le code PIN à la reprise.</Text>
-          </View>
-        </Pressable>
+        <ActionRow
+          label="Verrouiller la session"
+          detail="Demande le code PIN à la reprise."
+          danger
+          onPress={lock}
+        />
       </Card>
     </Screen>
   );
