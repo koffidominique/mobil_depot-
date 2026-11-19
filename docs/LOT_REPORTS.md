@@ -294,3 +294,12 @@
 - **Accessibilité** : libellés/rôles/états sur les composants partagés, cibles ≥ 44 px, messages non colorés uniquement, contraste AA vérifié par calcul sur les deux thèmes.
 - **Vérifications** : tsc OK, web:typecheck OK, ESLint OK, Jest 12 suites/39 tests OK, codegen OK, bundle OK, aperçu web JSDOM OK, `git diff --check` OK.
 - **Non exécuté** : matrice d'appareils réels (petits/Android standards/grands/iPhone/orientation/claviers) — SDK absents ; documenté dans `docs/PART10_UX.md`.
+
+
+## LOT 35 — PARTIE 11 : parité Desktop et points de vente
+
+- **MIGRATION_9** : `branches.kind` (POS/WAREHOUSE), `parent_branch_id`, `stock_transfers`, `stock_transfer_lines`, `desktop_snapshots` ; colonnes ajoutées de façon idempotente.
+- **Transferts traçables** : `createStockTransfer` valide le périmètre et le stock, écrit deux mouvements liés et une écriture d'outbox ; `listBranches` filtre par utilisateur/établissement.
+- **Parité** : `exportDesktopSnapshot` (versionné + empreinte stable) et `importDesktopUpdates` qui délègue à `apply_sync_updates`, sans seconde logique métier ; écran `DesktopScreen` et entrée de menu.
+- **Vérifications** : tsc OK, web:typecheck OK, ESLint OK, Jest 13 suites/42 tests OK, codegen OK, bundle OK, JSDOM OK, tree-sitter Rust OK, `git diff --check` OK.
+- **Limite** : intégration réelle avec le binaire Desktop/parent `ss_depot_rust` non effectuée (routes `/api/v1/sync/*` absentes) ; documentée dans `docs/PART11_DESKTOP.md`.
