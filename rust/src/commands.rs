@@ -133,6 +133,7 @@ fn permission_for_command(command: &str) -> Option<&'static str> {
         "recordPayment" | "record_payment" | "recordCashMovement" | "record_cash_movement"
         | "openCashSession" | "open_cash_session" | "closeCashSession" | "close_cash_session" => Some("cash.write"),
         "createPurchaseOrder" | "create_purchase_order" | "receivePurchase" | "receive_purchase"
+        | "recordSupplierReturn" | "record_supplier_return"
         | "registerPackagingReturn" | "register_packaging_return"
         | "correctPackagingMovement" | "correct_packaging_movement" => Some("purchase.write"),
         "recordInventoryCount" | "record_inventory_count" | "createStockTransfer"
@@ -864,6 +865,80 @@ pub fn receive_purchase(conn: &mut Connection, payload: &Value) -> CoreResult<Va
     )?;
     tx.commit()?;
     Ok(json!({"order_id": order_id, "received_fcfa": received_total, "status": status, "remaining_qty": (ordered - received).max(0)}))
+}
+
+/// Retour de marchandise au fournisseur : stock et dette fournisseur ajustés dans la même transaction.
+pub fn record_supplier_return(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    if !can_manage_purchases(&a.role) {
+        return Err(CoreError::new("ROLE_FORBIDDEN", "Rôle non autorisé à enregistrer un retour fournisseur."));
+    }
+    let supplier = field_str(payload, "supplier_id")?;
+    let reason = field_str(payload, "reason")?.trim().to_string();
+    if reason.len() < 3 {
+        return Err(CoreError::new("REASON_REQUIRED", "Un motif de retour est obligatoire."));
+    }
+    let lines = field_array(payload, "lines")?;
+    if lines.is_empty() {
+        return Err(CoreError::new("EMPTY_RETURN", "Au moins une ligne de retour est requise."));
+    }
+    let tx = conn.unchecked_transaction()?;
+    let supplier_exists: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM suppliers WHERE id=?1", params![supplier], |r| r.get(0),
+    )?;
+    if supplier_exists == 0 {
+        return Err(CoreError::new("SUPPLIER_UNKNOWN", "Fournisseur inconnu."));
+    }
+    let return_id = new_id("sret");
+    tx.execute(
+        "INSERT INTO supplier_returns (id, branch_id, supplier_id, reason, status, created_at)
+         VALUES (?1,?2,?3,?4,'REGISTERED',?5)",
+        params![return_id, a.branch_id, supplier, reason, now_ms()],
+    )?;
+    let mut total_fcfa = 0i64;
+    for line in lines {
+        let variant = field_str(line, "variant_id")?;
+        let qty = field_i64(line, "qty")?;
+        let price = field_i64(line, "unit_price_fcfa")?;
+        if qty <= 0 || price < 0 {
+            return Err(CoreError::new("INVALID_RETURN_QTY", "Quantité positive et prix valide requis."));
+        }
+        let (pack_size, current): (i64, i64) = tx.query_row(
+            "SELECT v.pack_size, COALESCE(s.full_units_qty,0)
+             FROM product_variants v LEFT JOIN stock_balances s
+               ON s.branch_id=?1 AND s.variant_id=v.id WHERE v.id=?2",
+            params![a.branch_id, variant],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let units = checked_mul(pack_size, qty, "retour fournisseur")?;
+        if units > current {
+            return Err(CoreError::new("STOCK_INSUFFICIENT", "Stock insuffisant pour ce retour."));
+        }
+        total_fcfa = checked_add(total_fcfa, checked_mul(price, qty, "montant retour")?, "total retour")?;
+        tx.execute(
+            "UPDATE stock_balances SET full_units_qty=full_units_qty-?1, server_revision=server_revision+1
+             WHERE branch_id=?2 AND variant_id=?3",
+            params![units, a.branch_id, variant],
+        )?;
+        tx.execute(
+            "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+             VALUES (?1,?2,?3,'SUPPLIER_RETURN',?4,?5,?6,?7,?8,?9)",
+            params![new_id("smov"), a.branch_id, variant, -units, reason, return_id, a.user_id, a.device_id, now_ms()],
+        )?;
+    }
+    tx.execute(
+        "UPDATE suppliers SET financial_debt_fcfa=MAX(0, financial_debt_fcfa-?1) WHERE id=?2",
+        params![total_fcfa, supplier],
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "SUPPLIER_RETURN", &format!("{return_id}: {total_fcfa} FCFA"))?;
+    db::enqueue(
+        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "SUPPLIER_RETURN",
+        &format!("Retour {supplier} ({total_fcfa} FCFA)"), &json!({
+            "return_id": return_id, "supplier_id": supplier, "lines": lines, "total_fcfa": total_fcfa
+        }).to_string(), 1, &new_id("idem"),
+    )?;
+    tx.commit()?;
+    Ok(json!({ "return_id": return_id, "total_fcfa": total_fcfa, "status": "REGISTERED" }))
 }
 
 /// Assistant d'écart : jamais de validation automatique des quantités manquantes.
@@ -2755,6 +2830,7 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "registerPackagingReturn" | "register_packaging_return" => register_packaging_return(conn, payload),
         "createPurchaseOrder" | "create_purchase_order" => create_purchase_order(conn, payload),
         "receivePurchase" | "receive_purchase" => receive_purchase(conn, payload),
+        "recordSupplierReturn" | "record_supplier_return" => record_supplier_return(conn, payload),
         "getPurchaseVariance" | "get_purchase_variance" => get_purchase_variance(conn, payload),
         "getInventory" | "get_inventory" => get_inventory(conn, payload),
         "recordInventoryCount" | "record_inventory_count" => record_inventory_count(conn, payload),
