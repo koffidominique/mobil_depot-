@@ -16,6 +16,13 @@ import type {
   PaymentInput,
   CartLineInput,
   SyncAcknowledgement,
+  CrateTypeInfo,
+  PurchaseOrderRecord,
+  SaleReceipt,
+  CashSession,
+  SalesReport,
+  SupplierAccount,
+  SyncConflict,
 } from './types';
 
 export class CoreError extends Error {
@@ -88,9 +95,7 @@ export const depot = {
     call<CustomerAccount>('getCustomerAccount', { customer_id: customerId }),
 
   getSupplierAccount: (supplierId: string) =>
-    call<{ supplier_id: string; name: string; debt_fcfa: number }>('getSupplierAccount', {
-      supplier_id: supplierId,
-    }),
+    call<SupplierAccount>('getSupplierAccount', { supplier_id: supplierId }),
 
   validateSale: (input: {
     customer_id: string | null;
@@ -141,6 +146,27 @@ export const depot = {
     reference: string | null;
   }) => call<{ status: string; amount_fcfa: number }>('recordPayment', input),
 
+  getCrateTypes: () => call<{ crate_types: CrateTypeInfo[] }>('getCrateTypes'),
+  getPurchaseOrders: () => call<{ orders: PurchaseOrderRecord[] }>('getPurchaseOrders'),
+  getSaleReceipt: (saleId: string) =>
+    call<SaleReceipt>('getSaleReceipt', { sale_id: saleId }),
+  getCashSession: () => call<CashSession>('getCashSession'),
+  openCashSession: (openingFloatFcfa: number) =>
+    call<CashSession>('openCashSession', { opening_float_fcfa: openingFloatFcfa }),
+  recordCashMovement: (input: {
+    movement_type: 'IN' | 'OUT' | 'EXPENSE';
+    amount_fcfa: number;
+    label: string;
+    category?: string;
+  }) => call<{ status: string; expected_closing_fcfa: number }>('recordCashMovement', input),
+  closeCashSession: (countedFcfa: number) =>
+    call<{ status: string; variance_fcfa: number; counted_fcfa: number }>('closeCashSession', {
+      counted_fcfa: countedFcfa,
+    }),
+  getReports: () => call<SalesReport>('getReports'),
+  getConflicts: () => call<{ conflicts: SyncConflict[] }>('getConflicts'),
+  resetStaleSyncing: (staleBeforeMs: number) =>
+    call<{ reset: number }>('resetStaleSyncing', { stale_before_ms: staleBeforeMs }),
   getPendingOperations: () => call<{ operations: SyncOperation[] }>('getPendingOperations'),
   startSynchronization: () =>
     call<{ operations: SyncOperation[]; server_sequence: number; server_url: string }>(

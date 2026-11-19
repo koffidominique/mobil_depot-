@@ -6,35 +6,34 @@ import { Card, Screen, useColors } from '../components/ui';
 import type { RootStackParamList } from '../navigation/types';
 import { useAppStore } from '../store/useAppStore';
 
+type Destination = Exclude<keyof RootStackParamList, 'Login' | 'Main'>;
+
 export function MenuScreen() {
   const c = useColors();
   const session = useAppStore((state) => state.session);
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
-  const entries = [
-    { label: 'Achats & réceptions', detail: 'Bons de commande, écarts et retours fournisseurs' },
-    { label: 'Fournisseurs', detail: 'Dettes et comptes emballages séparés' },
-    { label: 'Caisse', detail: 'Ouverture, fond, encaissements et clôture' },
-    { label: 'Rapports', detail: 'CA, marge estimée, créances et emballages' },
-    { label: 'Catalogue', detail: 'Produits, variantes et formats de casiers' },
+  const entries: Array<{ label: string; detail: string; screen: Destination }> = [
+    { label: 'Achats & réceptions', detail: 'Bons de commande, écarts et retours fournisseurs', screen: 'Purchases' },
+    { label: 'Fournisseurs', detail: 'Dettes et comptes emballages séparés', screen: 'Suppliers' },
+    { label: 'Caisse', detail: 'Ouverture, fond, encaissements et clôture', screen: 'Cash' },
+    { label: 'Rapports', detail: 'CA, encaissements, créances et emballages', screen: 'Reports' },
+    { label: 'Catalogue', detail: 'Produits, variantes et formats de casiers', screen: 'Catalog' },
+    { label: 'Reçus', detail: 'Reçus commerciaux et état de synchronisation', screen: 'Receipts' },
+    { label: 'Synchronisation & paramètres', detail: 'Appareils, conflits et serveur Axum', screen: 'Sync' },
   ];
 
   return (
     <Screen title="Menu" subtitle={`${session?.full_name ?? 'Utilisateur'} · ${session?.role ?? ''}`}>
       <Card>
         {entries.map((entry) => (
-          <View key={entry.label} style={{ paddingVertical: 8 }}>
-            <Text style={{ color: c.text, fontWeight: '700' }}>{entry.label}</Text>
-            <Text style={{ color: c.subtitle, fontSize: 12 }}>{entry.detail}</Text>
-          </View>
+          <Pressable key={entry.screen} onPress={() => navigation.navigate(entry.screen)}>
+            <View style={{ paddingVertical: 10 }}>
+              <Text style={{ color: c.primary, fontWeight: '700' }}>{entry.label} →</Text>
+              <Text style={{ color: c.subtitle, fontSize: 12 }}>{entry.detail}</Text>
+            </View>
+          </Pressable>
         ))}
-      </Card>
-      <Card>
-        <Pressable onPress={() => navigation.navigate('Sync')}>
-          <Text style={{ color: c.primary, fontWeight: '800' }}>
-            Synchronisation & paramètres →
-          </Text>
-        </Pressable>
       </Card>
     </Screen>
   );

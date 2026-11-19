@@ -1,6 +1,6 @@
 import NetInfo from '@react-native-community/netinfo';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { depot } from '../core/client';
+import { depot, getAuthToken } from '../core/client';
 import type { SyncAcknowledgement, SyncOperation } from '../core/types';
 import { useAppStore } from '../store/useAppStore';
 
@@ -28,11 +28,36 @@ export function useSyncStatus() {
   return useQuery({ queryKey: ['sync-status'], queryFn: () => depot.getSynchronizationStatus(), refetchInterval: 8000 });
 }
 
+export function useCrateTypes() {
+  return useQuery({ queryKey: ['crate-types'], queryFn: () => depot.getCrateTypes() });
+}
+
+export function usePurchaseOrders() {
+  return useQuery({ queryKey: ['purchase-orders'], queryFn: () => depot.getPurchaseOrders() });
+}
+
+export function useCashSession() {
+  return useQuery({ queryKey: ['cash-session'], queryFn: () => depot.getCashSession() });
+}
+
+export function useReports() {
+  return useQuery({ queryKey: ['reports'], queryFn: () => depot.getReports() });
+}
+
+export function useConflicts() {
+  return useQuery({ queryKey: ['conflicts'], queryFn: () => depot.getConflicts(), refetchInterval: 15000 });
+}
+
 export interface SyncReport {
   pushed: number;
   conflicts: number;
   serverSequence: number;
   message: string;
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function toEnvelope(op: SyncOperation) {
@@ -59,6 +84,7 @@ export function useSynchronization() {
 
   return useMutation<SyncReport, Error, void>({
     mutationFn: async () => {
+      await depot.resetStaleSyncing(Date.now() - 10 * 60 * 1000);
       const started = await depot.startSynchronization();
       if (!started.server_url) {
         throw new Error(
@@ -78,7 +104,7 @@ export function useSynchronization() {
       if (started.operations.length > 0) {
         const pushResponse = await fetch(`${base}/api/v1/sync/push`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({
             device_id: started.operations[0]?.device_id ?? '',
             branch_id: started.operations[0]?.branch_id ?? '',
@@ -109,6 +135,7 @@ export function useSynchronization() {
         `${base}/api/v1/sync/pull?branch_id=${encodeURIComponent(
           started.operations[0]?.branch_id ?? '',
         )}&since_sequence=${cursor}&limit=100`,
+        { headers: authHeaders() },
       );
       if (!pullResponse.ok) throw new Error(`Pull Axum refusé (HTTP ${pullResponse.status}).`);
       const pull = (await pullResponse.json()) as { server_sequence?: number };
@@ -119,6 +146,7 @@ export function useSynchronization() {
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory'] }),
         queryClient.invalidateQueries({ queryKey: ['sync-status'] }),
+        queryClient.invalidateQueries({ queryKey: ['conflicts'] }),
       ]);
       notify('Synchronisation terminée : les conflits restent visibles et résolubles.');
       return { pushed, conflicts, serverSequence: cursor, message: 'Synchronisation terminée.' };

@@ -19,6 +19,12 @@ import { CustomersScreen } from './screens/CustomersScreen';
 import { MenuScreen } from './screens/MenuScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { SyncScreen } from './screens/SyncScreen';
+import { PurchasesScreen } from './screens/PurchasesScreen';
+import { SuppliersScreen } from './screens/SuppliersScreen';
+import { CashScreen } from './screens/CashScreen';
+import { ReportsScreen } from './screens/ReportsScreen';
+import { CatalogScreen } from './screens/CatalogScreen';
+import { ReceiptsScreen } from './screens/ReceiptsScreen';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 5000 } },
@@ -109,6 +115,12 @@ function Bootstrap() {
               component={SyncScreen}
               options={{ headerShown: true, title: 'Synchronisation & paramètres' }}
             />
+            <Stack.Screen name="Purchases" component={PurchasesScreen} options={{ headerShown: true, title: 'Achats & réceptions' }} />
+            <Stack.Screen name="Suppliers" component={SuppliersScreen} options={{ headerShown: true, title: 'Fournisseurs' }} />
+            <Stack.Screen name="Cash" component={CashScreen} options={{ headerShown: true, title: 'Caisse' }} />
+            <Stack.Screen name="Reports" component={ReportsScreen} options={{ headerShown: true, title: 'Rapports' }} />
+            <Stack.Screen name="Catalog" component={CatalogScreen} options={{ headerShown: true, title: 'Catalogue' }} />
+            <Stack.Screen name="Receipts" component={ReceiptsScreen} options={{ headerShown: true, title: 'Reçus' }} />
           </>
         ) : (
           <Stack.Screen name="Login" component={LoginScreen} />

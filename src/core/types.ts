@@ -191,3 +191,84 @@ export interface SyncAcknowledgement {
   conflict_type?: string | null;
   message?: string | null;
 }
+
+export interface CrateTypeInfo {
+  crate_type_id: string;
+  code: string;
+  capacity: number;
+  compatibility_group_id: string;
+  allow_half_case: boolean;
+  replacement_value_fcfa: number;
+  empty_crates_qty: number;
+}
+
+export interface PurchaseOrderRecord {
+  order_id: string;
+  reference: string;
+  total_fcfa: number;
+  status: string;
+  created_at: number;
+  supplier_name: string;
+  received_fcfa: number;
+}
+
+export interface SaleReceipt {
+  sale_id: string;
+  receipt_number: string;
+  customer_name: string;
+  subtotal_fcfa: number;
+  discount_fcfa: number;
+  total_fcfa: number;
+  paid_confirmed_fcfa: number;
+  pending_mobile_money_fcfa: number;
+  credit_fcfa: number;
+  sync_status: string;
+  is_receipt_not_invoice: boolean;
+  lines: Array<{
+    variant_name: string;
+    unit: string;
+    unit_count: number;
+    physical_units: number;
+    unit_price_fcfa: number;
+    line_total_fcfa: number;
+  }>;
+}
+
+export interface CashSession {
+  session_id: string | null;
+  opening_float_fcfa: number;
+  expected_closing_fcfa: number;
+  opened_at: number;
+}
+
+export interface SalesReport {
+  revenue_fcfa: number;
+  cash_collected_fcfa: number;
+  credits_fcfa: number;
+  expenses_fcfa: number;
+  estimated_margin_fcfa: number;
+  receivables_fcfa: number;
+  supplier_debts_fcfa: number;
+  stock_value_fcfa: number;
+  confirms_revenue_not_cash: boolean;
+  by_product: Array<{
+    variant_name: string;
+    revenue_fcfa: number;
+    bottles_sold: number;
+  }>;
+}
+
+export interface SupplierAccount extends Supplier {
+  total_purchased_fcfa: number;
+  total_paid_fcfa: number;
+  debt_fcfa: number;
+}
+
+export interface SyncConflict {
+  conflict_id: string;
+  operation_id: string;
+  conflict_type: string;
+  server_reason: string;
+  status: string;
+  created_at: number;
+}
