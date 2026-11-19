@@ -328,3 +328,14 @@
 - **Guides ajoutés** : installation/développement, synchronisation, sauvegarde/restauration, déploiement serveur.
 - **Validation réexécutée** : tsc, web:typecheck, ESLint, Jest 15 suites/48 tests, syntaxe Rust, codegen, bundle, aperçu JSDOM, `git diff --check` : OK.
 - **Non exécuté** : `cargo test`, builds natifs, E2E appareils, tests de charge, synchronisation réelle inter-appareils.
+
+
+## LOT 39 — PARTIE 15 : sécurité effective et livrables finaux
+
+- **PIN** : migration additive 10 (`pin_salt`, `pin_kdf`), PBKDF2-HMAC-SHA256 avec sel par utilisateur, `changePin` atomique sous `BEGIN IMMEDIATE`, migration opportuniste des hashes SHA-256 legacy, audit.
+- **Sauvegardes** : `backupDatabase` applique réellement `security.backup_encryption_required` ; enveloppe chiffrée `.dpbkp` (PBKDF2-HMAC-SHA256 + HMAC en mode compteur + MAC), restauration avec vérification d'intégrité avant écriture. Nouveau module `rust/src/crypto.rs`.
+- **Schéma** : `schema_version: 10` ; tests 7/9/11/12/13 adaptés ; client TypeScript et écran de paramètres mis à jour.
+- **Parent** : points 15–19 non modifiés depuis cette branche ; patches vérifiés dans `parent-remediation/` (Tauri/Vite, Playwright, CI mobile).
+- **Livrables** : `docs/PART15_DELIVERABLES.md` dresse l'inventaire des 20 éléments et l'état réel des critères finaux.
+- **Validation** : tsc, web:typecheck, ESLint, Jest 16 suites/51 tests, syntaxe Rust, codegen, bundle, aperçu JSDOM et `git diff --check` OK.
+- **Non exécuté** : `cargo test`, `cargo fmt`, `cargo clippy`, builds Android/iOS, E2E natifs, sync réelle inter-appareils.

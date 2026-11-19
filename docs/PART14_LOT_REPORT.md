@@ -60,8 +60,8 @@ Non exécutés : `cargo test`, Gradle/Android, Xcode/iOS, Maestro/Detox, tests d
 
 1. **Blocage externe** : absence de routes `/api/v1/sync/*` dans le parent ; aucune validation inter-appareils possible.
 2. **Toolchains absentes** : Rust, JDK, Android SDK et Xcode indisponibles dans cet environnement.
-3. **Sécurité résiduelle** : sauvegardes non chiffrées et PIN sans KDF salé (voir `docs/PART13_AUDIT.md`).
-4. **Portée hors dépôt** : Express/Tauri/Playwright du parent non modifiés.
+3. **Sécurité corrigée mais non compilée ici** : sauvegardes chiffrées et PIN salé en LOT 39 ; `cargo test` et audit cryptographique restent requis (voir `docs/PART13_AUDIT.md`).
+4. **Portée hors dépôt** : Express/Tauri/Playwright du parent non modifiés ; patches proposés dans `parent-remediation/`.
 5. **Aperçu web** : utile pour les écrans, mais ne prouve ni la compilation native ni la synchronisation.
 
 ## 6. Prochaine étape

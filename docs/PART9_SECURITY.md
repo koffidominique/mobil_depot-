@@ -38,3 +38,9 @@ Mesures retenues : jetons dans le trousseau natif, PIN haché (SHA-256 dans le m
 `rust/tests/part9_security.rs` vérifie : politique, surcharge_branch sur `*`, refus de modification par CASHIER, rotation/révocation/verrouillage, verrouillage anti brute force, absence de PIN dans le journal, révocation d'appareil et refus de sauvegarde pour MANAGER. `__tests__/part9-security.test.ts` couvre HTTPS, expiration, auto-lock et les contrats de session.
 
 Rust : syntaxe validée par tree-sitter ; **`cargo test` non exécuté ici** (toolchain absente). La CI `ubuntu-latest` exécute les tests. Le hachage SHA-256 sans sel du PIN hérité du jeu pilote doit être remplacé avant production ; aucun secret réel n'est utilisé dans ce dépôt.
+
+## Mise à jour — LOT 39
+
+- Migration additive 10 : `users.pin_salt`, `users.pin_kdf`. Les anciens hashes SHA-256 restent lisibles (`SHA256_LEGACY`) et sont convertis automatiquement lors d'une authentification ou d'un déverrouillage réussis.
+- `changePin` vérifie l'ancien PIN sous `BEGIN IMMEDIATE`, génère un nouveau sel et écrit le hash dérivé ; chaque changement est audité.
+- Les comptes du jeu pilote sont créés directement en `PBKDF2_SHA256`. Le code de test `rust/tests/part15_security.rs` couvre le changement de PIN, la migration legacy et la politique de sauvegarde chiffrée.

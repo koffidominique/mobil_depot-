@@ -37,6 +37,8 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - [Guide de synchronisation](docs/SYNC_GUIDE.md)
 - [Sauvegarde et restauration](docs/BACKUP_RESTORE.md)
 - [Déploiement serveur](docs/DEPLOYMENT.md)
+- [Livrables obligatoires](docs/PART15_DELIVERABLES.md)
+- [Correctifs proposés au parent](parent-remediation/README.md)
 - [Cahier de développement](prompt.md)
 
 ## Règles non négociables
@@ -44,6 +46,7 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - Montants FCFA stockés et calculés en entiers (`i64` côté Rust).
 - Aucune quantité fractionnaire de bouteille.
 - Aucune écriture commerciale confirmée avant commit SQLite local + entrée `sync_outbox`.
+- PIN dérivé par PBKDF2-HMAC-SHA256 avec sel aléatoire (migration 10) ; sauvegardes chiffrées quand la politique l’exige.
 - Aucun conflit de synchronisation masqué.
 - HTTPS obligatoire pour le serveur Axum central.
 - Les ventes, paiements et mouvements d'emballages sont des faits immuables : aucune résolution « dernière modification gagnante ».

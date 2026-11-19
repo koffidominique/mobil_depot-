@@ -4,8 +4,8 @@
 
 | Commande | Effet |
 | --- | --- |
-| `backupDatabase` | `VACUUM INTO <destination>` ; destination par défaut dans le répertoire temporaire du système (`<base>.backup-<horodatage>`). Réservé aux administrateurs. |
-| `restoreDatabase` | Copie de sécurité `<base>.before-restore-<horodatage>`, remplacement de la base puis réouverture avec migrations. Réservé aux administrateurs. |
+| `backupDatabase(passphrase?)` | `VACUUM INTO` puis chiffrement de l'enveloppe (PBKDF2-HMAC-SHA256 + HMAC en mode compteur + MAC). La phrase est obligatoire quand `security.backup_encryption_required = true`. Réservé aux administrateurs. |
+| `restoreDatabase(source, passphrase?)` | Vérification du MAC, déchiffrement dans un temporaire, copie de sécurité `<base>.before-restore-<horodatage>`, remplacement puis réouverture avec migrations. Réservé aux administrateurs. |
 
 Les fichiers générés ne sont pas versionnés (`.gitignore` couvre `*.db`, `*.sqlite`, WAL et SHM).
 
@@ -19,8 +19,9 @@ Les fichiers générés ne sont pas versionnés (`.gitignore` couvre `*.db`, `*.
 
 ## 3. Limites actuelles
 
-- **Les sauvegardes ne sont pas chiffrées.** Le paramètre `security.backup_encryption_required` est déclaratif et n'est pas appliqué à `VACUUM INTO`. Ne pas stocker de sauvegarde non chiffrée sur un support partagé.
-- Aucune restauration chiffrée ni test de restauration sur appareil réel n'a été exécuté ici ; `part12_sync_sqlite.rs` couvre uniquement la sauvegarde/restauration locale dans le moteur.
+- Le chiffrement est désormais appliqué quand la politique l'exige : une sauvegarde sans phrase est refusée avec `BACKUP_ENCRYPTION_REQUIRED`. Le format `.dpbkp` contient sel, nonce, itérations, ciphertext et MAC ; une altération est refusée avec `BACKUP_AUTHENTICATION_FAILED`.
+- Les primitives sont implémentées dans `rust/src/crypto.rs` avec `sha2` déjà présent, sans nouvelle dépendance native. Cette construction standard doit encore être auditée par un spécialiste et validée par `cargo test` avant production.
+- Aucun test de restauration sur appareil réel n'a été exécuté ici ; `part15_security.rs` couvre le cycle chiffrement/déchiffrement et détection d'altération dans le moteur.
 - La restauration remplace la base locale : elle ne réconcilie pas automatiquement les opérations déjà poussées sur le serveur. Vérifier le curseur et les accusés après restauration.
 
 ## 4. Tests
