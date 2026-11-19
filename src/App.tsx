@@ -3,13 +3,14 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Text, View, type AppStateStatus } from 'react-native';
+import { ActivityIndicator, AppState, Platform, Text, View, type AppStateStatus } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import RNFS from 'react-native-fs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { FeedbackToast } from './components/ui';
 import { depot } from './core/client';
 import { DEFAULT_AUTO_LOCK_MS, shouldAutoLock } from './core/security';
+import { shouldSeedDemo } from './core/environment';
 import { useSyncStatus, useSynchronization } from './hooks/useCore';
 import { restoreSession } from './core/session';
 import { useAppStore } from './store/useAppStore';
@@ -143,7 +144,7 @@ function Bootstrap() {
     const start = async () => {
       try {
         const dbPath = `${RNFS.DocumentDirectoryPath}/depotpro_local.db`;
-        await depot.initializeDatabase(dbPath);
+        await depot.initializeDatabase(dbPath, shouldSeedDemo(Platform.OS));
         const restored = await restoreSession();
         if (mounted) setSession(restored);
       } catch (error) {

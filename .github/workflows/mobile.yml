@@ -37,7 +37,7 @@ jobs:
     name: Android build (requires NDK artifacts)
     runs-on: ubuntu-latest
     needs: [typescript, rust]
-    if: false
+    if: vars.ANDROID_NDK_READY == 'true'
     steps:
       - uses: actions/checkout@v4
       # À activer seulement après configuration des artefacts Rust Android et du SDK dans le runner.
