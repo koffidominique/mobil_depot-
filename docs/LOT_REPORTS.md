@@ -348,3 +348,11 @@
 - **Règle 24** : `docs/API_COMPATIBILITY.md` documente les changements de signatures et la migration 10.
 - **Rapport** : `docs/PART16_RULES.md` audite les 25 règles avec preuves et limites.
 - **Validation** : tsc, web:typecheck, ESLint, Jest 17 suites/52 tests, syntaxe Rust, codegen, bundle, aperçu JSDOM, `git diff --check` : OK.
+
+
+## LOT 41 — PARTIE 17 : acceptation finale
+
+- **Script reproductible** : `scripts/verify-acceptance.sh` (`npm run verify:acceptance`) sépare les critères exécutables des critères natifs/synchronisation marqués `SKIP`.
+- **Rapport** : `docs/PART17_ACCEPTANCE.md` évalue chaque critère des sections application, métier, hors ligne, intégration et fiabilité.
+- **Décision** : **non accepté pour production pilote** ; les critères exécutables passent, mais builds natifs, E2E, sync réelle et audit crypto restent à faire.
+- **Validation locale** : 9 contrôles PASS, 6 catégories SKIP, aucune réussite annoncée sans exécution.

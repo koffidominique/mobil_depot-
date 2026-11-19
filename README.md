@@ -39,6 +39,7 @@ Pour iOS : `npm run rust:ios` sur macOS puis `npm run ios`.
 - [Déploiement serveur](docs/DEPLOYMENT.md)
 - [Livrables obligatoires](docs/PART15_DELIVERABLES.md)
 - [Règles strictes de développement](docs/PART16_RULES.md)
+- [Critères finaux d’acceptation](docs/PART17_ACCEPTANCE.md)
 - [Compatibilité des API](docs/API_COMPATIBILITY.md)
 - [Correctifs proposés au parent](parent-remediation/README.md)
 - [Cahier de développement](prompt.md)
