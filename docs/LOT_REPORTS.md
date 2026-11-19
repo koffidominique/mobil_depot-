@@ -245,3 +245,13 @@
 - **Toolchains** : `scripts/verify-toolchains.sh` et script npm `verify:toolchains` indiquent explicitement les outils absents ; CI exécute `cargo test` sur ubuntu-latest et vérifie le codegen des deux modules.
 - **Vérifications** : tsc OK, Jest 8 suites/30 tests, ESLint OK, codegen OK, bundle OK, tree-sitter Rust OK, `git diff --check` OK.
 - **Non exécuté** : `cargo test` et builds natifs (cargo/java/gradle/xcodebuild absents constatés par le script).
+
+
+## LOT 30 — PARTIE 7 : modèle de données et migrations
+
+- **Audit avant migration** : correspondance systématique entre les entités demandées et les tables existantes, sans duplication ; les noms manquants sont des tables de référence ou des vues (`docs/PART7_SCHEMA.md`).
+- **MIGRATION_7** : `roles`, `permissions`, `user_branch_access`, `brands`, `product_categories`, `products`, `product_variant_links`, `crate_compatibility_groups`, `packaging_units`, `price_lists`, `product_packaging_options`, `mixed_case_groups`, `mixed_case_lines`, `supplier_returns`, `sync_inbox` ; vues `customer_accounts`, `supplier_accounts`, `receipts`, `customer_credits`, `inventory_adjustments`, `packaging_*`, `cash_transactions`, `sync_operations`, `idempotency_keys`.
+- **Contraintes** : triggers anti-flottants/anti-quantités fractionnaires surventes, paiements, prix et stock ; index sur les nouvelles relations ; `schema_version = 7`.
+- **Tests** : `rust/tests/part7_schema.rs` couvre base neuve, ancienne base rétrogradée, données de vente/achat/emballage/sync conservées et refus des écritures invalides.
+- **Vérifications** : tsc OK, Jest 9 suites/31 tests, ESLint OK, codegen OK, tree-sitter Rust OK, `git diff --check` OK.
+- **Non exécuté** : `cargo test` (toolchain absente) ; CI ubuntu-latest exécute les tests Rust.
