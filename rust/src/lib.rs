@@ -32,7 +32,7 @@ fn execute_inner(input: &str) -> CoreResult<String> {
         let mut path_guard = DB_PATH.get_or_init(|| Mutex::new(String::new())).lock()
             .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?;
         *path_guard = path.to_string();
-        return Ok(json!({"ok": true, "data": {"database": path, "schema_version": 4}}).to_string());
+        return Ok(json!({"ok": true, "data": {"database": path, "schema_version": 5}}).to_string());
     }
 
     if command == "backupDatabase" || command == "backup_database" {

@@ -1,10 +1,12 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
 import { formatLastSync } from '../core/offline';
 import { SyncIndicator } from '../components/SyncIndicator';
 import { depot } from '../core/client';
+import { listDevices, revokeDevice } from '../core/adminApi';
+import { formatTimestamp } from '../core/format';
 import { useConflicts, useSyncStatus, useSynchronization } from '../hooks/useCore';
 import { useAppStore } from '../store/useAppStore';
 
@@ -37,6 +39,26 @@ export function SyncScreen() {
     onError: (err: Error) => setError(err.message),
   });
   const canResolve = ['OWNER', 'ADMIN', 'MANAGER'].includes(session?.role ?? '');
+  const isAdmin = ['OWNER', 'ADMIN'].includes(session?.role ?? '');
+  const configuredServerUrl = status.data?.server_url ?? '';
+  const devices = useQuery({
+    queryKey: ['devices', configuredServerUrl],
+    queryFn: () => listDevices(configuredServerUrl),
+    enabled: isAdmin && Boolean(configuredServerUrl),
+    retry: false,
+  });
+  const history = useQuery({
+    queryKey: ['sync-history'],
+    queryFn: () => depot.getSyncHistory(),
+  });
+  const revoke = useMutation({
+    mutationFn: (deviceId: string) => revokeDevice(configuredServerUrl, deviceId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['devices'] });
+      notify('Appareil révoqué côté serveur.');
+    },
+    onError: (err: Error) => setError(err.message),
+  });
 
   const saveServer = useMutation({
     mutationFn: () => depot.configureSyncServer(serverUrl),
@@ -186,6 +208,51 @@ export function SyncScreen() {
           onPress={() => restore.mutate()}
         />
         <Banner tone="info" message={ioMessage} />
+      </Card>
+
+      <Card>
+        <Text style={{ color: c.text, fontWeight: '800' }}>Appareils autorisés</Text>
+        {isAdmin ? (
+          <>
+            {(devices.data ?? []).map((device) => (
+              <View key={device.device_id}>
+                <Row
+                  label={`${device.name} · ${device.device_id}`}
+                  value={device.is_authorized ? 'autorisé' : 'révoqué'}
+                />
+                {device.is_authorized ? (
+                  <Pressable onPress={() => revoke.mutate(device.device_id)}>
+                    <Text style={{ color: c.danger, fontWeight: '700' }}>Révoquer</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ))}
+            {devices.isError ? <Banner message={devices.error.message} /> : null}
+          </>
+        ) : (
+          <Text style={{ color: c.subtitle }}>Réservé à OWNER et ADMIN.</Text>
+        )}
+      </Card>
+
+      <Card>
+        <Text style={{ color: c.text, fontWeight: '800' }}>Historique local</Text>
+        {(history.data?.audit ?? []).slice(0, 20).map((entry, index) => (
+          <Row
+            key={`${entry.action}-${index}`}
+            label={`${entry.action} · ${entry.details}`}
+            value={formatTimestamp(entry.occurred_at)}
+          />
+        ))}
+        {(history.data?.operations ?? []).slice(0, 20).map((op) => (
+          <Row
+            key={op.operation_id}
+            label={`${op.command_type} · ${op.status}`}
+            value={op.synced_at ? formatTimestamp(op.synced_at) : 'en attente'}
+          />
+        ))}
+        {(history.data?.audit.length ?? 0) + (history.data?.operations.length ?? 0) === 0 ? (
+          <Text style={{ color: c.subtitle }}>Aucune activité de synchronisation.</Text>
+        ) : null}
       </Card>
 
       <Card>

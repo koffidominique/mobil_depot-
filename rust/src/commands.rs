@@ -667,6 +667,30 @@ pub fn get_dashboard(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let pending: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sync_outbox WHERE status IN ('PENDING','FAILED','SYNCING')", [], |r| r.get(0),
     )?;
+    let collected: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(amount_fcfa),0) FROM payments WHERE status='CONFIRMED' AND occurred_at >= ?1",
+        params![day_start], |r| r.get(0),
+    )?;
+    let expenses: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(amount_fcfa),0) FROM expenses WHERE branch_id=?1 AND occurred_at >= ?2",
+        params![a.branch_id, day_start], |r| r.get(0),
+    )?;
+    let credits_granted: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(credit_fcfa),0) FROM sales WHERE branch_id=?1 AND occurred_at >= ?2",
+        params![a.branch_id, day_start], |r| r.get(0),
+    )?;
+    let out_of_stock: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM stock_balances WHERE branch_id=?1 AND full_units_qty <= 0",
+        params![a.branch_id], |r| r.get(0),
+    )?;
+    let packaging_alerts: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM packaging_expectations WHERE branch_id=?1 AND received_qty < expected_qty",
+        params![a.branch_id], |r| r.get(0),
+    )?;
+    let confirmed_ca: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(total_fcfa),0) FROM sales WHERE branch_id=?1 AND occurred_at >= ?2 AND sync_status='SYNCED'",
+        params![a.branch_id, day_start], |r| r.get(0),
+    )?;
     Ok(json!({
         "daily_revenue_fcfa": ca,
         "daily_sales_count": sales_count,
@@ -675,6 +699,13 @@ pub fn get_dashboard(conn: &Connection, payload: &Value) -> CoreResult<Value> {
         "stock_value_fcfa": stock_value,
         "low_stock_alerts": low_stock,
         "pending_sync_operations": pending,
+        "collected_fcfa": collected,
+        "expenses_fcfa": expenses,
+        "credits_granted_fcfa": credits_granted,
+        "out_of_stock_alerts": out_of_stock,
+        "packaging_alerts": packaging_alerts,
+        "confirmed_revenue_fcfa": confirmed_ca,
+        "local_revenue_fcfa": ca - confirmed_ca,
         "branch_id": a.branch_id
     }))
 }
@@ -682,7 +713,7 @@ pub fn get_dashboard(conn: &Connection, payload: &Value) -> CoreResult<Value> {
 pub fn get_inventory(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
     let mut stmt = conn.prepare(
-        "SELECT v.id, v.name, v.brand, v.volume_label, v.container_type, v.material, v.pack_size, v.retail_bottle_fcfa, v.retail_case_fcfa, v.wholesale_case_fcfa, v.bottle_profile_id, v.crate_type_id, bp.compatibility_group_id, s.full_units_qty, s.min_alert_units FROM stock_balances s JOIN product_variants v ON v.id = s.variant_id LEFT JOIN bottle_profiles bp ON bp.id = v.bottle_profile_id WHERE s.branch_id = ?1 AND v.is_active = 1 ORDER BY v.name",
+        "SELECT v.id, v.name, v.brand, v.volume_label, v.container_type, v.material, v.pack_size, v.retail_bottle_fcfa, v.retail_case_fcfa, v.wholesale_case_fcfa, v.bottle_profile_id, v.crate_type_id, bp.compatibility_group_id, s.full_units_qty, s.min_alert_units, v.category FROM stock_balances s JOIN product_variants v ON v.id = s.variant_id LEFT JOIN bottle_profiles bp ON bp.id = v.bottle_profile_id WHERE s.branch_id = ?1 AND v.is_active = 1 ORDER BY v.name",
     )?;
     let rows = stmt.query_map(params![a.branch_id], |r| {
         Ok(json!({
@@ -700,7 +731,8 @@ pub fn get_inventory(conn: &Connection, payload: &Value) -> CoreResult<Value> {
             "crate_type_id": r.get::<_, Option<String>>(11)?,
             "compatibility_group_id": r.get::<_, Option<String>>(12)?,
             "full_units_qty": r.get::<_, i64>(13)?,
-            "min_alert_units": r.get::<_, i64>(14)?
+            "min_alert_units": r.get::<_, i64>(14)?,
+            "category": r.get::<_, Option<String>>(15)?
         }))
     })?;
     let mut items = Vec::new();
@@ -781,6 +813,82 @@ pub fn get_supplier_account(conn: &Connection, payload: &Value) -> CoreResult<Va
     ).optional()?;
     let (name, purchased, paid, debt) = row.ok_or_else(|| CoreError::new("SUPPLIER_NOT_FOUND", "Fournisseur introuvable."))?;
     Ok(json!({"supplier_id": id, "name": name, "total_purchased_fcfa": purchased, "total_paid_fcfa": paid, "debt_fcfa": debt}))
+}
+
+/// Inventaire physique : la correction est une écriture justifiée, jamais une
+/// modification silencieuse du stock.
+pub fn record_inventory_count(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    if !matches!(a.role.as_str(), "OWNER" | "ADMIN" | "MANAGER") {
+        return Err(CoreError::new("ROLE_FORBIDDEN", "Inventaire réservé aux rôles de gestion."));
+    }
+    let variant_id = field_str(payload, "variant_id")?;
+    let counted = field_i64(payload, "counted_qty")?;
+    if counted < 0 {
+        return Err(CoreError::new("INVALID_QUANTITY", "Quantité comptée invalide."));
+    }
+    let reason = field_str(payload, "reason")?.trim().to_string();
+    if reason.len() < 3 {
+        return Err(CoreError::new("REASON_REQUIRED", "Un motif d'inventaire est obligatoire."));
+    }
+    let tx = conn.unchecked_transaction()?;
+    let current: i64 = tx.query_row(
+        "SELECT full_units_qty FROM stock_balances WHERE branch_id=?1 AND variant_id=?2",
+        params![a.branch_id, variant_id], |r| r.get(0),
+    ).optional()?.unwrap_or(0);
+    let difference = counted - current;
+    let id = new_id("inv");
+    tx.execute(
+        "INSERT INTO inventory_counts (id, branch_id, variant_id, counted_qty, difference_qty, reason, user_id, device_id, occurred_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![id, a.branch_id, variant_id, counted, difference, reason, a.user_id, a.device_id, now_ms()],
+    )?;
+    tx.execute(
+        "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+         VALUES (?1,?2,?3,'INVENTORY_ADJUSTMENT',?4,?5,?6,?7,?8,?9)",
+        params![new_id("smov"), a.branch_id, variant_id, difference, reason, id, a.user_id, a.device_id, now_ms()],
+    )?;
+    tx.execute(
+        "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units, server_revision)
+         VALUES (?1,?2,?3,12,1)
+         ON CONFLICT(branch_id, variant_id) DO UPDATE SET full_units_qty=excluded.full_units_qty,
+         server_revision=server_revision+1",
+        params![a.branch_id, variant_id, counted],
+    )?;
+    db::enqueue(
+        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "INVENTORY_ADJUSTMENT",
+        &format!("{variant_id}: {current} -> {counted}"), &payload.to_string(), 1, &new_id("idem"),
+    )?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "INVENTORY_ADJUSTMENT", &format!("{variant_id}: {difference}"))?;
+    tx.commit()?;
+    Ok(json!({
+        "inventory_id": id, "variant_id": variant_id,
+        "previous_qty": current, "counted_qty": counted, "difference_qty": difference
+    }))
+}
+
+/// Historique des mouvements de stock, consultable par référence.
+pub fn get_stock_movements(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let variant_id = field_str_opt(payload, "variant_id");
+    let sql = "SELECT id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at
+               FROM stock_movements WHERE branch_id=?1
+               AND (?2 IS NULL OR variant_id=?2) ORDER BY occurred_at DESC LIMIT 100";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![a.branch_id, variant_id], |r| Ok(json!({
+        "movement_id": r.get::<_, String>(0)?,
+        "variant_id": r.get::<_, String>(1)?,
+        "movement_type": r.get::<_, String>(2)?,
+        "qty": r.get::<_, i64>(3)?,
+        "reason": r.get::<_, String>(4)?,
+        "document_id": r.get::<_, String>(5)?,
+        "user_id": r.get::<_, String>(6)?,
+        "device_id": r.get::<_, String>(7)?,
+        "occurred_at": r.get::<_, i64>(8)?
+    })))?;
+    let mut movements = Vec::new();
+    for row in rows { movements.push(row?); }
+    Ok(json!({ "movements": movements }))
 }
 
 pub fn get_pending_operations(conn: &Connection, payload: &Value) -> CoreResult<Value> {
@@ -1323,14 +1431,15 @@ pub fn get_purchase_orders(conn: &Connection, payload: &Value) -> CoreResult<Val
 pub fn get_sale_receipt(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
     let sale_id = field_str(payload, "sale_id")?;
-    let row: Option<(String, String, i64, i64, i64, i64, i64, i64, String)> = conn.query_row(
-        "SELECT receipt_number, customer_name, subtotal_fcfa, discount_fcfa, total_fcfa,
-                paid_confirmed_fcfa, pending_mobile_money_fcfa, credit_fcfa, sync_status
+    let row: Option<(String, String, Option<String>, i64, i64, i64, i64, i64, i64, i64, String)> = conn.query_row(
+        "SELECT receipt_number, customer_name, customer_id, subtotal_fcfa, discount_fcfa, total_fcfa,
+                paid_confirmed_fcfa, pending_mobile_money_fcfa, credit_fcfa, occurred_at, sync_status
          FROM sales WHERE id = ?1 AND branch_id = ?2",
         params![sale_id, a.branch_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?,
+            r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?)),
     ).optional()?;
-    let (receipt, customer, subtotal, discount, total, paid, pending, credit, sync_status) =
+    let (receipt, customer, customer_id, subtotal, discount, total, paid, pending, credit, occurred_at, sync_status) =
         row.ok_or_else(|| CoreError::new("SALE_NOT_FOUND", "Vente introuvable sur cet établissement."))?;
     let mut stmt = conn.prepare(
         "SELECT variant_name, unit_code, unit_count, physical_units, unit_price_fcfa, line_total_fcfa
@@ -1350,6 +1459,8 @@ pub fn get_sale_receipt(conn: &Connection, payload: &Value) -> CoreResult<Value>
         "sale_id": sale_id,
         "receipt_number": receipt,
         "customer_name": customer,
+        "customer_id": customer_id,
+        "occurred_at": occurred_at,
         "subtotal_fcfa": subtotal,
         "discount_fcfa": discount,
         "total_fcfa": total,
@@ -1543,6 +1654,41 @@ pub fn get_conflicts(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let mut conflicts = Vec::new();
     for row in rows { conflicts.push(row?); }
     Ok(json!({ "conflicts": conflicts }))
+}
+
+/// Historique local des synchronisations et décisions : visible même hors ligne.
+pub fn get_sync_history(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let mut stmt = conn.prepare(
+        "SELECT operation_id, command_type, summary, status, attempt_count, created_at, synced_at, server_sequence, last_error
+         FROM sync_outbox ORDER BY COALESCE(synced_at, created_at) DESC LIMIT 100",
+    )?;
+    let rows = stmt.query_map([], |r| Ok(json!({
+        "operation_id": r.get::<_, String>(0)?,
+        "command_type": r.get::<_, String>(1)?,
+        "summary": r.get::<_, String>(2)?,
+        "status": r.get::<_, String>(3)?,
+        "attempt_count": r.get::<_, i64>(4)?,
+        "created_at": r.get::<_, i64>(5)?,
+        "synced_at": r.get::<_, Option<i64>>(6)?,
+        "server_sequence": r.get::<_, Option<i64>>(7)?,
+        "last_error": r.get::<_, Option<String>>(8)?
+    })))?;
+    let mut operations = Vec::new();
+    for row in rows { operations.push(row?); }
+    let mut stmt = conn.prepare(
+        "SELECT action, details, occurred_at FROM audit_logs
+         WHERE branch_id=?1 AND (action LIKE '%SYNC%' OR action LIKE '%CONFLICT%' OR action LIKE '%QUOTA%')
+         ORDER BY occurred_at DESC LIMIT 100",
+    )?;
+    let rows = stmt.query_map(params![a.branch_id], |r| Ok(json!({
+        "action": r.get::<_, String>(0)?,
+        "details": r.get::<_, String>(1)?,
+        "occurred_at": r.get::<_, i64>(2)?
+    })))?;
+    let mut audit = Vec::new();
+    for row in rows { audit.push(row?); }
+    Ok(json!({ "operations": operations, "audit": audit }))
 }
 
 /// Un lot resté `SYNCING` après une coupure réseau redevient réessayable.
@@ -1920,6 +2066,8 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "createPurchaseOrder" | "create_purchase_order" => create_purchase_order(conn, payload),
         "receivePurchase" | "receive_purchase" => receive_purchase(conn, payload),
         "getInventory" | "get_inventory" => get_inventory(conn, payload),
+        "recordInventoryCount" | "record_inventory_count" => record_inventory_count(conn, payload),
+        "getStockMovements" | "get_stock_movements" => get_stock_movements(conn, payload),
         "getCustomers" | "get_customers" => get_customers(conn, payload),
         "getSuppliers" | "get_suppliers" => get_suppliers(conn, payload),
         "getSales" | "get_sales" => get_sales(conn, payload),
@@ -1929,6 +2077,7 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "getPendingOperations" | "get_pending_operations" => get_pending_operations(conn, payload),
         "startSynchronization" | "start_synchronization" => start_synchronization(conn, payload),
         "getSynchronizationStatus" | "get_synchronization_status" => get_synchronization_status(conn, payload),
+        "getSyncHistory" | "get_sync_history" => get_sync_history(conn, payload),
         "configureSyncServer" | "configure_sync_server" => configure_sync_server(conn, payload),
         "applySyncAcknowledgements" | "apply_sync_acknowledgements" => apply_sync_ack(conn, payload),
         "applySyncUpdates" | "apply_sync_updates" => apply_sync_updates(conn, payload),

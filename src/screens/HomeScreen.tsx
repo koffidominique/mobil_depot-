@@ -28,13 +28,25 @@ export function HomeScreen() {
           hint="Comptes financiers séparés des emballages"
         />
         <Metric
+          label="Encaissements 24 h"
+          value={formatFcfa(dashboard.data?.collected_fcfa ?? 0)}
+        />
+        <Metric
+          label="Dépenses 24 h"
+          value={formatFcfa(dashboard.data?.expenses_fcfa ?? 0)}
+        />
+        <Metric
+          label="Crédits accordés 24 h"
+          value={formatFcfa(dashboard.data?.credits_granted_fcfa ?? 0)}
+        />
+        <Metric
           label="Dettes fournisseurs"
           value={formatFcfa(dashboard.data?.supplier_debts_fcfa ?? 0)}
         />
         <Metric
           label="Valeur stock"
           value={formatFcfa(dashboard.data?.stock_value_fcfa ?? 0)}
-          hint={`${dashboard.data?.low_stock_alerts ?? 0} alertes rupture/bas stock`}
+          hint={`${dashboard.data?.low_stock_alerts ?? 0} bas stock · ${dashboard.data?.out_of_stock_alerts ?? 0} ruptures`}
         />
       </View>
 
@@ -44,6 +56,11 @@ export function HomeScreen() {
           value={String(dashboard.data?.pending_sync_operations ?? 0)}
         />
         <Row label="Mode" value="Offline-first · FCFA entier" />
+        <Row
+          label="CA confirmé serveur / local"
+          value={`${formatFcfa(dashboard.data?.confirmed_revenue_fcfa ?? 0)} / ${formatFcfa(dashboard.data?.local_revenue_fcfa ?? 0)}`}
+        />
+        <Row label="Alertes emballages" value={String(dashboard.data?.packaging_alerts ?? 0)} />
       </Card>
 
       <Card>

@@ -214,6 +214,23 @@ pub const MIGRATION_4: &str = r#"
           ON packaging_expectations(branch_id, partner_type, partner_id);
         "#;
 
+/// Migration 5 : inventaires physiques justifiés et historique des mouvements.
+pub const MIGRATION_5: &str = r#"
+        CREATE TABLE IF NOT EXISTS inventory_counts (
+          id TEXT PRIMARY KEY, branch_id TEXT NOT NULL, variant_id TEXT NOT NULL,
+          counted_qty INTEGER NOT NULL, difference_qty INTEGER NOT NULL, reason TEXT NOT NULL,
+          user_id TEXT NOT NULL, device_id TEXT NOT NULL, occurred_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS stock_movements (
+          id TEXT PRIMARY KEY, branch_id TEXT NOT NULL, variant_id TEXT NOT NULL,
+          movement_type TEXT NOT NULL, qty INTEGER NOT NULL, reason TEXT NOT NULL,
+          document_id TEXT NOT NULL, user_id TEXT NOT NULL, device_id TEXT NOT NULL,
+          occurred_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_stock_movements_variant
+          ON stock_movements(branch_id, variant_id, occurred_at);
+        "#;
+
 /// Applique les migrations ordonnées et enregistre leur version dans la base locale.
 pub fn migrate(conn: &Connection) -> CoreResult<()> {
     conn.execute_batch(
@@ -223,7 +240,7 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 4] = [(1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4)];
+    let migrations: [(i64, &str); 5] = [(1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4), (5, MIGRATION_5)];
     for (version, sql) in migrations {
         if version <= current {
             continue;

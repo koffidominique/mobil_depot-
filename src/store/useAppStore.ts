@@ -10,6 +10,7 @@ interface AppState {
   mixedCases: MixedCaseInput[];
   payments: PaymentInput[];
   selectedCustomerId: string | null;
+  favoriteVariantIds: string[];
   lastMessage: string | null;
   setSession: (session: AuthSession | null) => void;
   setThemeMode: (mode: ThemeMode) => void;
@@ -19,6 +20,7 @@ interface AppState {
   addMixedCase: (item: MixedCaseInput) => void;
   clearCart: () => void;
   setPayments: (payments: PaymentInput[]) => void;
+  toggleFavorite: (variantId: string) => void;
   notify: (message: string | null) => void;
 }
 
@@ -29,6 +31,7 @@ export const useAppStore = create<AppState>((set) => ({
   mixedCases: [],
   payments: [],
   selectedCustomerId: null,
+  favoriteVariantIds: [],
   lastMessage: null,
 
   setSession: (session) => set({ session }),
@@ -59,5 +62,10 @@ export const useAppStore = create<AppState>((set) => ({
   addMixedCase: (item) => set((state) => ({ mixedCases: [...state.mixedCases, item] })),
   clearCart: () => set({ cartLines: [], mixedCases: [], payments: [] }),
   setPayments: (payments) => set({ payments }),
+  toggleFavorite: (variantId) => set((state) => ({
+    favoriteVariantIds: state.favoriteVariantIds.includes(variantId)
+      ? state.favoriteVariantIds.filter((id) => id !== variantId)
+      : [...state.favoriteVariantIds, variantId],
+  })),
   notify: (lastMessage) => set({ lastMessage }),
 }));

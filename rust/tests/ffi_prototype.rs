@@ -38,10 +38,10 @@ fn prototype_abi_dto_error_sqlite_and_rollback() {
     let _ = std::fs::remove_file(&path);
     let initialized = call("initializeDatabase", json!({ "path": path.to_str().unwrap() }));
     assert_eq!(initialized["ok"], true);
-    assert_eq!(initialized["data"]["schema_version"], 4);
+    assert_eq!(initialized["data"]["schema_version"], 5);
 
     // Migration versionnée : les deux migrations sont tracées.
-    assert_eq!(read_scalar(&path, "SELECT COUNT(*) FROM schema_meta WHERE version IN (1,2,3,4)"), 4);
+    assert_eq!(read_scalar(&path, "SELECT COUNT(*) FROM schema_meta WHERE version IN (1,2,3,4,5)"), 5);
 
     // Transmission d'un DTO et erreur métier remontée sans écriture.
     let wrong_pin = call("authenticate", json!({

@@ -29,6 +29,7 @@ import type {
   SyncConflict,
   PackagingAccount,
   PackagingStock,
+  StockMovement,
   PartnerStatement,
   VariantSaveInput,
   CrateTypeInput,
@@ -110,6 +111,15 @@ export const depot = {
 
   getDashboard: () => call<Dashboard>('getDashboard'),
   getInventory: () => call<Inventory>('getInventory'),
+  recordInventoryCount: (input: {
+    variant_id: string;
+    counted_qty: number;
+    reason: string;
+  }) => call<{ previous_qty: number; counted_qty: number; difference_qty: number }>(
+    'recordInventoryCount', input,
+  ),
+  getStockMovements: (variantId?: string) =>
+    call<{ movements: StockMovement[] }>('getStockMovements', variantId ? { variant_id: variantId } : {}),
   getCustomers: () => call<{ customers: Customer[] }>('getCustomers'),
   getSuppliers: () => call<{ suppliers: Supplier[] }>('getSuppliers'),
   getSales: () => call<{ sales: SaleRecord[] }>('getSales'),
@@ -236,6 +246,14 @@ export const depot = {
   startSynchronization: (afterSequence = 0, limit = 50) =>
     call<PushBatch>('startSynchronization', { after_sequence: afterSequence, limit }),
   getSynchronizationStatus: () => call<SyncStatus>('getSynchronizationStatus'),
+  getSyncHistory: () => call<{
+    operations: Array<{
+      operation_id: string; command_type: string; summary: string; status: string;
+      attempt_count: number; created_at: number; synced_at: number | null;
+      server_sequence: number | null; last_error: string | null;
+    }>;
+    audit: Array<{ action: string; details: string; occurred_at: number }>;
+  }>('getSyncHistory'),
   configureSyncServer: (serverUrl: string) =>
     call<{ server_url: string; https_only: boolean }>('configureSyncServer', { server_url: serverUrl }),
   applySyncAcknowledgements: (results: SyncAcknowledgement[], serverSequence: number) =>

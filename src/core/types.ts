@@ -19,6 +19,13 @@ export interface Dashboard {
   stock_value_fcfa: number;
   low_stock_alerts: number;
   pending_sync_operations: number;
+  collected_fcfa: number;
+  expenses_fcfa: number;
+  credits_granted_fcfa: number;
+  out_of_stock_alerts: number;
+  packaging_alerts: number;
+  confirmed_revenue_fcfa: number;
+  local_revenue_fcfa: number;
   branch_id: string;
 }
 
@@ -36,6 +43,7 @@ export interface InventoryItem {
   bottle_profile_id: string | null;
   crate_type_id: string | null;
   compatibility_group_id: string | null;
+  category: string | null;
   full_units_qty: number;
   min_alert_units: number;
 }
@@ -251,6 +259,8 @@ export interface SaleReceipt {
   sale_id: string;
   receipt_number: string;
   customer_name: string;
+  customer_id: string | null;
+  occurred_at: number;
   subtotal_fcfa: number;
   discount_fcfa: number;
   total_fcfa: number;
@@ -414,4 +424,16 @@ export interface PackagingAccount {
   financial_value_fcfa: number;
   has_billing_rule: boolean;
   is_immutable_ledger: boolean;
+}
+
+export interface StockMovement {
+  movement_id: string;
+  variant_id: string;
+  movement_type: string;
+  qty: number;
+  reason: string;
+  document_id: string;
+  user_id: string;
+  device_id: string;
+  occurred_at: number;
 }

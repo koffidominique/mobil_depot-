@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
 import { depot } from '../core/client';
-import { formatFcfa } from '../core/format';
+import { formatFcfa, formatFcfaExact, parseIntegerFcfa, toJsonInteger } from '../core/format';
 import type { CartLineInput, CommercialUnit, InventoryItem, PaymentInput, SaleResult } from '../core/types';
 import { useConnectivity, useCustomers, useInventory } from '../hooks/useCore';
 import { useAppStore } from '../store/useAppStore';
@@ -30,6 +30,16 @@ export function PosScreen() {
   const setCustomer = useAppStore((state) => state.setCustomer);
   const notify = useAppStore((state) => state.notify);
   const online = useConnectivity();
+  const favoriteVariantIds = useAppStore((state) => state.favoriteVariantIds);
+  const toggleFavorite = useAppStore((state) => state.toggleFavorite);
+  const [brand, setBrand] = useState('');
+  const [category, setCategory] = useState('');
+  const [volume, setVolume] = useState('');
+  const [containerType, setContainerType] = useState('');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [amount1, setAmount1] = useState('');
+  const [method2, setMethod2] = useState<'NONE' | PaymentInput['method']>('NONE');
+  const [amount2, setAmount2] = useState('');
   const [search, setSearch] = useState('');
   const [tier, setTier] = useState<'RETAIL' | 'WHOLESALE'>('RETAIL');
   const [method, setMethod] = useState<PaymentInput['method']>('CASH');
@@ -38,34 +48,61 @@ export function PosScreen() {
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
+  const catalog = useMemo(() => inventory.data?.full_drinks ?? [], [inventory.data]);
+  const brands = useMemo(() => [...new Set(catalog.map((item) => item.brand))], [catalog]);
+  const categories = useMemo(
+    () => [...new Set(catalog.map((item) => item.category).filter((value): value is string => Boolean(value)))],
+    [catalog],
+  );
+  const volumes = useMemo(() => [...new Set(catalog.map((item) => item.volume_label))], [catalog]);
+  const containers = useMemo(() => [...new Set(catalog.map((item) => item.container_type))], [catalog]);
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return (inventory.data?.full_drinks ?? []).filter(
-      (item) =>
-        !needle ||
-        item.name.toLowerCase().includes(needle) ||
-        item.brand.toLowerCase().includes(needle),
-    );
-  }, [inventory.data, search]);
+    return catalog.filter((item) => {
+      if (needle && !`${item.name} ${item.brand}`.toLowerCase().includes(needle)) return false;
+      if (brand && item.brand !== brand) return false;
+      if (category && item.category !== category) return false;
+      if (volume && item.volume_label !== volume) return false;
+      if (containerType && item.container_type !== containerType) return false;
+      if (favoritesOnly && !favoriteVariantIds.includes(item.variant_id)) return false;
+      return true;
+    });
+  }, [catalog, search, brand, category, volume, containerType, favoritesOnly, favoriteVariantIds]);
 
-  const total = cartLines.reduce(
-    (sum, line) => sum + line.unit_price_fcfa * line.unit_count,
-    0,
+  // Le calcul local reste en BigInt ; Rust fait autorité sur les prix et validations.
+  const totalFcfa = cartLines.reduce(
+    (sum, line) => sum + BigInt(line.unit_price_fcfa) * BigInt(line.unit_count),
+    0n,
   );
 
   const checkout = useMutation<SaleResult, Error, void>({
     mutationFn: async () => {
       const ref = reference.trim() || null;
-      const payments: PaymentInput[] =
-        method === 'CREDIT'
-          ? [{ method: 'CREDIT', amount_fcfa: 0, reference: null, confirmed_by_provider: false }]
-          : [{ method, amount_fcfa: total, reference: ref, confirmed_by_provider: method !== 'MOBILE_MONEY' }];
+      const first = parseIntegerFcfa(amount1 || String(totalFcfa));
+      const second = method2 === 'NONE' ? 0n : parseIntegerFcfa(amount2 || '0');
+      const payments: PaymentInput[] = [
+        {
+          method,
+          amount_fcfa: toJsonInteger(first),
+          reference: ref,
+          confirmed_by_provider: method !== 'MOBILE_MONEY' || Boolean(ref),
+        },
+      ];
+      if (method2 !== 'NONE' && second > 0n) {
+        payments.push({
+          method: method2,
+          amount_fcfa: toJsonInteger(second),
+          reference: ref,
+          confirmed_by_provider: method2 !== 'MOBILE_MONEY' || Boolean(ref),
+        });
+      }
       const input = {
         customer_id: selectedCustomerId,
         price_tier: tier,
         lines: cartLines,
         mixed_cases: [],
-        discount_fcfa: Number.parseInt(discount, 10) || 0,
+        discount_fcfa: toJsonInteger(parseIntegerFcfa(discount || '0')),
         payments,
         is_online: online,
       };
@@ -130,14 +167,48 @@ export function PosScreen() {
             </Pressable>
           ))}
         </View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {brands.map((value) => (
+            <Pressable key={value} onPress={() => setBrand(brand === value ? '' : value)}>
+              <Text style={{ color: brand === value ? c.primary : c.subtitle }}>{value}</Text>
+            </Pressable>
+          ))}
+          {categories.map((value) => (
+            <Pressable key={value} onPress={() => setCategory(category === value ? '' : value)}>
+              <Text style={{ color: category === value ? c.primary : c.subtitle }}>{value}</Text>
+            </Pressable>
+          ))}
+          {volumes.map((value) => (
+            <Pressable key={value} onPress={() => setVolume(volume === value ? '' : value)}>
+              <Text style={{ color: volume === value ? c.primary : c.subtitle }}>{value}</Text>
+            </Pressable>
+          ))}
+          {containers.map((value) => (
+            <Pressable key={value} onPress={() => setContainerType(containerType === value ? '' : value)}>
+              <Text style={{ color: containerType === value ? c.primary : c.subtitle }}>{value}</Text>
+            </Pressable>
+          ))}
+          <Pressable onPress={() => setFavoritesOnly(!favoritesOnly)}>
+            <Text style={{ color: favoritesOnly ? c.primary : c.subtitle }}>
+              {favoritesOnly ? '★ Favoris' : '☆ Favoris'}
+            </Text>
+          </Pressable>
+        </View>
       </Card>
 
       <Card>
         {filtered.map((item) => (
           <View key={item.variant_id} style={{ marginBottom: 12, gap: 6 }}>
-            <Text style={{ color: c.text, fontWeight: '700' }}>
-              {item.name} · {item.volume_label}
-            </Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <Text style={{ color: c.text, fontWeight: '700' }}>
+                {item.name} · {item.volume_label}
+              </Text>
+              <Pressable onPress={() => toggleFavorite(item.variant_id)}>
+                <Text style={{ color: c.gold, fontSize: 18 }}>
+                  {favoriteVariantIds.includes(item.variant_id) ? '★' : '☆'}
+                </Text>
+              </Pressable>
+            </View>
             <Row
               label={`Stock local : ${item.full_units_qty} unités`}
               value={formatFcfa(priceFor(item, 'BOTTLE', tier))}
@@ -183,7 +254,7 @@ export function PosScreen() {
             </Pressable>
           </View>
         ))}
-        <Row label="Total" value={formatFcfa(total)} />
+        <Row label="Total calculé par le moteur Rust" value={formatFcfaExact(totalFcfa)} />
       </Card>
 
       <Card>
@@ -203,7 +274,20 @@ export function PosScreen() {
           keyboardType="numeric"
           onChangeText={setDiscount}
         />
-        <Field label="Référence du paiement (si requise)" value={reference} onChangeText={setReference} />
+        <Field label="Montant du premier moyen" value={amount1} keyboardType="numeric" onChangeText={setAmount1} />
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+          {(['NONE', ...(['CASH', 'MOBILE_MONEY', 'BANK_TRANSFER', 'CHECK'] as const)] as const).map((value) => (
+            <Pressable key={value} onPress={() => setMethod2(value)}>
+              <Text style={{ color: method2 === value ? c.primary : c.subtitle, fontWeight: '700' }}>
+                {value === 'NONE' ? 'Paiement simple' : `+ ${value.replace('_', ' ')}`}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        {method2 === 'NONE' ? null : (
+          <Field label="Montant du second moyen" value={amount2} keyboardType="numeric" onChangeText={setAmount2} />
+        )}
+        <Field label="Référence de confirmation opérateur (si mobile money)" value={reference} onChangeText={setReference} />
         <PrimaryButton
           label="Valider la vente"
           disabled={cartLines.length === 0}
