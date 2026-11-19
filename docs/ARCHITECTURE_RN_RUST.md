@@ -51,6 +51,7 @@ Les alias snake_case sont acceptés pour la compatibilité avec les noms de la P
 
 - Base SQLite **locale** : `<Documents>/depotpro_local.db`, ouverte par Rust via `rusqlite` (bundle SQLite inclus).
 - Chaque écriture métier est une transaction : entités + `sync_outbox` + `audit_logs` dans le même commit.
+- Les migrations locales sont ordonnées et tracées dans `schema_meta` (`MIGRATION_1`, `MIGRATION_2`) ; toutes sont additives.
 - `sync_outbox` contient `tenant_id`, `branch_id`, `device_id`, `user_id`, `local_sequence`, `server_sequence`, `schema_version`, `idempotency_key`, `status`, `attempt_count`, `next_retry_at`.
 - Statuts : `PENDING`, `SYNCING`, `SYNCED`, `CONFLICT`, `FAILED`, `CANCELLED`.
 - Backoff exponentiel avec variation déterministe (`domain::backoff_ms`).
@@ -88,6 +89,6 @@ npm run ios
 ## 7. Limites connues
 
 - Le serveur parent `ss_depot_rust` n'expose pas encore `/api/v1/sync/*` (voir `docs/AUDIT_PARENT_REPO.md`). Un adaptateur Axum prêt à intégrer est fourni dans `server/` avec le contrat `docs/API_SYNC_V1.md`. Tant que l'URL serveur est vide, l'application reste 100 % locale et l'écran Synchronisation l'indique explicitement.
-- Le pont iOS utilise actuellement un module `RCTBridgeModule` compatible avec la New Architecture via la couche d'interopérabilité ; le fichier de spécification TurboModule est déjà en place côté TypeScript et l'interface native générée pourra remplacer ce pont sans toucher au code métier.
+- Le pont iOS utilise un `RCTBridgeModule` qui exécute Rust sur une file série et résout la promesse sur le thread principal ; un wrapper Swift typé (`DepotCoreSwift.swift`) et un bridging header sont fournis. La spec TurboModule est générée par `scripts/codegen.sh`. Voir `docs/FFI_AND_PROTOTYPE.md`.
 - Les écrans « Achats, Fournisseurs, Caisse, Rapports, Catalogue, Reçus » sont câblés sur les commandes Rust correspondantes ; la confirmation des paiements Mobile Money et l'impression/partage des reçus restent à brancher sur des services natifs.
 - `npm run rust:test` nécessite un toolchain Rust absent de l'environnement de cette session ; la syntaxe des fichiers Rust a été validée par analyseur tree-sitter et la syntaxe/types TypeScript par `tsc --noEmit`.

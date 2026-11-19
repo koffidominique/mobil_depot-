@@ -181,3 +181,15 @@
 - **Documentation** : `server/README.md` et `docs/API_SYNC_V1.md` décrivent le schéma, les invariants transactionnels et le branchement sur `depotpro-core` ; `docs/PART2_AUDIT_COMPLET.md` réévalue les écarts.
 - **Vérifications** : analyse tree-sitter des fichiers Rust sans nœud d'erreur ; `git diff --check` OK. `cargo test` reste non exécutable dans ce sandbox (toolchain absente) : les tests SQLx sont fournis mais pas exécutés ici.
 - **Reste à faire dans le parent** : injecter les implémentations réelles de `TokenVerifier` et `OperationExecutor` dans `crates/depotpro-server`, puis exécuter les tests multi-appareils.
+
+## LOT 24 — PARTIE 3 : architecture technique concrétisée
+
+- **Stack verrouillée** : `docs/STACK_VERSIONS.md` recense RN 0.88.1, React 19.3, TypeScript strict 6.x, New Architecture, TurboModule/Codegen, React Navigation 7, TanStack Query 5, Zustand 5, Zod 4, Keychain, NetInfo, Axum 0.7 et SQLx 0.8.6. Node reste outillage uniquement.
+- **FFI décidée et documentée** (`docs/FFI_AND_PROTOTYPE.md`) : ABI C stable + JNI Android + bridge iOS et wrapper Swift, plutôt qu'un générateur expérimental. Alternative UniFFI documentée, non adoptée par défaut. Risque de maintenance des bridges assumé.
+- **Codegen reproductible** : `scripts/codegen.sh` ajouté et exécuté avec succès ; `NativeDepotCoreSpec.java` contient bien `executeCommand(String request, Promise promise)`. Artefacts générés dans `/tmp`, non versionnés.
+- **Zod réellement utilisé** : validation des contrats de connexion et de vente dans `src/core/client.ts` avant tout appel natif, avec `CoreError.INVALID_INTERFACE_DTO`. Aucune règle métier dupliquée : seuls la forme et le type du DTO sont vérifiés côté interface.
+- **SQLite versionné** : `rust/src/db.rs` introduit `schema_meta` et deux migrations ordonnées (`MIGRATION_1` schéma initial, `MIGRATION_2` historique des prix), chacune transactionnelle et additive.
+- **Thread UI** : le pont Android utilise déjà un exécuteur mono-thread ; le pont iOS a été corrigé pour exécuter `depot_execute` sur une file série puis résoudre la promesse sur le thread principal. Ajout de `DepotCoreSwift.swift` et du bridging header, enregistrés dans `project.pbxproj` (bundle id corrigé en `com.depotpro.mobile`).
+- **Vérifications** : `./scripts/codegen.sh` OK, `npx tsc --noEmit` OK, `npx jest --runInBand` 2 suites/8 tests, tree-sitter Rust OK, `git diff --check` OK.
+- **Non exécuté** : `cargo test`, builds Gradle/Xcode, leurs toolchains étant absentes. La cible Xcode devra être vérifiée sur macOS avec les bibliothèques Rust statiques.
+- **Prochaine étape** : PARTIE 4 — vérifier et consolider authentification, session, établissement, POS et identifiant d'appareil.
