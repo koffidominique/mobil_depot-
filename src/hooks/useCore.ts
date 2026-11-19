@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import NetInfo from '@react-native-community/netinfo';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { buildSyncEnvelope } from '../core/apiContracts';
 import { depot, getAuthToken } from '../core/client';
-import type { SyncAcknowledgement, SyncOperation, SyncUpdate } from '../core/types';
+import type { SyncAcknowledgement, SyncUpdate } from '../core/types';
 import {
   cursorAfterPush,
   MAX_PULL_PAGES,
@@ -93,24 +94,6 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function toEnvelope(op: SyncOperation) {
-  return {
-    operation_id: op.operation_id,
-    tenant_id: op.tenant_id,
-    branch_id: op.branch_id,
-    device_id: op.device_id,
-    user_id: op.user_id,
-    local_sequence: op.local_sequence,
-    schema_version: op.schema_version,
-    command_type: op.command_type,
-    occurred_at: new Date().toISOString(),
-    base_revision: op.base_revision,
-    idempotency_key: op.idempotency_key,
-    server_sequence: op.server_sequence,
-    payload: op.payload_json,
-  };
-}
-
 /** Synchronisation : prévol auth/réseau, push par lots ordonnés, pull paginé. */
 export function useSynchronization() {
   const queryClient = useQueryClient();
@@ -155,7 +138,7 @@ export function useSynchronization() {
             body: JSON.stringify({
               device_id: session.device_id,
               branch_id: started.branch_id || status.branch_id,
-              operations: started.operations.map(toEnvelope),
+              operations: started.operations.map((operation) => buildSyncEnvelope(operation)),
             }),
           });
           if (!response.ok) throw new Error(`Push Axum refusé (HTTP ${response.status}).`);

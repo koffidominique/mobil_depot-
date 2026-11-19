@@ -88,7 +88,10 @@ fn operation(id: &str) -> Value {
         "occurred_at": "2026-11-19T07:00:00Z",
         "base_revision": 1,
         "idempotency_key": format!("idem-{id}"),
-        "payload": { "total_fcfa": 6800 }
+        "payload": {
+            "sale_id": id, "receipt_number": "R-001",
+            "total_fcfa": 6800, "credit_fcfa": 0
+        }
     })
 }
 

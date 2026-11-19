@@ -1,4 +1,5 @@
 /** Appels d'administration de l'adaptateur Axum. Aucune règle métier ici. */
+import { parseDeviceList } from './apiContracts';
 import { getAuthToken } from './client';
 
 export interface DeviceInfo {
@@ -24,8 +25,7 @@ function headers(): Record<string, string> {
 export async function listDevices(baseUrl: string): Promise<DeviceInfo[]> {
   const response = await fetch(`${requireHttps(baseUrl)}/api/v1/devices`, { headers: headers() });
   if (!response.ok) throw new Error(`Liste des appareils refusée (HTTP ${response.status}).`);
-  const body = (await response.json()) as { devices: DeviceInfo[] };
-  return body.devices ?? [];
+  return parseDeviceList(await response.json());
 }
 
 export async function revokeDevice(baseUrl: string, deviceId: string): Promise<void> {

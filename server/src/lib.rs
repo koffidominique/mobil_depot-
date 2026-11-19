@@ -19,6 +19,7 @@ use serde::de::{Deserializer, Error as DeError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod contracts;
 pub mod sqlite_kernel;
 
 pub const SYNC_SCHEMA_VERSION: i32 = 1;
@@ -100,8 +101,14 @@ pub struct SyncOperationEnvelope {
     pub idempotency_key: String,
     #[serde(deserialize_with = "deserialize_payload")]
     pub payload: Value,
+    #[serde(default = "default_payload_version")]
+    pub payload_version: u32,
     #[serde(default)]
     pub server_sequence: Option<i64>,
+}
+
+fn default_payload_version() -> u32 {
+    contracts::PAYLOAD_SCHEMA_VERSION
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +229,76 @@ pub trait SyncKernel: Send + Sync {
     ) -> Result<(), String> {
         Err("NOT_IMPLEMENTED".to_string())
     }
+
+    /// Contrôle serveur de l'autorisation, de l'établissement, du point de vente
+    /// et de l'appareil. Remplaçable par une matrice de droits par branche.
+    async fn authorize_command(
+        &self,
+        identity: &Identity,
+        command_type: &str,
+        branch_id: &str,
+        device_id: &str,
+    ) -> Result<(), String> {
+        let permission = contracts::required_permission(command_type)
+            .ok_or_else(|| "UNSUPPORTED_COMMAND".to_string())?;
+        if identity.branch_id != branch_id {
+            return Err("BRANCH_FORBIDDEN".to_string());
+        }
+        if identity.device_id != device_id {
+            return Err("DEVICE_FORBIDDEN".to_string());
+        }
+        if !contracts::role_has_permission(&identity.role, permission) {
+            return Err("ROLE_FORBIDDEN".to_string());
+        }
+        Ok(())
+    }
+
+    async fn authorize_read(&self, identity: &Identity, branch_id: &str) -> Result<(), String> {
+        if identity.branch_id != branch_id {
+            return Err("BRANCH_FORBIDDEN".to_string());
+        }
+        if !contracts::role_has_permission(&identity.role, "read") {
+            return Err("ROLE_FORBIDDEN".to_string());
+        }
+        Ok(())
+    }
+
+    async fn login(&self, _request: &contracts::LoginRequest) -> Result<contracts::SessionTokens, String> {
+        Err("AUTH_NOT_IMPLEMENTED".to_string())
+    }
+
+    async fn refresh(&self, _refresh_token: &str) -> Result<contracts::SessionTokens, String> {
+        Err("AUTH_NOT_IMPLEMENTED".to_string())
+    }
+
+    async fn logout(&self, _access_token: &str) -> Result<(), String> {
+        Err("AUTH_NOT_IMPLEMENTED".to_string())
+    }
+
+    async fn bootstrap(
+        &self,
+        _identity: &Identity,
+        _query: &contracts::BootstrapQuery,
+    ) -> Result<contracts::BootstrapResponse, String> {
+        Err("BOOTSTRAP_NOT_IMPLEMENTED".to_string())
+    }
+
+    async fn catalog(
+        &self,
+        _identity: &Identity,
+        _kind: &str,
+        _query: &contracts::CatalogQuery,
+    ) -> Result<Vec<contracts::CatalogItem>, String> {
+        Err("CATALOG_NOT_IMPLEMENTED".to_string())
+    }
+
+    async fn inventory(
+        &self,
+        _identity: &Identity,
+        _query: &contracts::CatalogQuery,
+    ) -> Result<Vec<contracts::InventoryItem>, String> {
+        Err("INVENTORY_NOT_IMPLEMENTED".to_string())
+    }
 }
 
 pub type SharedKernel = Arc<dyn SyncKernel>;
@@ -309,12 +386,28 @@ async fn push(
             results.push(reject(&operation_id, "SCHEMA_VERSION_UNSUPPORTED", "Version de schéma non prise en charge."));
             continue;
         }
-        if operation.idempotency_key.trim().is_empty() || operation.command_type.trim().is_empty() {
-            results.push(reject(&operation_id, "INVALID_ENVELOPE", "Enveloppe d'opération incomplète."));
+        if let Err(code) = contracts::validate_envelope(&operation) {
+            results.push(reject(&operation_id, code, "Enveloppe d'opération invalide."));
             continue;
         }
+        if let Err(code) = kernel
+            .authorize_command(&identity, &operation.command_type, &operation.branch_id, &operation.device_id)
+            .await
+        {
+            results.push(reject(&operation_id, &code, "Commande non autorisée pour cette session."));
+            continue;
+        }
+        let payload = match contracts::validate_payload(&operation) {
+            Ok(payload) => payload.into_json(),
+            Err(code) => {
+                results.push(reject(&operation_id, code, "Payload non conforme au contrat versionné."));
+                continue;
+            }
+        };
+        let mut checked = operation.clone();
+        checked.payload = payload;
 
-        match kernel.apply_operation(&identity, &operation).await {
+        match kernel.apply_operation(&identity, &checked).await {
             Ok(ApplyOutcome::Accepted { server_sequence }) => results.push(Ack {
                 operation_id,
                 status: "ACCEPTED".to_string(),
@@ -467,7 +560,140 @@ async fn resolve_conflict(
     }
 }
 
+/// Erreur d'authentification : les codes et jetons ne sont jamais journalisés.
+async fn login(
+    State(kernel): State<SharedKernel>,
+    Json(request): Json<contracts::LoginRequest>,
+) -> Response {
+    if request.username.trim().is_empty()
+        || request.branch_id.trim().is_empty()
+        || request.device_id.trim().is_empty()
+        || (request.pin.is_none() && request.password.is_none())
+    {
+        return error_response(StatusCode::BAD_REQUEST, "INVALID_LOGIN", "Identifiants incomplets.");
+    }
+    match kernel.login(&request).await {
+        Ok(tokens) => Json(tokens).into_response(),
+        Err(code) if code.starts_with("AUTH_") || code == "INVALID_CREDENTIALS" => {
+            error_response(StatusCode::UNAUTHORIZED, "INVALID_CREDENTIALS", "Identifiants invalides.")
+        }
+        Err(_) => error_response(StatusCode::SERVICE_UNAVAILABLE, "AUTH_UNAVAILABLE", "Authentification indisponible."),
+    }
+}
+
+async fn refresh(
+    State(kernel): State<SharedKernel>,
+    Json(request): Json<contracts::RefreshRequest>,
+) -> Response {
+    if request.refresh_token.trim().is_empty() {
+        return error_response(StatusCode::BAD_REQUEST, "INVALID_REFRESH", "Jeton de renouvellement requis.");
+    }
+    match kernel.refresh(&request.refresh_token).await {
+        Ok(tokens) => Json(tokens).into_response(),
+        Err(_) => error_response(StatusCode::UNAUTHORIZED, "INVALID_REFRESH", "Renouvellement refusé."),
+    }
+}
+
+async fn logout(
+    State(kernel): State<SharedKernel>,
+    headers: HeaderMap,
+) -> Response {
+    let token = token_from(&headers)
+        .ok_or_else(|| error_response(StatusCode::UNAUTHORIZED, "AUTH_REQUIRED", "Jeton Bearer requis."));
+    let token = match token {
+        Ok(token) => token,
+        Err(response) => return response,
+    };
+    match kernel.logout(&token).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => error_response(StatusCode::UNAUTHORIZED, "LOGOUT_FAILED", "Session non révoquée."),
+    }
+}
+
+async fn bootstrap(
+    State(kernel): State<SharedKernel>,
+    headers: HeaderMap,
+    Query(query): Query<contracts::BootstrapQuery>,
+) -> Response {
+    let identity = match authenticate(&kernel, &headers).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if identity.branch_id != query.branch_id {
+        return error_response(StatusCode::FORBIDDEN, "BRANCH_FORBIDDEN", "Point de vente non autorisé.");
+    }
+    match kernel.bootstrap(&identity, &query).await {
+        Ok(data) => Json(data).into_response(),
+        Err(code) => error_response(StatusCode::NOT_IMPLEMENTED, "BOOTSTRAP_UNAVAILABLE", &code),
+    }
+}
+
+async fn catalog_products(
+    state: State<SharedKernel>, headers: HeaderMap, query: Query<contracts::CatalogQuery>,
+) -> Response {
+    catalog_route(state, headers, Path("products".to_string()), query).await
+}
+
+async fn catalog_customers(
+    state: State<SharedKernel>, headers: HeaderMap, query: Query<contracts::CatalogQuery>,
+) -> Response {
+    catalog_route(state, headers, Path("customers".to_string()), query).await
+}
+
+async fn catalog_suppliers(
+    state: State<SharedKernel>, headers: HeaderMap, query: Query<contracts::CatalogQuery>,
+) -> Response {
+    catalog_route(state, headers, Path("suppliers".to_string()), query).await
+}
+
+async fn catalog_route(
+    State(kernel): State<SharedKernel>,
+    headers: HeaderMap,
+    Path(kind): Path<String>,
+    Query(query): Query<contracts::CatalogQuery>,
+) -> Response {
+    let kind = match kind.0.as_str() {
+        "products" => "products",
+        "customers" => "customers",
+        "suppliers" => "suppliers",
+        _ => return error_response(StatusCode::NOT_FOUND, "UNKNOWN_RESOURCE", "Ressource inconnue."),
+    };
+    let identity = match authenticate(&kernel, &headers).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(code) = kernel.authorize_read(&identity, &query.branch_id).await {
+        return error_response(StatusCode::FORBIDDEN, &code, "Lecture non autorisée.");
+    }
+    match kernel.catalog(&identity, kind, &query).await {
+        Ok(items) => Json(items).into_response(),
+        Err(code) => error_response(StatusCode::NOT_IMPLEMENTED, "CATALOG_UNAVAILABLE", &code),
+    }
+}
+
+async fn inventory_route(
+    State(kernel): State<SharedKernel>,
+    headers: HeaderMap,
+    Query(query): Query<contracts::CatalogQuery>,
+) -> Response {
+    let identity = match authenticate(&kernel, &headers).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(code) = kernel.authorize_read(&identity, &query.branch_id).await {
+        return error_response(StatusCode::FORBIDDEN, &code, "Lecture non autorisée.");
+    }
+    match kernel.inventory(&identity, &query).await {
+        Ok(items) => Json(items).into_response(),
+        Err(code) => error_response(StatusCode::NOT_IMPLEMENTED, "INVENTORY_UNAVAILABLE", &code),
+    }
+}
+
 /// Routeurs à monter sur le serveur Axum existant, sans serveur métier concurrent.
+pub fn api_router(kernel: SharedKernel) -> Router {
+    sync_router(kernel)
+}
+
 pub fn sync_router(kernel: SharedKernel) -> Router {
     Router::new()
         .route("/api/v1/sync/push", post(push))
