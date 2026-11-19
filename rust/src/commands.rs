@@ -741,10 +741,11 @@ pub fn get_synchronization_status(conn: &Connection, payload: &Value) -> CoreRes
         "SELECT SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END), SUM(CASE WHEN status='SYNCING' THEN 1 ELSE 0 END), SUM(CASE WHEN status='SYNCED' THEN 1 ELSE 0 END), SUM(CASE WHEN status='CONFLICT' THEN 1 ELSE 0 END), SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) FROM sync_outbox",
         [], |r| Ok((r.get::<_, i64>(0)?.unwrap_or(0), r.get::<_, i64>(1)?.unwrap_or(0), r.get::<_, i64>(2)?.unwrap_or(0), r.get::<_, i64>(3)?.unwrap_or(0), r.get::<_, i64>(4)?.unwrap_or(0))),
     )?;
-    let cursor: i64 = conn.query_row(
-        "SELECT server_sequence FROM sync_cursors WHERE branch_id = ?1", params![a.branch_id], |r| r.get(0),
-    ).unwrap_or(0);
-    Ok(json!({"pending": counts.0, "syncing": counts.1, "synced": counts.2, "conflicts": counts.3, "failed": counts.4, "server_sequence": cursor}))
+    let cursor: (i64, String) = conn.query_row(
+        "SELECT server_sequence, server_url FROM sync_cursors WHERE branch_id = ?1", params![a.branch_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap_or((0, String::new()));
+    Ok(json!({"pending": counts.0, "syncing": counts.1, "synced": counts.2, "conflicts": counts.3, "failed": counts.4, "server_sequence": cursor.0, "server_url": cursor.1}))
 }
 
 pub fn apply_sync_ack(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {

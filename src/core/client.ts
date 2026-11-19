@@ -167,6 +167,13 @@ export const depot = {
   getConflicts: () => call<{ conflicts: SyncConflict[] }>('getConflicts'),
   resetStaleSyncing: (staleBeforeMs: number) =>
     call<{ reset: number }>('resetStaleSyncing', { stale_before_ms: staleBeforeMs }),
+  backupDatabase: (destinationPath?: string) =>
+    call<{ backup_path: string; bytes: number }>('backupDatabase',
+      destinationPath ? { destination_path: destinationPath } : {}),
+  restoreDatabase: (sourcePath: string) =>
+    call<{ restored_from: string; safety_backup: string }>('restoreDatabase', {
+      source_path: sourcePath,
+    }),
   getPendingOperations: () => call<{ operations: SyncOperation[] }>('getPendingOperations'),
   startSynchronization: () =>
     call<{ operations: SyncOperation[]; server_sequence: number; server_url: string }>(

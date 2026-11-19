@@ -6,13 +6,14 @@ mod db;
 mod domain;
 
 use domain::{field_str, field_str_opt, CoreError, CoreResult};
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
 static DB_STATE: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
+static DB_PATH: OnceLock<Mutex<String>> = OnceLock::new();
 
 fn state() -> &'static Mutex<Option<Connection>> {
     DB_STATE.get_or_init(|| Mutex::new(None))
@@ -28,7 +29,48 @@ fn execute_inner(input: &str) -> CoreResult<String> {
         let conn = db::open(path)?;
         let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
         *guard = Some(conn);
+        let mut path_guard = DB_PATH.get_or_init(|| Mutex::new(String::new())).lock()
+            .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?;
+        *path_guard = path.to_string();
         return Ok(json!({"ok": true, "data": {"database": path, "schema_version": 2}}).to_string());
+    }
+
+    if command == "backupDatabase" || command == "backup_database" {
+        let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
+        let conn = guard
+            .as_mut()
+            .ok_or_else(|| CoreError::new("DB_NOT_INITIALIZED", "initializeDatabase doit être appelé en premier."))?;
+        let current = DB_PATH.get_or_init(|| Mutex::new(String::new())).lock()
+            .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?.clone();
+        let destination = field_str_opt(&payload, "destination_path").map(str::to_string)
+            .unwrap_or_else(|| format!("{current}.backup-{}", db::now_ms()));
+        conn.execute("VACUUM INTO ?1", params![destination])?;
+        return Ok(json!({"ok": true, "data": {"backup_path": destination, "bytes": std::fs::metadata(&destination)
+            .map(|m| m.len() as i64).unwrap_or(0)}}).to_string());
+    }
+
+    if command == "restoreDatabase" || command == "restore_database" {
+        let source = field_str(&payload, "source_path")?.to_string();
+        let current = DB_PATH.get_or_init(|| Mutex::new(String::new())).lock()
+            .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?.clone();
+        if current.is_empty() {
+            return Err(CoreError::new("DB_NOT_INITIALIZED", "initializeDatabase doit être appelé en premier."));
+        }
+        if !std::path::Path::new(&source).is_file() {
+            return Err(CoreError::new("BACKUP_NOT_FOUND", "Fichier de sauvegarde introuvable."));
+        }
+        let safety = format!("{current}.before-restore-{}", db::now_ms());
+        {
+            let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
+            let conn = guard.as_mut().ok_or_else(|| CoreError::new("DB_NOT_INITIALIZED", "Base absente."))?;
+            conn.execute("VACUUM INTO ?1", params![safety])?;
+            *guard = None;
+        }
+        std::fs::copy(&source, &current).map_err(|e| CoreError::new("RESTORE_FAILED", e.to_string()))?;
+        let reopened = db::open(&current)?;
+        let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;
+        *guard = Some(reopened);
+        return Ok(json!({"ok": true, "data": {"restored_from": source, "safety_backup": safety}}).to_string());
     }
 
     let mut guard = state().lock().map_err(|_| CoreError::new("STATE_POISONED", "État SQLite verrouillé."))?;

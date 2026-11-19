@@ -164,6 +164,7 @@ export interface SyncStatus {
   conflicts: number;
   failed: number;
   server_sequence: number;
+  server_url: string;
 }
 
 export interface SyncOperation {

@@ -2,11 +2,13 @@ import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, Text, View, type AppStateStatus } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import RNFS from 'react-native-fs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { depot } from './core/client';
+import { useSyncStatus, useSynchronization } from './hooks/useCore';
 import { restoreSession } from './core/session';
 import { useAppStore } from './store/useAppStore';
 import { colorsFor } from './theme';
@@ -59,6 +61,39 @@ function useColorsFromStore() {
   return colorsFor(mode);
 }
 
+/** Déclencheurs autorisés : démarrage, retour au premier plan, retour du réseau. */
+function AutoSync() {
+  const status = useSyncStatus();
+  const sync = useSynchronization();
+  const configured = Boolean(status.data?.server_url);
+  const wasConnected = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    if (!configured) return;
+    sync.mutate();
+    // Le déclenchement au démarrage ne doit se produire qu'une fois par session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configured]);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      const connected = Boolean(state.isConnected);
+      if (configured && connected && wasConnected.current === false) sync.mutate();
+      wasConnected.current = connected;
+    });
+    const onForeground = (next: AppStateStatus) => {
+      if (configured && next === 'active') sync.mutate();
+    };
+    const subscription = AppState.addEventListener('change', onForeground);
+    return () => {
+      unsubscribe();
+      subscription.remove();
+    };
+  }, [configured, sync]);
+
+  return null;
+}
+
 function Bootstrap() {
   const [ready, setReady] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
@@ -106,6 +141,7 @@ function Bootstrap() {
 
   return (
     <NavigationContainer theme={themeMode === 'dark' ? DarkTheme : DefaultTheme}>
+      {session ? <AutoSync /> : null}
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {session ? (
           <>
