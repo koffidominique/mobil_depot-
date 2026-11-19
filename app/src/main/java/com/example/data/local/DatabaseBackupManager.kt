@@ -105,7 +105,8 @@ object DatabaseBackupManager {
         userName: String,
         deviceId: String,
         tradeName: String,
-        city: String
+        city: String,
+        context: Context? = null
     ) {
         val cleanName = tradeName.trim()
         val cleanCity = city.trim()
@@ -113,9 +114,22 @@ object DatabaseBackupManager {
             throw DomainException("INVALID_TENANT", "Renseignez la raison sociale et la ville du dépôt.")
         }
 
+        // Règle absolue : aucune purge, même de données pilotes, sans copie de sécurité.
+        // `context == null` réserve uniquement les bases volatiles des tests unitaires.
+        val snapshotPath = context?.let {
+            runCatching { createInternalSnapshot(it, db).absolutePath }
+                .getOrElse { ex ->
+                    throw DomainException(
+                        "RESET_BACKUP_REQUIRED",
+                        "Sauvegarde préalable impossible, passage en production annulé : ${ex.message}"
+                    )
+                }
+        }
+
         val now = System.currentTimeMillis()
         val syncDao = db.syncDao()
         val orgDao = db.authAndOrgDao()
+        val backupTrace = snapshotPath?.let { " | sauvegarde : $it" } ?: " | base volatile (test)"
 
         db.withTransaction {
             syncDao.clearSaleLines()
@@ -149,7 +163,7 @@ object DatabaseBackupManager {
                     userName = userName,
                     deviceId = deviceId,
                     action = "PRODUCTION_RESET",
-                    details = "Passage en mode Production vierge ($cleanName - $cleanCity)",
+                    details = "Passage en mode Production vierge ($cleanName - $cleanCity)$backupTrace",
                     occurredAtMs = now
                 )
             )

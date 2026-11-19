@@ -48,6 +48,17 @@ data class PaymentAllocationInput(
     val confirmedByProvider: Boolean
 )
 
+/**
+ * Solde crédit connu au moment de la validation d'une vente.
+ * Les montants restent des entiers FCFA : aucune projection flottante n'est autorisée.
+ */
+data class CustomerCreditContext(
+    val customerId: String,
+    val customerName: String,
+    val creditLimitFcfa: Long,
+    val outstandingBalanceFcfa: Long
+)
+
 data class ValidatedSaleComputation(
     val subtotalFcfa: Long,
     val discountFcfa: Long,
@@ -78,7 +89,8 @@ object SaleAndStockRules {
         discountFcfa: Long,
         payments: List<PaymentAllocationInput>,
         customerId: String?,
-        offlinePolicy: OfflineSalePolicy
+        offlinePolicy: OfflineSalePolicy,
+        customerCredit: CustomerCreditContext? = null
     ): ValidatedSaleComputation {
         if (!role.canSell) {
             throw DomainException("ROLE_FORBIDDEN", "Le rôle ${role.labelFr} n'est pas autorisé à valider une vente.")
@@ -224,11 +236,24 @@ object SaleAndStockRules {
         }
 
         val remainingCredit = FcfaMath.checkedSub(totalFcfa, settledOrPending, "reste crédit")
-        if (remainingCredit > 0L && customerId.isNullOrBlank()) {
-            throw DomainException(
-                "CUSTOMER_REQUIRED_FOR_CREDIT",
-                "Sélectionnez un client enregistré pour accorder un crédit de ${FcfaMath.formatFcfa(remainingCredit)}."
+        if (remainingCredit > 0L) {
+            if (customerId.isNullOrBlank()) {
+                throw DomainException(
+                    "CUSTOMER_REQUIRED_FOR_CREDIT",
+                    "Sélectionnez un client enregistré pour accorder un crédit de ${FcfaMath.formatFcfa(remainingCredit)}."
+                )
+            }
+            val credit = customerCredit ?: throw DomainException(
+                "CREDIT_CONTEXT_REQUIRED",
+                "Le solde crédit du client est requis avant de valider une vente à crédit."
             )
+            if (credit.customerId != customerId) {
+                throw DomainException(
+                    "CREDIT_CUSTOMER_MISMATCH",
+                    "Le solde crédit fourni ne correspond pas au client de la vente."
+                )
+            }
+            validateCustomerCredit(credit, remainingCredit)
         }
 
         return ValidatedSaleComputation(
@@ -243,6 +268,44 @@ object SaleAndStockRules {
             expectedCratesByType = expectedCrates,
             offlineStockWarnings = warnings
         )
+    }
+
+    /**
+     * Règle de crédit stricte, alignée sur `depotpro-core::create_sale` du projet parent :
+     * solde dû + nouveau crédit ne doivent jamais dépasser le plafond configuré.
+     * Le contrôle est applicable à chaque vente, en ligne comme hors ligne.
+     */
+    fun validateCustomerCredit(credit: CustomerCreditContext, additionalCreditFcfa: Long) {
+        if (credit.creditLimitFcfa < 0L) {
+            throw DomainException("INVALID_CREDIT_LIMIT", "Le plafond de crédit ne peut pas être négatif.")
+        }
+        if (credit.outstandingBalanceFcfa < 0L) {
+            throw DomainException("INVALID_CREDIT_BALANCE", "Le solde dû ne peut pas être négatif.")
+        }
+        if (additionalCreditFcfa < 0L) {
+            throw DomainException("INVALID_CREDIT_AMOUNT", "Le crédit supplémentaire ne peut pas être négatif.")
+        }
+        if (additionalCreditFcfa == 0L) return
+
+        val projectedBalance = FcfaMath.checkedAdd(
+            credit.outstandingBalanceFcfa,
+            additionalCreditFcfa,
+            "projection du solde crédit client"
+        )
+        if (projectedBalance > credit.creditLimitFcfa) {
+            throw DomainException(
+                "CREDIT_LIMIT_EXCEEDED",
+                "Plafond de crédit dépassé pour ${credit.customerName} : " +
+                    "${FcfaMath.formatFcfa(projectedBalance)} projetés pour un plafond de " +
+                    "${FcfaMath.formatFcfa(credit.creditLimitFcfa)}."
+            )
+        }
+    }
+
+    /** Crédit encore disponible pour un client, plafonné à zéro (jamais de valeur négative). */
+    fun availableCreditFcfa(creditLimitFcfa: Long, outstandingBalanceFcfa: Long): Long {
+        if (creditLimitFcfa < 0L || outstandingBalanceFcfa < 0L) return 0L
+        return (creditLimitFcfa - outstandingBalanceFcfa).coerceAtLeast(0L)
     }
 
     /**

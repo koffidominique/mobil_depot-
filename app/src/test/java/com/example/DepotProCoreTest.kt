@@ -2,6 +2,7 @@ package com.example
 
 import com.example.core.CommercialUnit
 import com.example.core.CrateTypeSpec
+import com.example.core.CustomerCreditContext
 import com.example.core.DomainException
 import com.example.core.FcfaMath
 import com.example.core.MixedCaseCandidateLine
@@ -200,5 +201,57 @@ class DepotProCoreTest {
     @Test(expected = DomainException::class)
     fun fcfaMath_throwsOnOverflow() {
         FcfaMath.checkedMul(Long.MAX_VALUE / 2L, 4)
+    }
+
+    @Test
+    fun creditLimit_exactProjectionAccepted_andOneFcfaOverRejected() {
+        val atLimit = CustomerCreditContext("cust_1", "Maquis Adjovi", 150_000L, 140_000L)
+        SaleAndStockRules.validateCustomerCredit(atLimit, 10_000L)
+
+        var rejectedCode = ""
+        try {
+            SaleAndStockRules.validateCustomerCredit(atLimit, 10_001L)
+        } catch (ex: DomainException) {
+            rejectedCode = ex.code
+        }
+        assertEquals("CREDIT_LIMIT_EXCEEDED", rejectedCode)
+        assertEquals(10_000L, SaleAndStockRules.availableCreditFcfa(150_000L, 140_000L))
+        assertEquals(0L, SaleAndStockRules.availableCreditFcfa(150_000L, 160_000L))
+    }
+
+    @Test
+    fun saleValidation_rejectsCreditAboveCustomerLimit() {
+        val line = SaleCartLineInput(
+            lineKey = "credit_line",
+            variantId = "var_beaufort_50",
+            variantName = "Beaufort 50 cl",
+            unit = CommercialUnit.BOTTLE,
+            unitCount = 10,
+            unitPriceFcfa = 1_000L,
+            crateCapacity = 12,
+            packSize = 12,
+            isReusable = true,
+            allowHalfCase = true,
+            bottleProfileId = "bp_beaufort_50",
+            crateTypeId = "crate_b12_50",
+            availableFullStockUnits = 100
+        )
+
+        var rejectedCode = ""
+        try {
+            SaleAndStockRules.validateSale(
+                role = UserRole.MANAGER,
+                lines = listOf(line),
+                mixedCases = emptyList(),
+                discountFcfa = 0L,
+                payments = listOf(PaymentAllocationInput(PaymentMethod.CASH, 2_000L, null, true)),
+                customerId = "cust_1",
+                offlinePolicy = OfflineSalePolicy.ALLOW_WITH_WARNING,
+                customerCredit = CustomerCreditContext("cust_1", "Maquis Adjovi", 15_000L, 8_000L)
+            )
+        } catch (ex: DomainException) {
+            rejectedCode = ex.code
+        }
+        assertEquals("CREDIT_LIMIT_EXCEEDED", rejectedCode)
     }
 }

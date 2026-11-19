@@ -47,7 +47,8 @@ data class SyncOperationEnvelope(
     @Json(name = "occurred_at") val occurredAt: String,
     @Json(name = "base_revision") val baseRevision: Long,
     @Json(name = "idempotency_key") val idempotencyKey: String,
-    @Json(name = "payload") val payloadJson: String
+    @Json(name = "payload") val payloadJson: String,
+    @Json(name = "server_sequence") val serverSequence: Long? = null
 )
 
 object SyncBackoffPolicy {

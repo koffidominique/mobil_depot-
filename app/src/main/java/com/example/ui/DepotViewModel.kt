@@ -748,7 +748,8 @@ class DepotViewModel(application: Application) : AndroidViewModel(application) {
                     userName = ctx.user.fullName,
                     deviceId = ctx.deviceId,
                     tradeName = tradeName,
-                    city = city
+                    city = city,
+                    context = getApplication()
                 )
                 clearCart()
                 _uiMessages.tryEmit("Données pilotes purgées : dépôt prêt pour la production.")

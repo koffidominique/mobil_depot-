@@ -716,6 +716,7 @@ class StockCashAndSyncRepository(
         val isoFormatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("UTC")
         }
+        var claimedOperationIds: List<String> = emptyList()
 
         return try {
             val api = apiFactory(serverUrl)
@@ -723,7 +724,20 @@ class StockCashAndSyncRepository(
             var conflictCount = 0
 
             if (batch.isNotEmpty()) {
-                val envelopes = batch.map { item ->
+                claimedOperationIds = batch.map { it.operationId }
+                val claimedCount = db.withTransaction {
+                    syncDao.claimOutboxBatch(claimedOperationIds)
+                }
+                if (claimedCount == 0) {
+                    return SyncExecutionReport.Failed(
+                        "Une autre synchronisation traite déjà ces opérations.",
+                        batch.size
+                    )
+                }
+
+                // Relecture après réservation : les compteurs de tentatives sont à jour.
+                val claimed = syncDao.getOutboxByIds(claimedOperationIds)
+                val envelopes = claimed.map { item ->
                     SyncOperationEnvelope(
                         operationId = item.operationId,
                         tenantId = item.tenantId,
@@ -736,7 +750,8 @@ class StockCashAndSyncRepository(
                         occurredAt = isoFormatter.format(Date(item.createdAtMs)),
                         baseRevision = item.baseRevision,
                         idempotencyKey = item.idempotencyKey,
-                        payloadJson = item.payloadJson
+                        payloadJson = item.payloadJson,
+                        serverSequence = item.serverSequence
                     )
                 }
 
@@ -749,11 +764,16 @@ class StockCashAndSyncRepository(
                     )
                 )
 
-                val itemMap = batch.associateBy { it.operationId }
+                val itemMap = claimed.associateBy { it.operationId }
+                val acknowledgedIds = hashSetOf<String>()
                 db.withTransaction {
                     for (ack in pushResp.results) {
                         val item = itemMap[ack.operationId] ?: continue
-                        val linkedSaleId = if (item.commandType == "SALE_CREATE" && item.idempotencyKey.startsWith("idem_")) {
+                        if (!acknowledgedIds.add(item.operationId)) continue
+                        val linkedSaleId = if (
+                            item.commandType in setOf("SALE_CREATE", "MIXED_SALE_CREATE") &&
+                            item.idempotencyKey.startsWith("idem_")
+                        ) {
                             item.idempotencyKey.removePrefix("idem_")
                         } else null
 
@@ -763,11 +783,14 @@ class StockCashAndSyncRepository(
                                 syncDao.updateOutboxStatus(
                                     operationId = item.operationId,
                                     status = "SYNCED",
-                                    attemptCount = item.attemptCount + 1,
+                                    attemptCount = item.attemptCount,
                                     nextRetryAtMs = 0L,
                                     lastError = null,
                                     syncedAtMs = now
                                 )
+                                if (ack.serverSequence != null) {
+                                    syncDao.updateOutboxServerSequence(item.operationId, ack.serverSequence)
+                                }
                                 if (linkedSaleId != null) {
                                     salesDao.updateSaleSyncStatus(linkedSaleId, "SYNCED")
                                 }
@@ -777,11 +800,14 @@ class StockCashAndSyncRepository(
                                 syncDao.updateOutboxStatus(
                                     operationId = item.operationId,
                                     status = "CONFLICT",
-                                    attemptCount = item.attemptCount + 1,
+                                    attemptCount = item.attemptCount,
                                     nextRetryAtMs = Long.MAX_VALUE,
                                     lastError = ack.message ?: "Conflit détecté côté serveur",
                                     syncedAtMs = null
                                 )
+                                if (ack.serverSequence != null) {
+                                    syncDao.updateOutboxServerSequence(item.operationId, ack.serverSequence)
+                                }
                                 if (linkedSaleId != null) {
                                     salesDao.updateSaleSyncStatus(linkedSaleId, "CONFLICT")
                                 }
@@ -799,17 +825,32 @@ class StockCashAndSyncRepository(
                                 )
                             }
                             else -> {
-                                val nextRetry = SyncBackoffPolicy.computeNextRetryAtMs(now, item.attemptCount + 1)
+                                val nextRetry = SyncBackoffPolicy.computeNextRetryAtMs(now, item.attemptCount)
                                 syncDao.updateOutboxStatus(
                                     operationId = item.operationId,
                                     status = "FAILED",
-                                    attemptCount = item.attemptCount + 1,
+                                    attemptCount = item.attemptCount,
                                     nextRetryAtMs = nextRetry,
                                     lastError = ack.message ?: "Rejet serveur",
                                     syncedAtMs = null
                                 )
                             }
                         }
+                    }
+
+                    // Un accusé de réception manquant n'est jamais interprété comme un succès :
+                    // l'opération reste durable et est reprogrammée avec backoff.
+                    for (item in claimed) {
+                        if (item.operationId in acknowledgedIds) continue
+                        val nextRetry = SyncBackoffPolicy.computeNextRetryAtMs(now, item.attemptCount)
+                        syncDao.updateOutboxStatus(
+                            operationId = item.operationId,
+                            status = "FAILED",
+                            attemptCount = item.attemptCount,
+                            nextRetryAtMs = nextRetry,
+                            lastError = "Accusé de réception serveur absent — opération conservée.",
+                            syncedAtMs = null
+                        )
                     }
                 }
             }
@@ -837,12 +878,18 @@ class StockCashAndSyncRepository(
             )
             SyncExecutionReport.Success(syncedCount, conflictCount, cursorSeq)
         } catch (ex: Exception) {
-            for (item in batch) {
-                val nextRetry = SyncBackoffPolicy.computeNextRetryAtMs(now, item.attemptCount + 1)
+            // Seules les opérations restées SYNCING sont réellement concernées par l'échec :
+            // un pull échoué après un push accepté ne doit pas refaire passer les ventes en FAILED.
+            val currentStates = runCatching {
+                if (claimedOperationIds.isEmpty()) emptyList()
+                else syncDao.getOutboxByIds(claimedOperationIds)
+            }.getOrDefault(emptyList())
+            for (item in currentStates.filter { it.status == "SYNCING" }) {
+                val nextRetry = SyncBackoffPolicy.computeNextRetryAtMs(now, item.attemptCount)
                 syncDao.updateOutboxStatus(
                     operationId = item.operationId,
                     status = "FAILED",
-                    attemptCount = item.attemptCount + 1,
+                    attemptCount = item.attemptCount,
                     nextRetryAtMs = nextRetry,
                     lastError = ex.message ?: "Serveur Axum injoignable",
                     syncedAtMs = null
@@ -850,7 +897,9 @@ class StockCashAndSyncRepository(
             }
             SyncExecutionReport.Failed(
                 message = "Serveur Axum injoignable (${ex.javaClass.simpleName}). Opérations conservées en file d'attente.",
-                pendingCount = batch.size
+                pendingCount = if (currentStates.isEmpty()) batch.size else currentStates.count {
+                    it.status == "SYNCING" || it.status == "FAILED"
+                }
             )
         }
     }

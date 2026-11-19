@@ -24,6 +24,19 @@ interface SyncDao {
     @Query("SELECT * FROM sync_outbox WHERE status IN ('PENDING', 'FAILED') AND nextRetryAtMs <= :nowMs ORDER BY localSequence ASC LIMIT 50")
     suspend fun getReadyOutboxBatch(nowMs: Long): List<SyncOutboxEntity>
 
+    /**
+     * Réservation atomique d'un lot : une opération ne peut être envoyée qu'une seule fois
+     * par cycle, même si deux écrans déclenchent une synchronisation simultanément.
+     */
+    @Query("UPDATE sync_outbox SET status = 'SYNCING', attemptCount = attemptCount + 1, nextRetryAtMs = 0, lastError = NULL WHERE operationId IN (:operationIds) AND status IN ('PENDING', 'FAILED')")
+    suspend fun claimOutboxBatch(operationIds: List<String>): Int
+
+    @Query("SELECT * FROM sync_outbox WHERE operationId IN (:operationIds) ORDER BY localSequence ASC")
+    suspend fun getOutboxByIds(operationIds: List<String>): List<SyncOutboxEntity>
+
+    @Query("UPDATE sync_outbox SET serverSequence = :serverSequence WHERE operationId = :operationId")
+    suspend fun updateOutboxServerSequence(operationId: String, serverSequence: Long?)
+
     @Query("SELECT COUNT(*) FROM sync_outbox WHERE status IN ('PENDING', 'FAILED')")
     fun observePendingCount(): Flow<Int>
 

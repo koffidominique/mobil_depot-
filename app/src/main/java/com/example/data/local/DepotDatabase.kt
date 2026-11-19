@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.local.dao.AuthAndOrgDao
 import com.example.data.local.dao.CatalogueAndStockDao
 import com.example.data.local.dao.PartnersAndPurchaseDao
@@ -75,7 +77,7 @@ import com.example.data.local.entities.UserEntity
         SyncConflictEntity::class,
         AuditLogEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class DepotDatabase : RoomDatabase() {
@@ -88,6 +90,16 @@ abstract class DepotDatabase : RoomDatabase() {
     companion object {
         const val DB_NAME = "depotpro_local.db"
 
+        /**
+         * Ajout non destructif du curseur serveur par opération (Partie 4.2 du cahier des charges).
+         * Aucune donnée métier n'est supprimée ni réécrite : migration additive uniquement.
+         */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_outbox ADD COLUMN serverSequence INTEGER")
+            }
+        }
+
         @Volatile
         private var INSTANCE: DepotDatabase? = null
 
@@ -97,7 +109,7 @@ abstract class DepotDatabase : RoomDatabase() {
                     context.applicationContext,
                     DepotDatabase::class.java,
                     DB_NAME
-                ).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
             }
         }
 

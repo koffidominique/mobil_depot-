@@ -2,6 +2,7 @@ package com.example.data.repository
 
 import androidx.room.withTransaction
 import com.example.core.CommercialUnit
+import com.example.core.CustomerCreditContext
 import com.example.core.DomainException
 import com.example.core.OfflineSalePolicy
 import com.example.core.PackagingRules
@@ -97,6 +98,12 @@ class SalesRepository(private val db: DepotDatabase) {
         val tenant = orgDao.getTenant()
         val offlinePolicy = OfflineSalePolicy.fromCode(tenant?.offlineSalePolicy ?: "ALLOW_WITH_WARNING")
 
+        // Le solde crédit est lu avant validation pour que le moteur métier puisse appliquer
+        // le plafond, puis relu et revérifié dans la transaction (aucune fenêtre de concurrence).
+        val customerForCredit = if (!customerId.isNullOrBlank()) {
+            partnerDao.getCustomerById(customerId)
+        } else null
+
         // Validation stricte côté moteur métier avant toute transaction SQLite
         val validation = SaleAndStockRules.validateSale(
             role = auth.role,
@@ -105,7 +112,15 @@ class SalesRepository(private val db: DepotDatabase) {
             discountFcfa = discountFcfa,
             payments = payments,
             customerId = customerId,
-            offlinePolicy = offlinePolicy
+            offlinePolicy = offlinePolicy,
+            customerCredit = customerForCredit?.let {
+                CustomerCreditContext(
+                    customerId = it.id,
+                    customerName = it.name,
+                    creditLimitFcfa = it.creditLimitFcfa,
+                    outstandingBalanceFcfa = it.financialBalanceFcfa
+                )
+            }
         )
 
         val saleId = "sale_${UUID.randomUUID()}"
@@ -116,6 +131,22 @@ class SalesRepository(private val db: DepotDatabase) {
                 partnerDao.getCustomerById(customerId)
                     ?: throw DomainException("CUSTOMER_NOT_FOUND", "Client introuvable.")
             } else null
+            if (customer?.isArchived == true) {
+                throw DomainException("CUSTOMER_ARCHIVED", "Ce client archivé ne peut plus faire l'objet d'une vente.")
+            }
+
+            // Contrôle atomique du plafond de crédit : la vente est refusée avant toute écriture.
+            if (validation.creditFcfa > 0L && customer != null) {
+                SaleAndStockRules.validateCustomerCredit(
+                    CustomerCreditContext(
+                        customerId = customer.id,
+                        customerName = customer.name,
+                        creditLimitFcfa = customer.creditLimitFcfa,
+                        outstandingBalanceFcfa = customer.financialBalanceFcfa
+                    ),
+                    validation.creditFcfa
+                )
+            }
 
             val customerDisplayName = customer?.name ?: "Client Comptoir"
 

@@ -46,6 +46,23 @@ import java.util.UUID
 @Config(sdk = [36])
 class SyncAndBackupIntegrationTest {
 
+    private fun buildActiveAuth(db: DepotDatabase): ActiveAuthContext {
+        val user = db.authAndOrgDao().getUserByUsername("gerant")!!
+        val branch = db.authAndOrgDao().getBranch("branch_marcory_01")!!
+        val device = db.authAndOrgDao().getCurrentDevice()!!
+        return ActiveAuthContext(
+            session = AuthSessionEntity(
+                "s_test_" + UUID.randomUUID(), user.tenantId, user.id, branch.id, device.id,
+                0L, Long.MAX_VALUE, false
+            ),
+            user = user,
+            role = UserRole.fromCode(user.roleCode),
+            branchId = branch.id,
+            branchName = branch.name,
+            deviceId = device.id
+        )
+    }
+
     private class InMemoryTokenStore : TokenStore {
         private var token: String? = "test_token"
         private var branchId: String? = null
@@ -328,4 +345,157 @@ class SyncAndBackupIntegrationTest {
             db.close()
         }
     }
+    @Test
+    fun `credit limit rejection is atomic and leaves no sale stock movement or outbox entry`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, DepotDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            PilotCatalogSeeder.ensureInitialized(db)
+            val auth = buildActiveAuth(db)
+            val customer = db.partnersAndPurchaseDao().getCustomerById("cust_palmier")!!
+            db.partnersAndPurchaseDao().upsertCustomer(
+                customer.copy(creditLimitFcfa = 10_000L, financialBalanceFcfa = 9_000L)
+            )
+            val variant = db.catalogueAndStockDao().getVariantById("var_beaufort_50")!!
+            val stockBefore = db.catalogueAndStockDao()
+                .getStockBalance(auth.branchId, variant.id)!!.fullUnitsQty
+            val salesBefore = db.salesAndCashDao().observeSales(auth.branchId).first().size
+            val outboxBefore = db.syncDao().observeOutbox().first().size
+
+            var rejectedCode = ""
+            try {
+                SalesRepository(db).createAndCommitSale(
+                    auth = auth,
+                    isOnline = false,
+                    customerId = customer.id,
+                    priceTier = PriceTier.RETAIL,
+                    cartLines = listOf(
+                        SaleCartLineInput(
+                            lineKey = "credit_over_limit",
+                            variantId = variant.id,
+                            variantName = variant.name,
+                            unit = CommercialUnit.BOTTLE,
+                            unitCount = 10,
+                            unitPriceFcfa = 1_000L,
+                            crateCapacity = 12,
+                            packSize = 12,
+                            isReusable = true,
+                            allowHalfCase = true,
+                            bottleProfileId = variant.bottleProfileId,
+                            crateTypeId = variant.crateTypeId,
+                            availableFullStockUnits = stockBefore
+                        )
+                    ),
+                    mixedCases = emptyList(),
+                    discountFcfa = 0L,
+                    payments = listOf(PaymentAllocationInput(PaymentMethod.CASH, 1_000L, null, true)),
+                    returnedCratesAtSale = emptyMap(),
+                    returnedBottlesAtSale = emptyMap()
+                )
+            } catch (ex: DomainException) {
+                rejectedCode = ex.code
+            }
+
+            assertEquals("CREDIT_LIMIT_EXCEEDED", rejectedCode)
+            assertEquals(salesBefore, db.salesAndCashDao().observeSales(auth.branchId).first().size)
+            assertEquals(outboxBefore, db.syncDao().observeOutbox().first().size)
+            assertEquals(
+                stockBefore,
+                db.catalogueAndStockDao().getStockBalance(auth.branchId, variant.id)!!.fullUnitsQty
+            )
+            assertEquals(9_000L, db.partnersAndPurchaseDao().getCustomerById(customer.id)!!.financialBalanceFcfa)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `partial server acknowledgement persists server sequence and keeps missing operations retryable`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, DepotDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            PilotCatalogSeeder.ensureInitialized(db)
+            val auth = buildActiveAuth(db)
+            val variant = db.catalogueAndStockDao().getVariantById("var_beaufort_50")!!
+            val salesRepo = SalesRepository(db)
+
+            repeat(2) {
+                salesRepo.createAndCommitSale(
+                    auth = auth,
+                    isOnline = false,
+                    customerId = null,
+                    priceTier = PriceTier.RETAIL,
+                    cartLines = listOf(
+                        SaleCartLineInput(
+                            lineKey = "ack_test_$it",
+                            variantId = variant.id,
+                            variantName = variant.name,
+                            unit = CommercialUnit.BOTTLE,
+                            unitCount = 1,
+                            unitPriceFcfa = 1_000L,
+                            crateCapacity = 12,
+                            packSize = 12,
+                            isReusable = true,
+                            allowHalfCase = true,
+                            bottleProfileId = variant.bottleProfileId,
+                            crateTypeId = variant.crateTypeId,
+                            availableFullStockUnits = 100
+                        )
+                    ),
+                    mixedCases = emptyList(),
+                    discountFcfa = 0L,
+                    payments = listOf(PaymentAllocationInput(PaymentMethod.CASH, 1_000L, null, true)),
+                    returnedCratesAtSale = emptyMap(),
+                    returnedBottlesAtSale = emptyMap()
+                )
+            }
+
+            val interceptor = Interceptor { chain ->
+                val request = chain.request()
+                val jsonMedia = "application/json".toMediaType()
+                val body = when {
+                    request.url.encodedPath.endsWith("/api/v1/sync/push") -> {
+                        val buf = Buffer()
+                        request.body?.writeTo(buf)
+                        val opIds = """"operation_id"\s*:\s*"([^"]+)"""".toRegex()
+                            .findAll(buf.readUtf8()).map { it.groupValues[1] }.toList()
+                        val first = opIds.first()
+                        """{"results":[{"operation_id":"$first","status":"ACCEPTED","server_sequence":222,"conflict_type":null,"message":null}],"server_time":"2026-11-19T08:00:00Z"}"""
+                    }
+                    request.url.encodedPath.endsWith("/api/v1/sync/pull") ->
+                        """{"server_sequence":223,"has_more":false,"price_updates":[],"stock_updates":[],"customer_updates":[],"revoked_device_ids":[]}"""
+                    else -> "{}"
+                }
+                Response.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(body.toResponseBody(jsonMedia))
+                    .build()
+            }
+            val api = AxumSyncApi.create(
+                "https://axum-test.depotpro.ci",
+                OkHttpClient.Builder().addInterceptor(interceptor).build()
+            )
+            val report = StockCashAndSyncRepository(db, InMemoryTokenStore()) { api }
+                .runSynchronization(auth, "https://axum-test.depotpro.ci", isOnline = true)
+            assertTrue(report is SyncExecutionReport.Success)
+
+            val outbox = db.syncDao().observeOutbox().first()
+            assertEquals(2, outbox.size)
+            assertEquals(1, outbox.count { it.status == "SYNCED" && it.serverSequence == 222L })
+            val missingAck = outbox.first { it.status == "FAILED" }
+            assertEquals(null, missingAck.serverSequence)
+            assertTrue(missingAck.lastError!!.contains("Accusé de réception"))
+            assertTrue(missingAck.nextRetryAtMs > System.currentTimeMillis())
+        } finally {
+            db.close()
+        }
+    }
+
 }

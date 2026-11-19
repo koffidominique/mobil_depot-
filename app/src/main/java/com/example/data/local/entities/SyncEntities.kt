@@ -26,7 +26,10 @@ data class SyncOutboxEntity(
     val nextRetryAtMs: Long = 0L,
     val lastError: String? = null,
     val createdAtMs: Long,
-    val syncedAtMs: Long? = null
+    val syncedAtMs: Long? = null,
+    // Numéro de séquence attribué par le serveur Axum lors de l'accusé de réception.
+    // Null tant que l'opération n'a pas été acceptée (ou en conflit) côté serveur.
+    val serverSequence: Long? = null
 )
 
 @Entity(tableName = "sync_cursors")
