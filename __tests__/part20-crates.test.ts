@@ -7,7 +7,16 @@
  * exposé à l'interface (mêmes noms, mêmes champs, mêmes refus) via le moteur de
  * démonstration du navigateur, ce qui permet de vérifier l'API côté frontend.
  */
+import { depot } from '../src/core/client';
+import NativeDepotCore from '../src/specs/NativeDepotCore';
 import { executePreviewCommand } from '../web/mock/engine';
+
+jest.mock('../src/specs/NativeDepotCore', () => ({
+  __esModule: true,
+  default: { executeCommand: jest.fn() },
+}));
+
+const nativeExecute = NativeDepotCore.executeCommand as jest.Mock;
 
 interface Envelope {
   ok: boolean;
@@ -351,5 +360,67 @@ describe('§20 invariants financiers et historiques (38-50)', () => {
       expect(result.ok).toBe(false);
       expect(permission).toMatch(/^crate\./);
     });
+  });
+});
+
+describe('§20 contrat frontend → cœur (noms de commandes et charge utile)', () => {
+  beforeEach(() => {
+    nativeExecute.mockReset();
+    nativeExecute.mockResolvedValue(JSON.stringify({ ok: true, data: {} }));
+  });
+
+  function lastRequest() {
+    const raw = nativeExecute.mock.calls.at(-1)?.[0] as string;
+    return JSON.parse(raw) as { command: string; payload: Record<string, unknown> };
+  }
+
+  it('les lectures de casiers passent par leurs commandes dédiées', async () => {
+    await depot.getCrateStock();
+    expect(lastRequest().command).toBe('getCrateStock');
+    await depot.getCustomerCrateBalance('cust_palmier');
+    expect(lastRequest()).toEqual({ command: 'getCustomerCrateBalance', payload: { customer_id: 'cust_palmier' } });
+    await depot.getCrateMigrationReview(true);
+    expect(lastRequest()).toEqual({ command: 'getCrateMigrationReview', payload: { include_resolved: true } });
+  });
+
+  it('un retour de casiers transporte toujours une clé d’idempotence', async () => {
+    await depot.recordCustomerCrateReturn({
+      customer_id: 'cust_palmier', crate_type_id: 'crate_b12_50', qty: 2,
+      reason: 'Retour au comptoir', request_key: 'key-20-1',
+    });
+    const request = lastRequest();
+    expect(request.command).toBe('recordCustomerCrateReturn');
+    expect(request.payload.request_key).toBe('key-20-1');
+    expect(request.payload.qty).toBe(2);
+  });
+
+  it('la vente de casier vide reste une vente avec paiements', async () => {
+    await depot.recordEmptyCrateSale({
+      crate_type_id: 'crate_b12_50', qty: 1, customer_id: null, unit_price_fcfa: 1500,
+      payments: [{ method: 'CASH', amount_fcfa: 1500, reference: null, confirmed_by_provider: true }],
+      request_key: 'key-20-2',
+    });
+    const request = lastRequest();
+    expect(request.command).toBe('recordEmptyCrateSale');
+    expect((request.payload.payments as unknown[]).length).toBe(1);
+  });
+
+  it('la vente de boissons peut déclarer les casiers vides rendus', async () => {
+    await depot.createSale({
+      customer_id: 'cust_palmier',
+      price_tier: 'RETAIL',
+      lines: [{
+        line_key: 'l1', variant_id: 'var_drogba_50', variant_name: 'Drogba 50 cl', unit: 'CASE',
+        unit_count: 1, unit_price_fcfa: 6800, crate_capacity: 12, pack_size: 12,
+        is_reusable: true, allow_half_case: true, bottle_profile_id: 'bp_drogba_50', crate_type_id: 'crate_b12_50',
+      }],
+      mixed_cases: [], discount_fcfa: 0,
+      payments: [{ method: 'CASH', amount_fcfa: 6800, reference: null, confirmed_by_provider: true }],
+      is_online: true,
+      empty_crates_returned: [{ crate_type_id: 'crate_b12_50', qty: 1 }],
+    });
+    const request = lastRequest();
+    expect(request.command).toBe('createSale');
+    expect(request.payload.empty_crates_returned).toEqual([{ crate_type_id: 'crate_b12_50', qty: 1 }]);
   });
 });

@@ -36,6 +36,14 @@ export const saleSchema = z.object({
   discount_fcfa: z.number().int().nonnegative(),
   payments: z.array(paymentSchema),
   is_online: z.boolean(),
+  // Casiers vides rendus immédiatement par le client : retour physique, jamais financier.
+  empty_crates_returned: z
+    .array(z.object({
+      crate_type_id: z.string().min(1),
+      qty: z.number().int().positive(),
+      reason: z.string().optional(),
+    }))
+    .optional(),
 });
 
 export type LoginForm = z.infer<typeof loginSchema>;
