@@ -45,6 +45,8 @@ export function PosScreen() {
   const [method, setMethod] = useState<PaymentInput['method']>('CASH');
   const [reference, setReference] = useState('');
   const [discount, setDiscount] = useState('0');
+  const [emptyCrateType, setEmptyCrateType] = useState('crate_b12_50');
+  const [emptyCrateQty, setEmptyCrateQty] = useState('0');
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
@@ -97,6 +99,9 @@ export function PosScreen() {
           confirmed_by_provider: method2 !== 'MOBILE_MONEY' || Boolean(ref),
         });
       }
+      // Retour immédiat : le client rend des casiers vides en même temps qu'il
+      // achète. C'est un mouvement physique, jamais un paiement ni une remise.
+      const emptyCratesReturned = Number.parseInt(emptyCrateQty, 10);
       const input = {
         customer_id: selectedCustomerId,
         price_tier: tier,
@@ -105,6 +110,9 @@ export function PosScreen() {
         discount_fcfa: toJsonInteger(parseIntegerFcfa(discount || '0')),
         payments,
         is_online: online,
+        ...(selectedCustomerId && emptyCratesReturned > 0
+          ? { empty_crates_returned: [{ crate_type_id: emptyCrateType, qty: emptyCratesReturned }] }
+          : {}),
       };
       await depot.validateSale(input);
       return depot.createSale(input);
@@ -122,6 +130,8 @@ export function PosScreen() {
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory'] }),
         queryClient.invalidateQueries({ queryKey: ['sales'] }),
+        queryClient.invalidateQueries({ queryKey: ['crate-stock'] }),
+        queryClient.invalidateQueries({ queryKey: ['crate-movements'] }),
       ]);
     },
     onError: (err) => setError(err.message),
@@ -288,6 +298,17 @@ export function PosScreen() {
           <Field label="Montant du second moyen" value={amount2} keyboardType="numeric" onChangeText={setAmount2} />
         )}
         <Field label="Référence de confirmation opérateur (si mobile money)" value={reference} onChangeText={setReference} />
+        <Field label="Casiers vides rendus : type" value={emptyCrateType} onChangeText={setEmptyCrateType} />
+        <Field
+          label="Casiers vides rendus : quantité"
+          value={emptyCrateQty}
+          keyboardType="numeric"
+          onChangeText={setEmptyCrateQty}
+        />
+        <Text style={{ color: c.subtitle, fontSize: 11 }}>
+          Un retour de casiers vides est un mouvement physique : il réduit le solde du client, sans créer de
+          paiement, de remise ni de mouvement de caisse. Un client enregistré est requis.
+        </Text>
         <PrimaryButton
           label="Valider la vente"
           disabled={cartLines.length === 0}

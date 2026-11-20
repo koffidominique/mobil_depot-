@@ -211,6 +211,8 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
+    /** Casiers vides rendus par le client au moment de la vente (retour physique). */
+    empty_crates_returned?: Array<{ crate_type_id: string; qty: number; reason?: string }>;
   }) => {
     const valid = await validateInterface(saleSchema, input, 'Création de vente');
     return call<SaleResult>('createSale', valid);
