@@ -431,6 +431,9 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       ((payload.empty_crates_returned ?? []) as AnyRecord[]).forEach((line, index) => {
         const qty = integer(line.qty ?? 0, 'qty');
         if (qty <= 0) return;
+        const currentBalance = crateBalance('CUSTOMER', String(payload.customer_id ?? 'cust_palmier'))
+          .balances.find((entry) => entry.crate_type_id === line.crate_type_id)?.balance_qty ?? 0;
+        if (qty > currentBalance) throw new Error(`CRATE_RETURN_EXCEEDS_BALANCE: solde physique ${currentBalance}`);
         const result = applyCrateMove({
           crate_type_id: String(line.crate_type_id), movement_type: 'customer_empty_return_in', qty,
           full_delta: 0, empty_delta: qty, partner_type: 'CUSTOMER', partner_id: String(payload.customer_id ?? 'cust_palmier'),
@@ -552,9 +555,14 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       const qty = integer(payload.qty, 'qty');
       if (qty <= 0) throw new Error('INVALID_QUANTITY');
       if (String(payload.reason ?? '').trim().length < 3) throw new Error('REASON_REQUIRED: motif requis');
+      if (String(payload.request_key ?? '').trim().length < 4) throw new Error('REQUEST_KEY_REQUIRED: clé d’idempotence requise');
       const customerId = String(payload.customer_id ?? payload.partner_id ?? 'cust_palmier');
       const balance = crateBalance('CUSTOMER', customerId).balances.find((line) => line.crate_type_id === crateId)?.balance_qty ?? 0;
       if (qty > balance && !payload.allow_overflow) throw new Error(`CRATE_RETURN_EXCEEDS_BALANCE: solde physique ${balance}`);
+      const replay = crateMovements.find((m) => m.idempotency_key === `${payload.request_key}:matched`);
+      if (replay) {
+        return { status: 'RECORDED', crate_type_id: crateId, qty, matched_qty: qty, exceptional_qty: 0, balance_after: balance, document_id: replay.document_id, movements: [replay], creates_financial_debt: false as const, idempotent: true };
+      }
       const matched = Math.min(qty, Math.max(0, balance));
       const overflow = qty - matched;
       const movements: AnyRecord[] = [];
@@ -588,6 +596,7 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     }
     case 'recordCrateAdjustment': {
       const qty = integer(payload.qty, 'qty');
+      if (String(payload.request_key ?? '').trim().length < 4) throw new Error('REQUEST_KEY_REQUIRED: clé d’idempotence requise');
       if (qty <= 0) throw new Error('INVALID_QUANTITY');
       if (String(payload.reason ?? '').trim().length < 3) throw new Error('REASON_REQUIRED: motif requis');
       const direction = String(payload.direction ?? 'IN').toUpperCase();
@@ -603,6 +612,7 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     }
     case 'recordCrateLoss': {
       const qty = integer(payload.qty, 'qty');
+      if (String(payload.request_key ?? '').trim().length < 4) throw new Error('REQUEST_KEY_REQUIRED: clé d’idempotence requise');
       if (qty <= 0) throw new Error('INVALID_QUANTITY');
       if (String(payload.reason ?? '').trim().length < 3) throw new Error('REASON_REQUIRED: motif requis');
       const kind = String(payload.kind ?? 'LOST').toUpperCase();
@@ -622,6 +632,7 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     }
     case 'recordEmptyCrateSale': {
       const crate = crateMeta(String(payload.crate_type_id));
+      if (String(payload.request_key ?? '').trim().length < 4) throw new Error('REQUEST_KEY_REQUIRED: clé d’idempotence requise');
       const qty = integer(payload.qty, 'qty');
       if (qty <= 0) throw new Error('INVALID_QUANTITY');
       const unitPrice = integer(payload.unit_price_fcfa ?? crate.empty_sale_price_fcfa, 'unit_price_fcfa');
