@@ -634,6 +634,61 @@ pub const MIGRATION_10: &str = r#"
 ///      situations ambiguës à valider par l'OWNER.
 ///
 /// Aucun `DROP`, aucun `DELETE`, aucune réécriture de document validé.
+/// Migration 12 — catalogue multi-brasseries administrable par l'OWNER.
+///
+/// Tables nouvelles uniquement : les référentiels existants (`products`, `brands`,
+/// `product_categories`, `product_variants`) sont étendus par
+/// `ensure_catalog_columns`, jamais dupliqués.
+pub const MIGRATION_12: &str = r#"
+        CREATE TABLE IF NOT EXISTS producers (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL,
+          country TEXT, city TEXT, logo_path TEXT, source TEXT, source_url TEXT, notes TEXT,
+          status TEXT NOT NULL DEFAULT 'ACTIVE',
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_producers_code ON producers(tenant_id, code);
+
+        CREATE TABLE IF NOT EXISTS brewery_catalogs (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, producer_id TEXT NOT NULL,
+          external_catalog_id TEXT, name TEXT NOT NULL, format TEXT, schema_version TEXT,
+          status TEXT NOT NULL DEFAULT 'ACTIVE', last_import_at INTEGER,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_brewery_catalogs_ext
+          ON brewery_catalogs(tenant_id, producer_id, external_catalog_id);
+
+        CREATE TABLE IF NOT EXISTS catalog_imports (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+          request_key TEXT NOT NULL, format TEXT NOT NULL, producer_id TEXT, catalog_id TEXT,
+          checksum TEXT NOT NULL, status TEXT NOT NULL,
+          created_count INTEGER NOT NULL DEFAULT 0, updated_count INTEGER NOT NULL DEFAULT 0,
+          skipped_count INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0,
+          report TEXT NOT NULL DEFAULT '{}', user_id TEXT NOT NULL, device_id TEXT,
+          occurred_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_imports_key
+          ON catalog_imports(tenant_id, request_key);
+
+        CREATE TABLE IF NOT EXISTS catalog_sources (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, producer_id TEXT, catalog_id TEXT,
+          label TEXT, url TEXT, retrieved_at INTEGER
+        );
+
+        INSERT OR IGNORE INTO producers
+          (id, tenant_id, code, name, country, city, source, status, created_at, updated_at)
+        VALUES
+          ('prod_solibra', 'tenant_ci_01', 'SOLIBRA', 'SOLIBRA', 'Côte d''Ivoire', 'Abidjan', 'SEED', 'ACTIVE', 0, 0),
+          ('prod_brassivoire', 'tenant_ci_01', 'BRASSIVOIRE', 'BRASSIVOIRE', 'Côte d''Ivoire', 'Abidjan', 'SEED', 'ACTIVE', 0, 0);
+
+        INSERT OR IGNORE INTO permissions (code, description) VALUES
+          ('catalog.import', 'Importer et actualiser un catalogue JSON de brasserie');
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        VALUES
+          ('tenant_ci_01','*','OWNER','catalog.import',1,0),
+          ('tenant_ci_01','*','ADMIN','catalog.import',1,0);
+"#;
+
 pub const MIGRATION_11: &str = r#"
         -- 1. Valeurs distinctes du casier (jamais confondues avec le prix boisson)
         ALTER TABLE crate_types ADD COLUMN acquisition_value_fcfa INTEGER NOT NULL DEFAULT 0;
@@ -872,10 +927,10 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 11] = [
+    let migrations: [(i64, &str); 12] = [
         (1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4),
         (5, MIGRATION_5), (6, MIGRATION_6), (7, MIGRATION_7), (8, MIGRATION_8),
-        (9, MIGRATION_9), (10, MIGRATION_10), (11, MIGRATION_11),
+        (9, MIGRATION_9), (10, MIGRATION_10), (11, MIGRATION_11), (12, MIGRATION_12),
     ];
     for (version, sql) in migrations {
         if version <= current {
@@ -892,6 +947,57 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
     ensure_security_columns(conn)?;
     ensure_desktop_columns(conn)?;
     ensure_sale_crate_columns(conn)?;
+    ensure_catalog_columns(conn)?;
+    Ok(())
+}
+
+/// Colonnes du catalogue multi-brasseries ajoutées de façon rejouable : ces
+/// tables existent depuis la migration 4, seule leur extension est nouvelle.
+fn ensure_catalog_columns(conn: &Connection) -> CoreResult<()> {
+    for (column, definition) in [
+        ("tenant_id", "tenant_id TEXT"),
+        ("code", "code TEXT"),
+        ("producer_id", "producer_id TEXT"),
+        ("status", "status TEXT NOT NULL DEFAULT 'ACTIVE'"),
+        ("created_at", "created_at INTEGER NOT NULL DEFAULT 0"),
+        ("updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "brands", column, definition)?;
+    }
+    for (column, definition) in [
+        ("tenant_id", "tenant_id TEXT"),
+        ("code", "code TEXT"),
+        ("parent_id", "parent_id TEXT"),
+        ("description", "description TEXT"),
+        ("is_alcoholic", "is_alcoholic INTEGER NOT NULL DEFAULT 0"),
+        ("sort_order", "sort_order INTEGER NOT NULL DEFAULT 0"),
+        ("status", "status TEXT NOT NULL DEFAULT 'ACTIVE'"),
+        ("created_at", "created_at INTEGER NOT NULL DEFAULT 0"),
+        ("updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "product_categories", column, definition)?;
+    }
+    for (column, definition) in [
+        ("code", "code TEXT"),
+        ("producer_id", "producer_id TEXT"),
+        ("source", "source TEXT"),
+        ("status", "status TEXT NOT NULL DEFAULT 'ACTIVE'"),
+        ("updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "products", column, definition)?;
+    }
+    ensure_column(conn, "crate_types", "capacity_to_verify", "capacity_to_verify INTEGER NOT NULL DEFAULT 0")?;
+    for (column, definition) in [
+        ("product_id", "product_id TEXT"),
+        ("producer_id", "producer_id TEXT"),
+        ("category_id", "category_id TEXT"),
+        ("brand_id", "brand_id TEXT"),
+        ("source", "source TEXT"),
+        ("to_verify", "to_verify INTEGER NOT NULL DEFAULT 0"),
+        ("updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "product_variants", column, definition)?;
+    }
     Ok(())
 }
 

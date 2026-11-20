@@ -22,7 +22,7 @@ fn desktop_handoff_uses_same_rules_and_branch_scoped_stock() {
     let path = std::env::temp_dir().join(format!("depot-part11-{}.sqlite", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let init = ok(call("initializeDatabase", json!({ "path": path.to_str().unwrap() })));
-    assert_eq!(init["schema_version"], 11);
+    assert_eq!(init["schema_version"], 12);
 
     let login = ok(call("authenticate", json!({
         "username": "patron", "pin": "9999",

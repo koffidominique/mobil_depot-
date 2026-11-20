@@ -336,7 +336,7 @@ describe('§20 invariants financiers et historiques (38-50)', () => {
 
   it('48-49. base existante et historique ancien conservés', () => {
     const init = call('initializeDatabase');
-    expect(init.schema_version).toBe(11);
+    expect(init.schema_version).toBe(12);
     const packaging = call('getPackagingAccount', { partner_type: 'CUSTOMER', partner_id: 'cust_palmier' });
     // L'ancien registre reste lisible, en lecture seule.
     expect(packaging.legacy.engine).toBe('LEGACY_0015');

@@ -1,6 +1,7 @@
 //! DEPOTPRO MOBILE PREMIUM — moteur métier Rust partagé Android/iOS.
 //! Interface C stable consommée par le TurboModule React Native.
 
+mod catalog;
 mod commands;
 mod crates;
 mod crypto;
@@ -36,7 +37,7 @@ fn execute_inner(input: &str) -> CoreResult<String> {
             .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?;
         *path_guard = path.to_string();
         return Ok(json!({"ok": true, "data": {
-            "database": path, "schema_version": 11, "seeded_demo": seed_demo
+            "database": path, "schema_version": 12, "seeded_demo": seed_demo
         }}).to_string());
     }
 

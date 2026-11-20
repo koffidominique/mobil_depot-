@@ -758,3 +758,179 @@ export interface EmptyCrateSaleInput {
   request_key: string;
   is_online?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Catalogue multi-brasseries (LOT 2 / LOT 7) : producteurs, catalogues, imports
+// ---------------------------------------------------------------------------
+
+export type CatalogFormat = 'LEGACY' | 'SOLIBRA_NEW' | 'BRASSIVOIRE' | 'GENERIC';
+
+export interface ProducerRow {
+  producer_id: string;
+  code: string;
+  name: string;
+  country: string | null;
+  city: string | null;
+  status: string;
+  source: string | null;
+  created_at: number;
+  products_count?: number;
+  variants_count?: number;
+}
+
+export interface CategoryRow {
+  category_id: string;
+  code: string;
+  name: string;
+  parent_id: string | null;
+  description: string | null;
+  is_alcoholic: boolean;
+  sort_order: number;
+  status: string;
+}
+
+export interface BrandRow {
+  brand_id: string;
+  code: string;
+  name: string;
+  producer_id: string | null;
+  producer_name: string;
+  status: string;
+}
+
+export interface CatalogVariantRow {
+  variant_id: string;
+  sku: string;
+  name: string;
+  brand: string;
+  volume_label: string;
+  container_type: string;
+  material: string;
+  pack_size: number;
+  retail_case_fcfa: number;
+  wholesale_case_fcfa: number;
+  retail_bottle_fcfa: number;
+  crate_type_id: string | null;
+  crate_code: string;
+  crate_capacity: number;
+  crate_capacity_to_verify: boolean;
+  is_active: boolean;
+  to_verify: boolean;
+  producer_id: string;
+  producer_name: string;
+  category_id: string;
+  category_name: string;
+  brand_id: string;
+  brand_name: string;
+}
+
+export interface BreweryCatalogRow {
+  catalog_id: string;
+  name: string;
+  format: string | null;
+  schema_version: string | null;
+  status: string;
+  external_catalog_id: string | null;
+  last_import_at: number | null;
+  producer_name: string;
+}
+
+export interface CatalogImportRun {
+  import_run_id: string;
+  format: string;
+  status: string;
+  producer_id: string | null;
+  catalog_id: string | null;
+  checksum: string;
+  created_count: number;
+  updated_count: number;
+  skipped_count: number;
+  error_count: number;
+  occurred_at: number;
+  user_id: string;
+}
+
+export interface CatalogDashboard {
+  producers_count: number;
+  catalogs_count: number;
+  brands_count: number;
+  products_count: number;
+  variants_count: number;
+  categories_count: number;
+  active_variants_count: number;
+  inactive_variants_count: number;
+  to_verify_count: number;
+  variants_without_crate_count: number;
+  crate_capacities_to_verify_count: number;
+  imports_count: number;
+  producers: ProducerRow[];
+  recent_imports: CatalogImportRun[];
+  formats_supported: CatalogFormat[];
+}
+
+export interface CatalogImportPreview {
+  format: CatalogFormat;
+  detected_format: CatalogFormat;
+  schema_version: string | null;
+  catalog_id: string | null;
+  producer_code: string;
+  producer_name: string;
+  checksum: string;
+  preview: {
+    producer: { code: string; name: string; action: 'CREATE' | 'UPDATE' };
+    categories_to_create: string[];
+    brands_to_create: string[];
+    products_to_create: string[];
+    products_to_update: string[];
+    variants_to_create: string[];
+    variants_to_update: string[];
+    crate_types_to_create: string[];
+    crate_capacities_to_verify: string[];
+    unknown_crate_references: string[];
+    container_types: string[];
+    commercial_units: string[];
+    prices_are_preserved: boolean;
+    deleted_references: string[];
+    note: string;
+  };
+  warnings: Array<{ code: string; message: string; sku?: string; crate_code?: string }>;
+  sources: Array<{ label: string | null; url: string | null }>;
+  can_apply: boolean;
+}
+
+export interface CatalogImportReport {
+  format: CatalogFormat;
+  checksum: string;
+  producer_id: string;
+  producer_created: boolean;
+  catalog_id: string;
+  catalog_created: boolean;
+  counts: {
+    producers_created: number;
+    catalogs_created: number;
+    categories_created: number;
+    brands_created: number;
+    products_created: number;
+    products_updated: number;
+    variants_created: number;
+    variants_updated: number;
+    crate_types_created: number;
+  };
+  created: {
+    categories: string[];
+    brands: string[];
+    products: string[];
+    variants: string[];
+    crate_types: string[];
+  };
+  updated: { products: string[]; variants: string[] };
+  to_verify: { crate_capacities: string[]; variants: string[] };
+  warnings: Array<{ code: string; message: string }>;
+  prices_preserved: true;
+  stock_preserved: true;
+  deleted_references: string[];
+  note: string;
+  import_run_id?: string;
+  status?: string;
+  idempotent?: boolean;
+}

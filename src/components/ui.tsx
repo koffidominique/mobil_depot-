@@ -126,6 +126,7 @@ export function Field({
   placeholder,
   secureTextEntry,
   keyboardType = 'default',
+  multiline = false,
 }: {
   label: string;
   value: string;
@@ -133,6 +134,7 @@ export function Field({
   placeholder?: string;
   secureTextEntry?: boolean;
   keyboardType?: 'default' | 'numeric' | 'number-pad';
+  multiline?: boolean;
 }) {
   const c = useColors();
   return (
@@ -146,9 +148,15 @@ export function Field({
         secureTextEntry={secureTextEntry}
         keyboardType={keyboardType}
         accessibilityLabel={label}
-        returnKeyType="done"
-        blurOnSubmit
-        style={[styles.input, { color: c.text, backgroundColor: c.surface, borderColor: c.border, minHeight: 48 }]}
+        multiline={multiline}
+        numberOfLines={multiline ? 8 : 1}
+        returnKeyType={multiline ? 'default' : 'done'}
+        blurOnSubmit={!multiline}
+        style={[
+          styles.input,
+          { color: c.text, backgroundColor: c.surface, borderColor: c.border, minHeight: 48 },
+          multiline ? { minHeight: 160, textAlignVertical: 'top' as const } : null,
+        ]}
       />
     </View>
   );

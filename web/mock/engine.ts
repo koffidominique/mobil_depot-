@@ -35,7 +35,7 @@ const suppliers = [
   { id: 'sup_brasserie', name: "Brasseries de Côte d'Ivoire", phone: '20 30 40 50', debt_fcfa: 180000, total_purchased_fcfa: 1240000, total_paid_fcfa: 1060000 },
 ];
 
-const crates = [
+const crates: AnyRecord[] = [
   ['crate_b24_33', 'B24-33', 24, 'G_B24_33', 3500, 24], ['crate_b12_50', 'B12-50', 12, 'G_B12_50', 3000, 12],
   ['crate_b12_50_alt', 'B12-50-ALT', 12, 'G_B12_50_ALT', 3000, 12],
   ['crate_b12_60', 'B12-60', 12, 'G_B12_60', 3000, 12], ['crate_b12_65', 'B12-65', 12, 'G_B12_65', 3200, 12],
@@ -310,9 +310,343 @@ function packagingAccount(partnerType: string, partnerId: string) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Catalogue multi-brasseries : producteurs, catégories, marques, imports JSON
+// ---------------------------------------------------------------------------
+
+const catalogProducers: AnyRecord[] = [
+  { producer_id: 'producer_solibra', code: 'SOLIBRA', name: 'SOLIBRA', city: 'Abidjan', country: "Côte d'Ivoire", status: 'ACTIVE', source: 'SEED', created_at: now - 90 * 86400000 },
+  { producer_id: 'producer_brassivoire', code: 'BRASSIVOIRE', name: 'BRASSIVOIRE', city: 'Abidjan', country: "Côte d'Ivoire", status: 'ACTIVE', source: 'SEED', created_at: now - 90 * 86400000 },
+];
+
+const catalogCategories: AnyRecord[] = [
+  { category_id: 'cat_bieres', code: 'BIERES', name: 'Bières', parent_id: null, description: null, is_alcoholic: true, sort_order: 1, status: 'ACTIVE' },
+  { category_id: 'cat_eaux', code: 'EAUX', name: 'Eaux', parent_id: null, description: null, is_alcoholic: false, sort_order: 2, status: 'ACTIVE' },
+];
+
+const catalogBrands: AnyRecord[] = [
+  { brand_id: 'brand_solibra', code: 'SOLIBRA', name: 'SOLIBRA', producer_id: 'producer_solibra', status: 'ACTIVE' },
+  { brand_id: 'brand_cie', code: 'CIE', name: 'CIE', producer_id: 'producer_solibra', status: 'ACTIVE' },
+];
+
+const catalogVariants: AnyRecord[] = variants.map((variant, index) => ({
+  variant_id: variant.variant_id, sku: variant.sku, name: variant.name, brand: variant.brand,
+  volume_label: variant.volume_label, container_type: variant.container_type, material: variant.material,
+  pack_size: variant.pack_size, retail_case_fcfa: variant.retail_case_fcfa,
+  wholesale_case_fcfa: variant.wholesale_case_fcfa, retail_bottle_fcfa: variant.retail_bottle_fcfa,
+  crate_type_id: variant.crate_type_id ?? null, is_active: true, to_verify: false,
+  producer_id: 'producer_solibra', category_id: variant.category === 'Eaux' ? 'cat_eaux' : 'cat_bieres',
+  brand_id: variant.brand === 'CIE' ? 'brand_cie' : 'brand_solibra', category_name: variant.category ?? 'Bières',
+  source: 'SEED', order: index,
+}));
+
+const catalogImports: AnyRecord[] = [];
+const catalogManualProducts: AnyRecord[] = [];
+
+function catalogImportHistory() {
+  return catalogImports.map((item) => ({
+    catalog_id: item.catalog_id,
+    name: `Catalogue ${item.producer_id ?? ''}`,
+    format: item.format,
+    schema_version: null,
+    status: 'ACTIVE',
+    external_catalog_id: item.catalog_id,
+    last_import_at: item.occurred_at,
+    producer_name: catalogProducers.find((producer) => producer.producer_id === item.producer_id)?.name ?? '',
+  }));
+}
+
+const CATALOG_CONTAINER_ONLY = ['returnable_glass_bottle', 'one_way_glass_bottle', 'can', 'pet_bottle', 'carton'];
+
+function catalogSlug(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'ref';
+}
+
+function catalogChecksum(raw: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < raw.length; index += 1) {
+    hash ^= BigInt(raw.charCodeAt(index));
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
+function catalogValue(value: AnyRecord | undefined, keys: string[]): string | null {
+  if (value === undefined || value === null) return null;
+  for (const key of keys) {
+    const found = value[key];
+    if (typeof found === 'string' && found.trim().length > 0) return found.trim();
+    if (typeof found === 'number') return String(found);
+    if (found && typeof found === 'object') {
+      for (const inner of ['code', 'id', 'slug', 'name']) {
+        if (typeof found[inner] === 'string' && found[inner].trim().length > 0) return found[inner].trim();
+      }
+    }
+  }
+  return null;
+}
+
+function catalogInt(value: AnyRecord | undefined, keys: string[]): number | null {
+  if (!value) return null;
+  for (const key of keys) {
+    const found = value[key];
+    if (typeof found === 'number' && Number.isSafeInteger(found)) return found;
+    if (typeof found === 'string' && /^-?\d+$/.test(found.trim())) return Number.parseInt(found, 10);
+  }
+  return null;
+}
+
+function catalogArray(doc: AnyRecord, keys: string[]): AnyRecord[] {
+  for (const key of keys) {
+    if (Array.isArray(doc[key])) return doc[key] as AnyRecord[];
+  }
+  return [];
+}
+
+function detectCatalogFormat(doc: AnyRecord): string {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    throw new Error('INVALID_CATALOG_JSON: le catalogue doit être un objet JSON');
+  }
+  if (doc.container_types && doc.commercial_units) return 'BRASSIVOIRE';
+  if (doc.schema_version !== undefined && (doc.products || doc.packaging_types)) return 'SOLIBRA_NEW';
+  if (doc.meta || doc.manufacturers) return 'LEGACY';
+  if (doc.products || doc.variants) return 'GENERIC';
+  throw new Error('INVALID_CATALOG_JSON: format non reconnu');
+}
+
+function normalizeCatalog(doc: AnyRecord, format: string) {
+  const supplier = doc.supplier ?? doc.producer ?? doc.manufacturer ?? (Array.isArray(doc.manufacturers) ? doc.manufacturers[0] : undefined);
+  const producerCode = catalogValue(supplier, ['code', 'id', 'slug', 'name']) ?? catalogValue(doc.meta, ['manufacturer', 'supplier']) ?? 'PRODUCTEUR';
+  const producerName = catalogValue(supplier, ['name', 'label']) ?? producerCode;
+  const categories = catalogArray(doc, ['categories']).map((item) => ({
+    code: catalogValue(item, ['code', 'id', 'name']) ?? 'DIVERS',
+    name: catalogValue(item, ['name', 'label']) ?? 'Divers',
+    is_alcoholic: Boolean(item.is_alcoholic ?? item.alcoholic),
+  }));
+  const brands = catalogArray(doc, ['brands']).map((item) => ({
+    code: catalogValue(item, ['code', 'id', 'name']) ?? 'MARQUE',
+    name: catalogValue(item, ['name', 'label']) ?? 'Marque',
+  }));
+  const products = catalogArray(doc, ['products']).map((item) => ({
+    code: catalogValue(item, ['code', 'id', 'sku']) ?? 'PRODUIT',
+    name: catalogValue(item, ['name', 'label']) ?? 'Produit',
+    category_code: catalogValue(item, ['category', 'category_id']),
+    brand_code: catalogValue(item, ['brand', 'brand_id']),
+    description: typeof item.description === 'string' ? item.description : null,
+  }));
+  const crateTypes: AnyRecord[] = [];
+  for (const item of catalogArray(doc, ['packaging_types'])) {
+    const kind = String(item.type ?? item.kind ?? catalogValue(item, ['code']) ?? '');
+    if (!/crate|casier/i.test(kind) || CATALOG_CONTAINER_ONLY.includes(kind)) continue;
+    if (item.is_physical === false || item.physical === false) continue;
+    const code = catalogValue(item, ['code', 'id', 'name']) ?? kind;
+    crateTypes.push({
+      code, name: catalogValue(item, ['name', 'label']) ?? code,
+      capacity: catalogInt(item, ['capacity', 'slots', 'bottle_capacity', 'compartments']),
+      group: catalogValue(item, ['compatibility_group']) ?? `G_${code.toUpperCase()}`,
+    });
+  }
+  const warnings: AnyRecord[] = [];
+  const normalizedVariants: AnyRecord[] = [];
+  const seen = new Set<string>();
+  for (const item of catalogArray(doc, ['variants'])) {
+    const sku = catalogValue(item, ['sku', 'code', 'id', 'variant_id']);
+    if (!sku) {
+      warnings.push({ code: 'VARIANT_SKU_MISSING', message: 'Variante ignorée : aucun SKU stable.' });
+      continue;
+    }
+    if (seen.has(sku)) throw new Error(`DUPLICATE_SKU: SKU dupliqué dans le fichier (${sku})`);
+    seen.add(sku);
+    const kind = catalogValue(item, ['container_type', 'container', 'packaging_type']);
+    const crateCode = catalogValue(item, ['crate_type_id', 'crate_type', 'crate_code'])
+      ?? (kind && /crate|casier/i.test(kind) ? sku : null);
+    const crateCapacity = catalogInt(item, ['crate_capacity', 'capacity', 'slots']);
+    if (crateCode && crateCapacity === null) {
+      warnings.push({ code: 'CRATE_CAPACITY_TO_VERIFY', message: 'Capacité de casier absente du JSON.', sku, crate_code: crateCode });
+    }
+    const prices = item.prices && typeof item.prices === 'object' ? item.prices : {};
+    normalizedVariants.push({
+      sku,
+      name: catalogValue(item, ['name', 'label']) ?? sku,
+      product_code: catalogValue(item, ['product_id', 'product', 'product_code']),
+      volume_label: catalogValue(item, ['volume_label', 'volume']) ?? '',
+      container_type: kind === 'can' ? 'Canette' : kind === 'pet_bottle' ? 'Bouteille' : kind === 'carton' ? 'Carton' : kind === 'plastic_crate' ? 'Casier' : 'Bouteille',
+      material: kind === 'can' ? 'Aluminium' : kind === 'pet_bottle' ? 'PET' : kind === 'carton' ? 'Carton' : kind === 'plastic_crate' ? 'Plastique' : 'Verre',
+      pack_size: catalogInt(item, ['pack_size', 'units_per_case', 'bottles_per_case']) ?? 1,
+      crate_code: crateCode,
+      crate_capacity: crateCapacity,
+      retail_case_fcfa: catalogInt(item, ['retail_case_fcfa']) ?? catalogInt(prices, ['retail_case_fcfa', 'case', 'retail_case']),
+      wholesale_case_fcfa: catalogInt(item, ['wholesale_case_fcfa']) ?? catalogInt(prices, ['wholesale_case_fcfa', 'wholesale', 'wholesale_case']),
+      retail_bottle_fcfa: catalogInt(item, ['retail_bottle_fcfa']) ?? catalogInt(prices, ['retail_bottle_fcfa', 'bottle', 'retail_bottle']),
+      to_verify: crateCode !== null && crateCapacity === null,
+    });
+  }
+  if (normalizedVariants.length === 0) throw new Error('INVALID_CATALOG_JSON: aucune variante exploitable');
+  return {
+    format,
+    schema_version: doc.schema_version ? String(doc.schema_version) : null,
+    external_catalog_id: catalogValue(doc, ['catalog_id', 'id']),
+    producer_code: producerCode,
+    producer_name: producerName,
+    categories, brands, products, crateTypes, variants: normalizedVariants, warnings,
+    container_types: catalogArray(doc, ['container_types']).map((item) => catalogValue(item, ['type', 'kind', 'code']) ?? String(item)),
+    commercial_units: catalogArray(doc, ['commercial_units']).map((item) => catalogValue(item, ['code', 'name']) ?? String(item)),
+    sources: catalogArray(doc, ['source_ids', 'sources']).map((item) => ({ label: catalogValue(item, ['label', 'title']), url: catalogValue(item, ['url', 'href']) })),
+  };
+}
+
+function parseCatalogPayload(payload: AnyRecord) {
+  let doc: AnyRecord;
+  if (payload.catalog && typeof payload.catalog === 'object') {
+    doc = payload.catalog as AnyRecord;
+  } else {
+    if (typeof payload.json_text !== 'string') throw new Error('INVALID_CATALOG_JSON: json_text requis');
+    try {
+      doc = JSON.parse(String(payload.json_text)) as AnyRecord;
+    } catch {
+      throw new Error('INVALID_CATALOG_JSON: JSON invalide');
+    }
+  }
+  const declared = typeof payload.format === 'string' ? payload.format : null;
+  const format = declared ?? detectCatalogFormat(doc);
+  if (!['LEGACY', 'SOLIBRA_NEW', 'BRASSIVOIRE', 'GENERIC'].includes(format)) {
+    throw new Error(`INVALID_CATALOG_FORMAT: format inconnu (${format})`);
+  }
+  return { doc, format, normalized: normalizeCatalog(doc, format) };
+}
+
+function catalogProductRow(variant: AnyRecord) {
+  const crate = crates.find((item) => item.crate_type_id === variant.crate_type_id);
+  const producer = catalogProducers.find((item) => item.producer_id === variant.producer_id);
+  const category = catalogCategories.find((item) => item.category_id === variant.category_id);
+  const brand = catalogBrands.find((item) => item.brand_id === variant.brand_id);
+  return {
+    variant_id: variant.variant_id, sku: variant.sku, name: variant.name, brand: variant.brand,
+    volume_label: variant.volume_label, container_type: variant.container_type, material: variant.material,
+    pack_size: variant.pack_size, retail_case_fcfa: variant.retail_case_fcfa,
+    wholesale_case_fcfa: variant.wholesale_case_fcfa, retail_bottle_fcfa: variant.retail_bottle_fcfa,
+    crate_type_id: variant.crate_type_id ?? null, crate_code: crate?.code ?? '',
+    crate_capacity: crate?.capacity ?? 0, crate_capacity_to_verify: Boolean(crate?.capacity_to_verify),
+    is_active: variant.is_active !== false, to_verify: Boolean(variant.to_verify),
+    producer_id: variant.producer_id ?? '', producer_name: producer?.name ?? '',
+    category_id: variant.category_id ?? '', category_name: category?.name ?? '',
+    brand_id: variant.brand_id ?? '', brand_name: brand?.name ?? variant.brand,
+  };
+}
+
+function catalogPlan(normalized: AnyRecord) {
+  const producerExists = catalogProducers.some((item) => item.code === normalized.producer_code);
+  return {
+    producer: { code: normalized.producer_code, name: normalized.producer_name, action: producerExists ? 'UPDATE' : 'CREATE' },
+    categories_to_create: normalized.categories.filter((item: AnyRecord) => !catalogCategories.some((existing) => existing.code === item.code || existing.name === item.name)).map((item: AnyRecord) => item.code),
+    brands_to_create: normalized.brands.filter((item: AnyRecord) => !catalogBrands.some((existing) => existing.code === item.code || existing.name === item.name)).map((item: AnyRecord) => item.code),
+    products_to_create: normalized.products.filter((item: AnyRecord) => !catalogVariants.some((existing) => existing.product_code === item.code)).map((item: AnyRecord) => item.code),
+    products_to_update: normalized.products.filter((item: AnyRecord) => catalogVariants.some((existing) => existing.product_code === item.code)).map((item: AnyRecord) => item.code),
+    variants_to_create: normalized.variants.filter((item: AnyRecord) => !catalogVariants.some((existing) => existing.sku === item.sku)).map((item: AnyRecord) => item.sku),
+    variants_to_update: normalized.variants.filter((item: AnyRecord) => catalogVariants.some((existing) => existing.sku === item.sku)).map((item: AnyRecord) => item.sku),
+    crate_types_to_create: normalized.crateTypes.filter((item: AnyRecord) => !crates.some((existing) => existing.code === item.code)).map((item: AnyRecord) => item.code),
+    crate_capacities_to_verify: normalized.crateTypes.filter((item: AnyRecord) => item.capacity === null).map((item: AnyRecord) => item.code),
+    unknown_crate_references: [...new Set(normalized.variants
+      .map((item: AnyRecord) => item.crate_code)
+      .filter((code: string | null) => code !== null && !crates.some((crate) => crate.code === code) && !normalized.crateTypes.some((crate: AnyRecord) => crate.code === code)))],
+    container_types: normalized.container_types,
+    commercial_units: normalized.commercial_units,
+    prices_are_preserved: true,
+    deleted_references: [] as string[],
+    note: "Aucun prix local, aucune valeur de casier, aucun stock et aucune activation ne sont écrasés.",
+  };
+}
+
+function applyCatalogImport(normalized: AnyRecord) {
+  let producer = catalogProducers.find((item) => item.code === normalized.producer_code);
+  let producerCreated = false;
+  if (!producer) {
+    producer = {
+      producer_id: `producer_${catalogSlug(normalized.producer_code)}`, code: normalized.producer_code,
+      name: normalized.producer_name, city: null, country: null, status: 'ACTIVE', source: 'IMPORT_JSON', created_at: Date.now(),
+    };
+    catalogProducers.push(producer);
+    producerCreated = true;
+  }
+  const createdCategories: string[] = [];
+  for (const item of normalized.categories) {
+    let category = catalogCategories.find((existing) => existing.code === item.code || existing.name === item.name);
+    if (!category) {
+      category = { category_id: `cat_${catalogSlug(item.code)}`, code: item.code, name: item.name, parent_id: null, description: null, is_alcoholic: item.is_alcoholic, sort_order: 0, status: 'ACTIVE' };
+      catalogCategories.push(category);
+      createdCategories.push(item.code);
+    }
+  }
+  const createdBrands: string[] = [];
+  for (const item of normalized.brands) {
+    if (!catalogBrands.some((existing) => existing.code === item.code || existing.name === item.name)) {
+      catalogBrands.push({ brand_id: `brand_${catalogSlug(item.code)}`, code: item.code, name: item.name, producer_id: producer.producer_id, status: 'ACTIVE' });
+      createdBrands.push(item.code);
+    }
+  }
+  const createdCrates: string[] = [];
+  const toVerifyCrates: string[] = [];
+  for (const item of normalized.crateTypes) {
+    let crate = crates.find((existing) => existing.code === item.code);
+    if (!crate) {
+      crate = {
+        crate_type_id: `crate_${catalogSlug(item.code)}`, code: item.code, name: item.name,
+        capacity: item.capacity ?? 0, compatibility_group_id: item.group ?? `G_${item.code.toUpperCase()}`,
+        allow_half_case: true, acquisition_value_fcfa: 0, reference_value_fcfa: 0, empty_sale_price_fcfa: 0,
+        status: 'ACTIVE', is_physical_crate: true, capacity_to_verify: item.capacity === null,
+        replacement_value_fcfa: 0, deposit_value_fcfa: 0, empty_crates_qty: 0, compartments: 1,
+        dimensions: null, physical_profile_id: null, is_reusable: true,
+      };
+      crates.push(crate);
+      crateStock[crate.crate_type_id] = { full: 0, empty: 0 };
+      createdCrates.push(item.code);
+    } else if (!crate.capacity && item.capacity !== null) {
+      crate.capacity = item.capacity;
+      crate.capacity_to_verify = false;
+    }
+    if (!crate.capacity) toVerifyCrates.push(item.code);
+  }
+  const createdVariants: string[] = [];
+  const updatedVariants: string[] = [];
+  const variantsToVerify: string[] = [];
+  for (const item of normalized.variants) {
+    const existing = catalogVariants.find((row) => row.sku === item.sku);
+    const crate = item.crate_code ? crates.find((row) => row.code === item.crate_code) : undefined;
+    if (existing) {
+      // Aucun prix, aucun stock, aucune activation : seules les caractéristiques bougent.
+      existing.name = item.name;
+      existing.volume_label = item.volume_label;
+      existing.container_type = item.container_type;
+      existing.material = item.material;
+      existing.pack_size = item.pack_size;
+      existing.crate_type_id = existing.crate_type_id ?? crate?.crate_type_id ?? null;
+      existing.to_verify = Boolean(existing.to_verify) || item.to_verify;
+      existing.producer_id = existing.producer_id ?? producer.producer_id;
+      updatedVariants.push(item.sku);
+    } else {
+      catalogVariants.push({
+        variant_id: `var_${catalogSlug(item.sku)}`, sku: item.sku, name: item.name,
+        brand: normalized.producer_name, volume_label: item.volume_label,
+        container_type: item.container_type, material: item.material, pack_size: item.pack_size,
+        retail_case_fcfa: item.retail_case_fcfa ?? 0, wholesale_case_fcfa: item.wholesale_case_fcfa ?? 0,
+        retail_bottle_fcfa: item.retail_bottle_fcfa ?? 0,
+        crate_type_id: crate?.crate_type_id ?? null, is_active: false, to_verify: Boolean(item.to_verify),
+        producer_id: producer.producer_id, category_id: null, brand_id: null, category_name: 'Divers',
+        source: 'IMPORT_JSON',
+      });
+      createdVariants.push(item.sku);
+    }
+    if (item.to_verify) variantsToVerify.push(item.sku);
+  }
+  return {
+    producer, producerCreated, createdCategories, createdBrands, createdCrates, toVerifyCrates,
+    createdVariants, updatedVariants, variantsToVerify,
+  };
+}
+
 function execute(command: string, payload: AnyRecord = {}): unknown {
   switch (command) {
-    case 'initializeDatabase': return { database: payload.path ?? '/depotpro-preview/depotpro_local.db', schema_version: 11, seeded_demo: payload.seed_demo !== false };
+    case 'initializeDatabase': return { database: payload.path ?? '/depotpro-preview/depotpro_local.db', schema_version: 12, seeded_demo: payload.seed_demo !== false };
     case 'authenticate': {
       const users: Record<string, [string, string, string]> = {
         patron: ['9999', 'Koffi Dominique', 'OWNER'], gerant: ['1234', 'Aya Koné', 'MANAGER'], caissier: ['0000', 'Lamine Traoré', 'CASHIER'],
@@ -515,6 +849,206 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
         bottles_tracking: { state: 'INFORMATIONAL_ONLY', creates_stock: false, creates_debt: false, note: "Une bouteille n'est pas un emballage suivi : aucun stock, aucune dette, aucun retour." },
       };
     }
+    case 'getCatalogDashboard': {
+      const active = catalogVariants.filter((item) => item.is_active !== false).length;
+      const inactive = catalogVariants.length - active;
+      return {
+        producers_count: catalogProducers.length,
+        catalogs_count: new Set(catalogImportHistory()).size,
+        brands_count: catalogBrands.length,
+        products_count: new Set(catalogVariants.map((item) => item.name)).size + catalogManualProducts.length,
+        variants_count: catalogVariants.length,
+        categories_count: catalogCategories.length,
+        active_variants_count: active,
+        inactive_variants_count: inactive,
+        to_verify_count: catalogVariants.filter((item) => item.to_verify).length,
+        variants_without_crate_count: catalogVariants.filter((item) => !item.crate_type_id).length,
+        crate_capacities_to_verify_count: crates.filter((item) => item.capacity_to_verify).length,
+        imports_count: catalogImports.length,
+        producers: catalogProducers.map((item) => ({
+          producer_id: item.producer_id, code: item.code, name: item.name, country: item.country ?? null,
+          city: item.city ?? null, status: item.status, source: item.source ?? null, created_at: item.created_at,
+          products_count: new Set(catalogVariants.filter((variant) => variant.producer_id === item.producer_id).map((variant) => variant.name)).size,
+          variants_count: catalogVariants.filter((variant) => variant.producer_id === item.producer_id).length,
+        })),
+        recent_imports: catalogImports.slice(0, 10),
+        formats_supported: ['LEGACY', 'SOLIBRA_NEW', 'BRASSIVOIRE', 'GENERIC'],
+      };
+    }
+    case 'getCatalogProducers': return { producers: catalogProducers.map((item) => ({
+      producer_id: item.producer_id, code: item.code, name: item.name, country: item.country ?? null,
+      city: item.city ?? null, status: item.status, source: item.source ?? null, created_at: item.created_at,
+    })) };
+    case 'getCatalogCategories': return { categories: catalogCategories };
+    case 'getCatalogBrands': return { brands: catalogBrands.map((item) => ({
+      ...item, producer_name: catalogProducers.find((producer) => producer.producer_id === item.producer_id)?.name ?? item.name,
+    })) };
+    case 'getCatalogProducts': {
+      const rows = catalogVariants
+        .map(catalogProductRow)
+        .filter((row) => (!payload.producer_id || row.producer_id === payload.producer_id)
+          && (!payload.category_id || row.category_id === payload.category_id)
+          && (!payload.brand_id || row.brand_id === payload.brand_id)
+          && (!payload.search || `${row.name} ${row.sku}`.toLowerCase().includes(String(payload.search).toLowerCase()))
+          && (!payload.only_to_verify || row.to_verify)
+          && (payload.include_inactive === false ? row.is_active : true));
+      return { variants: rows.slice(0, Number(payload.limit ?? 200)) };
+    }
+    case 'getCatalogImportHistory': return { imports: catalogImports.slice(0, Number(payload.limit ?? 50)) };
+    case 'getBreweryCatalogs': return { catalogs: catalogImportHistory() };
+    case 'previewCatalogImport': {
+      const { doc, format, normalized } = parseCatalogPayload(payload);
+      return {
+        format, detected_format: format, schema_version: normalized.schema_version,
+        catalog_id: normalized.external_catalog_id, producer_code: normalized.producer_code,
+        producer_name: normalized.producer_name, checksum: catalogChecksum(JSON.stringify(doc)),
+        preview: catalogPlan(normalized), warnings: normalized.warnings,
+        sources: normalized.sources, can_apply: true,
+      };
+    }
+    case 'importCatalogJson': {
+      if (String(payload.request_key ?? '').trim().length < 4) throw new Error('REQUEST_KEY_REQUIRED: clé d’idempotence requise');
+      const replay = catalogImports.find((item) => item.request_key === payload.request_key);
+      if (replay) return { ...JSON.parse(replay.report as string), idempotent: true, import_run_id: replay.import_run_id, status: 'APPLIED' };
+      const { doc, format, normalized } = parseCatalogPayload(payload);
+      const applied = applyCatalogImport(normalized);
+      const report = {
+        format,
+        checksum: catalogChecksum(JSON.stringify(doc)),
+        producer_id: applied.producer.producer_id,
+        producer_created: applied.producerCreated,
+        catalog_id: `cat_${catalogSlug(`${applied.producer.producer_id}_${normalized.external_catalog_id ?? format}`)}`,
+        catalog_created: !catalogImports.some((item) => item.catalog_id === `cat_${catalogSlug(`${applied.producer.producer_id}_${normalized.external_catalog_id ?? format}`)}`),
+        counts: {
+          producers_created: applied.producerCreated ? 1 : 0,
+          catalogs_created: 0,
+          categories_created: applied.createdCategories.length,
+          brands_created: applied.createdBrands.length,
+          products_created: new Set(applied.createdVariants.map((sku) => catalogVariants.find((item) => item.sku === sku)?.name ?? sku)).size,
+          products_updated: 0,
+          variants_created: applied.createdVariants.length,
+          variants_updated: applied.updatedVariants.length,
+          crate_types_created: applied.createdCrates.length,
+        },
+        created: {
+          categories: applied.createdCategories, brands: applied.createdBrands,
+          products: [...new Set(applied.createdVariants.map((sku) => catalogVariants.find((item) => item.sku === sku)?.name ?? sku))],
+          variants: applied.createdVariants, crate_types: applied.createdCrates,
+        },
+        updated: { products: [], variants: applied.updatedVariants },
+        to_verify: { crate_capacities: applied.toVerifyCrates, variants: applied.variantsToVerify },
+        warnings: normalized.warnings,
+        prices_preserved: true as const,
+        stock_preserved: true as const,
+        deleted_references: [] as string[],
+        note: "Aucun prix local, aucune valeur de casier, aucun stock et aucune activation ne sont écrasés ; aucune référence absente du JSON n'est supprimée.",
+      };
+      const runId = nextId('catimp');
+      catalogImports.unshift({
+        import_run_id: runId, request_key: payload.request_key, catalog_id: report.catalog_id,
+        format, status: 'APPLIED', producer_id: applied.producer.producer_id,
+        checksum: report.checksum, created_count: report.counts.variants_created,
+        updated_count: report.counts.variants_updated, skipped_count: 0, error_count: 0,
+        occurred_at: Date.now(), user_id: 'usr_patron', report: JSON.stringify(report),
+      });
+      return { ...report, import_run_id: runId, status: 'APPLIED', idempotent: false };
+    }
+    case 'createCatalogProducer': {
+      const code = String(payload.code ?? '').trim().toUpperCase();
+      const name = String(payload.name ?? '').trim();
+      if (!code || !name) throw new Error('INVALID_PRODUCER: code et nom obligatoires');
+      const existing = catalogProducers.find((item) => item.code === code);
+      if (existing) return { producer_id: existing.producer_id, code: existing.code, created: false };
+      const producer = {
+        producer_id: `producer_${catalogSlug(code)}`, code, name,
+        city: payload.city ?? null, country: payload.country ?? null, status: 'ACTIVE',
+        source: 'OWNER', created_at: Date.now(),
+      };
+      catalogProducers.push(producer);
+      return { producer_id: producer.producer_id, code, created: true };
+    }
+    case 'updateCatalogProducer': {
+      const producer = catalogProducers.find((item) => item.producer_id === payload.producer_id);
+      if (!producer) throw new Error('PRODUCER_NOT_FOUND: producteur introuvable');
+      if (String(payload.reason ?? '').trim().length < 3) throw new Error('REASON_REQUIRED: motif requis');
+      if (payload.name) producer.name = payload.name;
+      if (payload.status) producer.status = String(payload.status).toUpperCase();
+      return { producer_id: producer.producer_id, status: 'UPDATED' };
+    }
+    case 'createCatalogCategory': {
+      const name = String(payload.name ?? '').trim();
+      if (!name) throw new Error('INVALID_CATEGORY: nom obligatoire');
+      const code = String(payload.code ?? name.toUpperCase().replace(/ /g, '_'));
+      const existing = catalogCategories.find((item) => item.code === code || item.name === name);
+      if (existing) return { category_id: existing.category_id, code: existing.code, created: false };
+      const category = {
+        category_id: `cat_${catalogSlug(code)}`, code, name, parent_id: payload.parent_id ?? null,
+        description: payload.description ?? null, is_alcoholic: Boolean(payload.is_alcoholic),
+        sort_order: Number(payload.sort_order ?? 0), status: 'ACTIVE',
+      };
+      catalogCategories.push(category);
+      return { category_id: category.category_id, code, created: true };
+    }
+    case 'createCatalogBrand': {
+      const name = String(payload.name ?? '').trim();
+      if (!name) throw new Error('INVALID_BRAND: nom obligatoire');
+      if (!payload.producer_id) throw new Error('PRODUCER_REQUIRED: producteur obligatoire');
+      const code = String(payload.code ?? name.toUpperCase().replace(/ /g, '_'));
+      const existing = catalogBrands.find((item) => item.code === code || item.name === name);
+      if (existing) return { brand_id: existing.brand_id, code: existing.code, created: false };
+      const brand = { brand_id: `brand_${catalogSlug(code)}`, code, name, producer_id: payload.producer_id, status: 'ACTIVE' };
+      catalogBrands.push(brand);
+      return { brand_id: brand.brand_id, code, created: true };
+    }
+    case 'createCatalogProduct': {
+      const name = String(payload.name ?? '').trim();
+      if (!name) throw new Error('INVALID_PRODUCT: nom obligatoire');
+      if (!payload.producer_id) throw new Error('PRODUCER_REQUIRED: producteur obligatoire');
+      const code = String(payload.code ?? `${payload.producer_id}_${name.toUpperCase().replace(/ /g, '_')}`);
+      const productId = `prod_${catalogSlug(code)}`;
+      if (!catalogManualProducts.some((item) => item.product_id === productId)) {
+        catalogManualProducts.push({
+          product_id: productId, code, name, producer_id: payload.producer_id,
+          category_id: payload.category_id ?? null, brand_id: payload.brand_id ?? null,
+          description: payload.description ?? null, is_active: true,
+        });
+      }
+      return { product_id: productId, code, created: true };
+    }
+    case 'activateCatalogProduct':
+    case 'deactivateCatalogProduct': {
+      if (String(payload.reason ?? '').trim().length < 3) throw new Error('REASON_REQUIRED: motif requis');
+      const active = command === 'activateCatalogProduct';
+      const manual = catalogManualProducts.find((item) => item.product_id === payload.product_id);
+      if (manual) manual.is_active = active;
+      return { product_id: payload.product_id, is_active: active, variants_left_untouched: true };
+    }
+    case 'updateCatalogVariant': {
+      const variant = catalogVariants.find((item) => item.variant_id === payload.variant_id);
+      if (!variant) throw new Error('VARIANT_NOT_FOUND: variante introuvable');
+      if (String(payload.reason ?? '').trim().length < 3) throw new Error('REASON_REQUIRED: motif requis');
+      if (payload.crate_type_id && !crates.some((item) => item.crate_type_id === payload.crate_type_id)) {
+        throw new Error('CRATE_NOT_FOUND: casier inconnu');
+      }
+      if (payload.volume_label) variant.volume_label = payload.volume_label;
+      if (payload.container_type) variant.container_type = payload.container_type;
+      if (payload.material) variant.material = payload.material;
+      if (payload.pack_size) variant.pack_size = Number(payload.pack_size);
+      if (payload.crate_type_id) variant.crate_type_id = payload.crate_type_id;
+      if (payload.is_active !== undefined) variant.is_active = Boolean(payload.is_active);
+      if (payload.to_verify !== undefined) variant.to_verify = Boolean(payload.to_verify);
+      return { variant_id: variant.variant_id, status: 'UPDATED', prices_untouched: true };
+    }
+    case 'createBreweryCatalog': {
+      const producer = catalogProducers.find((item) => item.producer_id === payload.producer_id);
+      if (!producer) throw new Error('PRODUCER_NOT_FOUND: producteur introuvable');
+      const external = String(payload.external_catalog_id ?? `${catalogSlug(String(payload.name ?? 'catalogue'))}_manual`);
+      return { catalog_id: `cat_${catalogSlug(`${producer.producer_id}_${external}`)}`, external_catalog_id: external, created: true };
+    }
+    case 'updateBreweryCatalog': {
+      if (String(payload.reason ?? '').trim().length < 3) throw new Error('REASON_REQUIRED: motif requis');
+      return { catalog_id: payload.catalog_id, status: 'UPDATED' };
+    }
     case 'getCrateStock': {
       const summary = crateStockSummary();
       return payload.crate_type_id
@@ -680,8 +1214,34 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     case 'resolveConflict': return { conflict_id: payload.conflict_id, status: 'ACKNOWLEDGED', operation_kept: true };
     case 'backupDatabase': return { backup_path: `/depotpro-preview/backup-${Date.now()}.dpbkp`, bytes: 245760, encrypted: true, kdf: 'PBKDF2_HMAC_SHA256' };
     case 'restoreDatabase': return { restored_from: payload.source_path, safety_backup: '/depotpro-preview/safety.sqlite', decrypted: true };
-    case 'saveProductVariant': return { variant_id: payload.variant_id ?? nextId('var'), synced: false };
-    case 'updateVariantPrices': return { variant_id: payload.variant_id, price_revision: 2 };
+    case 'saveProductVariant': {
+      const sku = String(payload.sku ?? '').trim();
+      const name = String(payload.name ?? '').trim();
+      if (!sku || !name) throw new Error('INVALID_VARIANT: SKU et nom obligatoires');
+      const existing = catalogVariants.find((item) => item.sku === sku);
+      const variantId = payload.variant_id ?? existing?.variant_id ?? `var_${catalogSlug(sku)}`;
+      if (!existing) {
+        catalogVariants.push({
+          variant_id: variantId, sku, name, brand: String(payload.brand ?? ''),
+          volume_label: String(payload.volume_label ?? ''), container_type: String(payload.container_type ?? 'Bouteille'),
+          material: String(payload.material ?? 'Verre'), pack_size: Number(payload.pack_size ?? 1),
+          retail_case_fcfa: Number(payload.retail_case_fcfa ?? 0), wholesale_case_fcfa: Number(payload.wholesale_case_fcfa ?? 0),
+          retail_bottle_fcfa: Number(payload.retail_bottle_fcfa ?? 0),
+          crate_type_id: payload.crate_type_id ?? null, is_active: true, to_verify: false,
+          producer_id: catalogProducers[0]?.producer_id ?? null, category_id: null, brand_id: null,
+          category_name: String(payload.category ?? 'Divers'), source: 'OWNER',
+        });
+      }
+      return { variant_id: variantId, synced: false };
+    }
+    case 'updateVariantPrices': {
+      const row = catalogVariants.find((item) => item.variant_id === payload.variant_id);
+      if (!row) throw new Error('VARIANT_NOT_FOUND: variante introuvable');
+      row.retail_case_fcfa = integer(payload.retail_case_fcfa, 'retail_case_fcfa');
+      row.wholesale_case_fcfa = integer(payload.wholesale_case_fcfa, 'wholesale_case_fcfa');
+      row.retail_bottle_fcfa = integer(payload.retail_bottle_fcfa, 'retail_bottle_fcfa');
+      return { variant_id: payload.variant_id, price_revision: 2 };
+    }
     case 'archiveProductVariant': return { variant_id: payload.variant_id, status: 'ARCHIVED' };
     case 'createCrateType': return { crate_type_id: nextId('crate'), code: payload.code };
     case 'configureDeviceQuota': return { reserved_qty: payload.reserved_qty };

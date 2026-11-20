@@ -384,3 +384,33 @@
   de toutes les requêtes SQL du cœur.
 - **Non exécuté** : `cargo test`/`cargo check` (chaîne absente), builds natifs,
   E2E. Détail et matrice de tests : `docs/PART20_CRATES.md`.
+
+## LOT 43 — CATALOGUE MULTI-BRASSERIES (cahier des charges `cata_product.md`, §4-6 et §12-15)
+
+- **Modèle** : `MIGRATION_12` (`schema_version = 12`) ajoute `producers`,
+  `brewery_catalogs`, `catalog_imports` (idempotence par `tenant_id`,
+  `request_key`) et `catalog_sources` ; `ensure_catalog_columns` complète
+  `brands`, `product_categories`, `products`, `product_variants` et
+  `crate_types` (`capacity_to_verify`). Aucune table produit/casier dupliquée :
+  `product_variants` et `crate_types` restent les sources de vérité.
+- **Moteur** : `rust/src/catalog.rs` — détection `LEGACY` / `SOLIBRA_NEW` /
+  `BRASSIVOIRE` / `GENERIC`, normalisation (`volume_ml` entier, `plastic_crate`
+  seul emballage suivi), aperçu sans écriture, import atomique idempotent avec
+  audit et synchronisation, administration (producteurs, catégories, marques,
+  produits, variantes, catalogues) et lectures du tableau de bord.
+- **Garde-fous** : prix locaux, stocks, valeurs de casier et `is_active` jamais
+  écrasés ; aucune référence supprimée ; capacité inconnue →
+  `CRATE_CAPACITY_TO_VERIFY` + `capacity_to_verify = 1` (12/24 jamais devinés) ;
+  produits importés non vendables avant activation locale ; `DUPLICATE_SKU`.
+- **Interface** : `CatalogScreen` refondu + `CatalogImportSection` (JSON collé,
+  aperçu, confirmation physique des capacités, application, activation,
+  historique des imports), hooks `useCatalog*` et méthodes client dédiées.
+- **Tests** : `__tests__/part21-catalog.test.ts` (17 cas : §20 cas 1 à 15 +
+  aperçu sans écriture + compteurs du §15.7), `part13-audit` et
+  `part20-crates` réalignés sur `schema_version = 12`.
+- **Validation exécutée** : `tsc --noEmit`, `tsc -p web/tsconfig.json` (0),
+  ESLint (0 erreur), Jest **19 suites / 97 tests**, `vite build`, parseur Rust
+  (7 fichiers), 12 migrations jouées en SQLite sur base neuve, `EXPLAIN` de
+  toutes les requêtes de `catalog.rs`.
+- **Non exécuté** : `cargo test` / `cargo check` (chaîne Rust absente), builds
+  natifs, E2E, sync réelle. Détail : `docs/PART21_CATALOG.md`.

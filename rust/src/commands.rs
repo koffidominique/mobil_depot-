@@ -150,6 +150,18 @@ fn permission_for_command(command: &str) -> Option<&'static str> {
         "recordCrateLoss" | "record_crate_loss" => Some("crate.loss"),
         "recordEmptyCrateSale" | "record_empty_crate_sale" => Some("crate.sell"),
         "configureCrateValuation" | "configure_crate_valuation" => Some("catalog.write"),
+        "createCatalogProducer" | "create_catalog_producer"
+        | "updateCatalogProducer" | "update_catalog_producer"
+        | "createCatalogCategory" | "create_catalog_category"
+        | "createCatalogBrand" | "create_catalog_brand"
+        | "createCatalogProduct" | "create_catalog_product"
+        | "activateCatalogProduct" | "activate_catalog_product"
+        | "deactivateCatalogProduct" | "deactivate_catalog_product"
+        | "updateCatalogVariant" | "update_catalog_variant"
+        | "createBreweryCatalog" | "create_brewery_catalog"
+        | "updateBreweryCatalog" | "update_brewery_catalog" => Some("catalog.write"),
+        "previewCatalogImport" | "preview_catalog_import"
+        | "importCatalogJson" | "import_catalog_json" => Some("catalog.import"),
         "recordInventoryCount" | "record_inventory_count" | "createStockTransfer"
         | "create_stock_transfer" => Some("inventory.write"),
         "saveProductVariant" | "save_product_variant" | "updateVariantPrices"
@@ -3018,6 +3030,25 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "recordCrateAdjustment" | "record_crate_adjustment" => crate::crates::record_crate_adjustment(conn, payload),
         "recordCrateLoss" | "record_crate_loss" => crate::crates::record_crate_loss(conn, payload),
         "recordEmptyCrateSale" | "record_empty_crate_sale" => crate::crates::record_empty_crate_sale(conn, payload),
+        "getCatalogDashboard" | "get_catalog_dashboard" => crate::catalog::get_catalog_dashboard(conn, payload),
+        "getCatalogProducers" | "get_catalog_producers" => crate::catalog::get_catalog_producers(conn, payload),
+        "getCatalogCategories" | "get_catalog_categories" => crate::catalog::get_catalog_categories(conn, payload),
+        "getCatalogBrands" | "get_catalog_brands" => crate::catalog::get_catalog_brands(conn, payload),
+        "getCatalogProducts" | "get_catalog_products" => crate::catalog::get_catalog_products(conn, payload),
+        "getCatalogImportHistory" | "get_catalog_import_history" => crate::catalog::get_catalog_import_history(conn, payload),
+        "getBreweryCatalogs" | "get_brewery_catalogs" => crate::catalog::get_brewery_catalogs(conn, payload),
+        "previewCatalogImport" | "preview_catalog_import" => crate::catalog::preview_catalog_import(conn, payload),
+        "importCatalogJson" | "import_catalog_json" => crate::catalog::import_catalog_json(conn, payload),
+        "createCatalogProducer" | "create_catalog_producer" => crate::catalog::create_catalog_producer(conn, payload),
+        "updateCatalogProducer" | "update_catalog_producer" => crate::catalog::update_catalog_producer(conn, payload),
+        "createCatalogCategory" | "create_catalog_category" => crate::catalog::create_catalog_category(conn, payload),
+        "createCatalogBrand" | "create_catalog_brand" => crate::catalog::create_catalog_brand(conn, payload),
+        "createCatalogProduct" | "create_catalog_product" => crate::catalog::create_catalog_product(conn, payload),
+        "activateCatalogProduct" | "activate_catalog_product" => crate::catalog::activate_catalog_product(conn, payload),
+        "deactivateCatalogProduct" | "deactivate_catalog_product" => crate::catalog::deactivate_catalog_product(conn, payload),
+        "updateCatalogVariant" | "update_catalog_variant" => crate::catalog::update_catalog_variant(conn, payload),
+        "createBreweryCatalog" | "create_brewery_catalog" => crate::catalog::create_brewery_catalog(conn, payload),
+        "updateBreweryCatalog" | "update_brewery_catalog" => crate::catalog::update_brewery_catalog(conn, payload),
         "getCrateMigrationReview" | "get_crate_migration_review" => crate::crates::get_crate_migration_review(conn, payload),
         "resolveCrateMigrationReview" | "resolve_crate_migration_review" => crate::crates::resolve_crate_migration_review(conn, payload),
         "getPackagingStock" | "get_packaging_stock" => get_packaging_stock(conn, payload),

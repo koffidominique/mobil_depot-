@@ -38,6 +38,16 @@ import type {
   CrateStockSummary,
   CrateValuationHistory,
   EmptyCrateSaleInput,
+  BrandRow,
+  BreweryCatalogRow,
+  CatalogDashboard,
+  CatalogFormat,
+  CatalogImportPreview,
+  CatalogImportReport,
+  CatalogImportRun,
+  CatalogVariantRow,
+  CategoryRow,
+  ProducerRow,
   StockMovement,
   PartnerStatement,
   VariantSaveInput,
@@ -306,6 +316,107 @@ export const depot = {
     call<PackagingAccount>('getPackagingAccount', {
       partner_type: partnerType, partner_id: partnerId,
     }),
+  // --- Catalogue multi-brasseries (OWNER) ---------------------------------
+  getCatalogDashboard: () => call<CatalogDashboard>('getCatalogDashboard'),
+  getCatalogProducers: () => call<{ producers: ProducerRow[] }>('getCatalogProducers'),
+  getCatalogCategories: () => call<{ categories: CategoryRow[] }>('getCatalogCategories'),
+  getCatalogBrands: () => call<{ brands: BrandRow[] }>('getCatalogBrands'),
+  getCatalogProducts: (input: {
+    producer_id?: string;
+    category_id?: string;
+    brand_id?: string;
+    search?: string;
+    only_to_verify?: boolean;
+    include_inactive?: boolean;
+    limit?: number;
+  } = {}) => call<{ variants: CatalogVariantRow[] }>('getCatalogProducts', input),
+  getCatalogImportHistory: (limit = 50) =>
+    call<{ imports: CatalogImportRun[] }>('getCatalogImportHistory', { limit }),
+  getBreweryCatalogs: () => call<{ catalogs: BreweryCatalogRow[] }>('getBreweryCatalogs'),
+  previewCatalogImport: (input: { json_text?: string; catalog?: unknown; format?: CatalogFormat }) =>
+    call<CatalogImportPreview>('previewCatalogImport', input),
+  importCatalogJson: (input: {
+    json_text?: string;
+    catalog?: unknown;
+    format?: CatalogFormat;
+    request_key: string;
+  }) => call<CatalogImportReport>('importCatalogJson', input),
+  createCatalogProducer: (input: {
+    code: string;
+    name: string;
+    city?: string;
+    country?: string;
+    logo_path?: string;
+    source_url?: string;
+    notes?: string;
+  }) => call<{ producer_id: string; code: string; created: boolean }>('createCatalogProducer', input),
+  updateCatalogProducer: (input: {
+    producer_id: string;
+    name?: string;
+    city?: string;
+    country?: string;
+    logo_path?: string;
+    source_url?: string;
+    notes?: string;
+    status?: 'ACTIVE' | 'INACTIVE';
+    reason: string;
+  }) => call<{ producer_id: string; status: string }>('updateCatalogProducer', input),
+  createCatalogCategory: (input: {
+    name: string;
+    code?: string;
+    description?: string;
+    is_alcoholic?: boolean;
+    parent_id?: string;
+    sort_order?: number;
+  }) => call<{ category_id: string; code: string; created: boolean }>('createCatalogCategory', input),
+  createCatalogBrand: (input: { name: string; code?: string; producer_id: string }) =>
+    call<{ brand_id: string; code: string; created: boolean }>('createCatalogBrand', input),
+  createCatalogProduct: (input: {
+    producer_id: string;
+    name: string;
+    code?: string;
+    category_id?: string;
+    brand_id?: string;
+    description?: string;
+  }) => call<{ product_id: string; code: string; created: boolean }>('createCatalogProduct', input),
+  activateCatalogProduct: (productId: string, reason: string) =>
+    call<{ product_id: string; is_active: boolean; variants_left_untouched: boolean }>(
+      'activateCatalogProduct', { product_id: productId, reason },
+    ),
+  deactivateCatalogProduct: (productId: string, reason: string) =>
+    call<{ product_id: string; is_active: boolean; variants_left_untouched: boolean }>(
+      'deactivateCatalogProduct', { product_id: productId, reason },
+    ),
+  updateCatalogVariant: (input: {
+    variant_id: string;
+    volume_label?: string;
+    container_type?: string;
+    material?: string;
+    pack_size?: number;
+    crate_type_id?: string;
+    is_active?: boolean;
+    to_verify?: boolean;
+    brand_id?: string;
+    category_id?: string;
+    reason: string;
+  }) => call<{ variant_id: string; status: string; prices_untouched: boolean }>(
+    'updateCatalogVariant', input,
+  ),
+  createBreweryCatalog: (input: {
+    producer_id: string;
+    name: string;
+    external_catalog_id?: string;
+    format?: string;
+  }) => call<{ catalog_id: string; external_catalog_id: string; created: boolean }>(
+    'createBreweryCatalog', input,
+  ),
+  updateBreweryCatalog: (input: {
+    catalog_id: string;
+    name?: string;
+    status?: 'ACTIVE' | 'INACTIVE';
+    reason: string;
+  }) => call<{ catalog_id: string; status: string }>('updateBreweryCatalog', input),
+
   // --- Casiers plastiques : stock, soldes physiques, valorisation ---------
   getCrateStock: (crateTypeId?: string) =>
     call<CrateStockSummary>('getCrateStock', crateTypeId ? { crate_type_id: crateTypeId } : {}),

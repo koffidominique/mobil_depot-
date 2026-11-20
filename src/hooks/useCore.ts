@@ -104,6 +104,49 @@ export function useSupplierCrateBalance(supplierId: string) {
   });
 }
 
+// --- Catalogue multi-brasseries -------------------------------------------
+
+export function useCatalogDashboard() {
+  return useQuery({ queryKey: ['catalog-dashboard'], queryFn: () => depot.getCatalogDashboard() });
+}
+
+export function useCatalogProducers() {
+  return useQuery({ queryKey: ['catalog-producers'], queryFn: () => depot.getCatalogProducers() });
+}
+
+export function useCatalogCategories() {
+  return useQuery({ queryKey: ['catalog-categories'], queryFn: () => depot.getCatalogCategories() });
+}
+
+export function useCatalogBrands() {
+  return useQuery({ queryKey: ['catalog-brands'], queryFn: () => depot.getCatalogBrands() });
+}
+
+export function useCatalogProducts(filter: {
+  producer_id?: string;
+  category_id?: string;
+  brand_id?: string;
+  search?: string;
+  only_to_verify?: boolean;
+  include_inactive?: boolean;
+} = {}) {
+  return useQuery({
+    queryKey: ['catalog-products', filter],
+    queryFn: () => depot.getCatalogProducts(filter),
+  });
+}
+
+export function useCatalogImportHistory(limit = 50) {
+  return useQuery({
+    queryKey: ['catalog-imports', limit],
+    queryFn: () => depot.getCatalogImportHistory(limit),
+  });
+}
+
+export function useBreweryCatalogs() {
+  return useQuery({ queryKey: ['catalog-breweries'], queryFn: () => depot.getBreweryCatalogs() });
+}
+
 /** Rapport de rapprochement des casiers ambigus laissés par l'ancien moteur. */
 export function useCrateMigrationReview(includeResolved = false) {
   return useQuery({

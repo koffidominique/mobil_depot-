@@ -6,6 +6,7 @@ import { depot } from '../core/client';
 import { formatFcfa, formatQuantity } from '../core/format';
 import type { InventoryItem, VariantSaveInput } from '../core/types';
 import { useCrateTypes, useInventory } from '../hooks/useCore';
+import { CatalogImportSection } from './CatalogImportSection';
 
 const EMPTY_VARIANT: VariantSaveInput = {
   name: '',
@@ -122,7 +123,7 @@ export function CatalogScreen() {
   }
 
   return (
-    <Screen title="Catalogue" subtitle="Produits, prix d'achat/vente et formats physiques">
+    <Screen title="Catalogue" subtitle="Brasseries, produits, prix et formats physiques">
       <Banner message={error} />
       <Banner tone="info" message={message} />
       <Card>
@@ -161,6 +162,8 @@ export function CatalogScreen() {
           </View>
         ) : null}
       </Card>
+
+      <CatalogImportSection />
 
       <Card>
         <Text style={{ color: c.text, fontWeight: '800' }}>Formats de casiers</Text>

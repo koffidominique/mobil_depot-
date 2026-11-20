@@ -29,7 +29,7 @@ fn security_contract_is_enforced_end_to_end() {
     let path = std::env::temp_dir().join(format!("depot-part9-{}.sqlite", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let init = ok(call("initializeDatabase", json!({ "path": path.to_str().unwrap() })));
-    assert_eq!(init["schema_version"], 11);
+    assert_eq!(init["schema_version"], 12);
 
     let owner = login("patron", "9999");
     let owner_auth = json!({ "auth": { "token": owner["token"].as_str().unwrap() } });
