@@ -1394,6 +1394,69 @@ pub fn record_empty_crate_sale(conn: &mut Connection, payload: &Value) -> CoreRe
 
 /// Applique les mouvements de casiers d'une vente de boissons, dans la même
 /// transaction que la vente.
+/// Format de casier résolu depuis la base, avec repli sur le référentiel
+/// compilé. Permet de composer un casier mixte avec un format importé.
+fn crate_spec_owned_opt(conn: &Connection, key: &str) -> Option<CrateSpecOwned> {
+    let row: Option<(String, String, i64, String, i64, i64)> = conn
+        .query_row(
+            "SELECT id, code, capacity, compatibility_group_id, allow_half_case, replacement_value_fcfa
+               FROM crate_types
+              WHERE id = ?1 OR code = ?1
+              LIMIT 1",
+            params![key],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .ok()?;
+    row.map(|(id, code, capacity, group, allow_half, replacement)| CrateSpecOwned {
+        id,
+        code,
+        capacity,
+        group,
+        allow_half: allow_half == 1,
+        replacement_fcfa: replacement,
+    })
+}
+
+pub fn crate_spec_owned_from_db(conn: &Connection, key: &str) -> CoreResult<CrateSpecOwned> {
+    match crate_spec_owned_opt(conn, key) {
+        Some(spec) => Ok(spec),
+        None => crate_spec(key).map(|spec| CrateSpecOwned::from_static(&spec)),
+    }
+}
+
+/// Format du casier d'une ligne de vente : celui de la ligne, sinon celui de la
+/// variante. Sert à relire la capacité et l'autorisation de demi-casier en base
+/// plutôt que de faire confiance au client.
+pub fn crate_spec_owned_for_line(conn: &Connection, line: &Value) -> Option<CrateSpecOwned> {
+    if let Some(id) = line.get("crate_type_id").and_then(Value::as_str) {
+        if let Some(spec) = crate_spec_owned_opt(conn, id) {
+            return Some(spec);
+        }
+    }
+    let variant = line.get("variant_id").and_then(Value::as_str)?;
+    let crate_id: Option<String> = conn
+        .query_row(
+            "SELECT crate_type_id FROM product_variants WHERE id = ?1",
+            params![variant],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .flatten();
+    crate_id.and_then(|id| crate_spec_owned_opt(conn, &id))
+}
+
 pub fn apply_sale_crate_movements(
     conn: &Connection,
     a: &Actor,
@@ -1440,7 +1503,14 @@ pub fn apply_sale_crate_movements(
     if let Some(cases) = payload.get("mixed_cases").and_then(Value::as_array) {
         for case in cases {
             if let Some(crate_id) = field_str_opt(case, "crate_type_id") {
-                *out.entry(crate_id.to_string()).or_insert(0) += 1;
+                // Un casier mixte complet sort chez le client ; un demi-casier
+                // mixte reste au dépôt, ouvert : aucune dette de casier.
+                let half = case.get("is_half_case").and_then(Value::as_bool).unwrap_or(false);
+                if half {
+                    *opened.entry(crate_id.to_string()).or_insert(0) += 1;
+                } else {
+                    *out.entry(crate_id.to_string()).or_insert(0) += 1;
+                }
             }
         }
     }

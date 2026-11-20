@@ -9,6 +9,7 @@ export type RootStackParamList = {
   Cash: undefined;
   Reports: undefined;
   Catalog: undefined;
+  MixedOrder: undefined;
   Receipts: undefined;
   Statement: undefined;
   Desktop: undefined;

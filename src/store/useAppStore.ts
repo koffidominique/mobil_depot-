@@ -20,6 +20,7 @@ interface AppState {
   addLine: (line: CartLineInput) => void;
   updateLineCount: (lineKey: string, delta: number) => void;
   addMixedCase: (item: MixedCaseInput) => void;
+  removeMixedCase: (index: number) => void;
   clearCart: () => void;
   setPayments: (payments: PaymentInput[]) => void;
   toggleFavorite: (variantId: string) => void;
@@ -64,6 +65,8 @@ export const useAppStore = create<AppState>((set) => ({
         .filter((item) => item.unit_count > 0),
     })),
   addMixedCase: (item) => set((state) => ({ mixedCases: [...state.mixedCases, item] })),
+  removeMixedCase: (index) =>
+    set((state) => ({ mixedCases: state.mixedCases.filter((_item, position) => position !== index) })),
   clearCart: () => set({ cartLines: [], mixedCases: [], payments: [] }),
   setPayments: (payments) => set({ payments }),
   toggleFavorite: (variantId) => set((state) => ({

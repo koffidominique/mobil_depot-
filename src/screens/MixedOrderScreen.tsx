@@ -1,4 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
+import { useNavigation } from '@react-navigation/native';
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
@@ -10,10 +11,12 @@ import { useAppStore } from '../store/useAppStore';
 
 export function MixedOrderScreen() {
   const c = useColors();
+  const navigation = useNavigation();
   const inventory = useInventory();
   const crateQuery = useCrateTypes();
   const crates = (crateQuery.data?.crate_types ?? []).map((item) => ({
-    id: item.crate_type_id, code: item.code, capacity: item.capacity, group: item.compatibility_group_id,
+    id: item.crate_type_id, code: item.code, capacity: item.capacity,
+    group: item.compatibility_group_id, allowHalf: item.allow_half_case !== false,
   }));
   const addMixedCase = useAppStore((state) => state.addMixedCase);
   const notify = useAppStore((state) => state.notify);
@@ -24,7 +27,7 @@ export function MixedOrderScreen() {
   const [validated, setValidated] = useState<ValidatedMixedCase | null>(null);
 
   const crate = crates.find((item) => item.id === crateId) ?? crates[0] ?? {
-    id: '', code: '—', capacity: 0, group: '',
+    id: '', code: '—', capacity: 0, group: '', allowHalf: false,
   };
   const effectiveCrateId = crate.id;
   const capacity = half ? crate.capacity / 2 : crate.capacity;
@@ -42,8 +45,10 @@ export function MixedOrderScreen() {
         is_half_case: half,
         lines,
       });
+      setLines([]);
       setError(null);
-      notify('Casier mixte compatible ajouté à la vente.');
+      notify('Casier mixte vérifié et ajouté au panier : il part avec la vente.');
+      if (navigation.canGoBack()) navigation.goBack();
     },
     onError: (err) => setError(err.message),
   });
@@ -87,9 +92,19 @@ export function MixedOrderScreen() {
             </Pressable>
           ))}
         </View>
-        <Pressable onPress={() => { setHalf(!half); setValidated(null); }}>
-          <Text style={{ color: c.primary, marginTop: 8 }}>
+        <Pressable
+          onPress={() => {
+            if (!crate.allowHalf) {
+              setError('Demi-casier interdit sur ce format de casier : modifiez le format dans le référentiel.');
+              return;
+            }
+            setHalf(!half);
+            setValidated(null);
+          }}
+        >
+          <Text style={{ color: crate.allowHalf ? c.primary : c.subtitle, marginTop: 8 }}>
             {half ? 'Demi-casier ✓' : 'Demi-casier'}
+            {crate.allowHalf ? '' : ' (interdit sur ce format)'}
           </Text>
         </Pressable>
         <Row
@@ -156,7 +171,7 @@ export function MixedOrderScreen() {
       ) : null}
 
       <PrimaryButton
-        label="Valider le casier"
+        label={half ? 'Valider le demi-casier' : 'Valider le casier'}
         disabled={lines.length === 0}
         loading={validateCase.isPending}
         onPress={() => validateCase.mutate()}

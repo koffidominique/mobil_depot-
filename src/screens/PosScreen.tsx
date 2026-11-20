@@ -4,15 +4,30 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
 import { depot } from '../core/client';
 import { formatFcfa, formatFcfaExact, parseIntegerFcfa, toJsonInteger } from '../core/format';
+import { canSellHalfCase, halfCasePrice, halfCaseUnits } from '../core/pricing';
 import type { CartLineInput, CommercialUnit, InventoryItem, PaymentInput, SaleResult } from '../core/types';
 import { useConnectivity, useCustomers, useInventory } from '../hooks/useCore';
 import { useAppStore } from '../store/useAppStore';
 
-const UNITS: CommercialUnit[] = ['BOTTLE', 'CASE', 'CARTON', 'PACK', 'CAN', 'UNIT'];
+const UNITS: CommercialUnit[] = ['BOTTLE', 'HALF_CASE', 'CASE', 'CARTON', 'PACK', 'CAN', 'UNIT'];
+
+const UNIT_LABEL: Record<CommercialUnit, string> = {
+  CASE: 'casier',
+  HALF_CASE: 'demi-casier',
+  CARTON: 'carton',
+  PACK: 'pack',
+  BOTTLE: 'bouteille',
+  CAN: 'canette',
+  UNIT: 'unité',
+};
 
 function priceFor(item: InventoryItem, unit: CommercialUnit, tier: 'RETAIL' | 'WHOLESALE'): number {
   if (unit === 'BOTTLE' || unit === 'CAN' || unit === 'UNIT') {
     return item.retail_bottle_fcfa;
+  }
+  // Décision OWNER : un demi-casier vaut « prix bouteille × (unités du casier ÷ 2) ».
+  if (unit === 'HALF_CASE') {
+    return halfCasePrice(item);
   }
   return tier === 'WHOLESALE' ? item.wholesale_case_fcfa : item.retail_case_fcfa;
 }
@@ -23,6 +38,8 @@ export function PosScreen() {
   const inventory = useInventory();
   const customers = useCustomers();
   const cartLines = useAppStore((state) => state.cartLines);
+  const mixedCases = useAppStore((state) => state.mixedCases);
+  const removeMixedCase = useAppStore((state) => state.removeMixedCase);
   const addLine = useAppStore((state) => state.addLine);
   const updateLineCount = useAppStore((state) => state.updateLineCount);
   const clearCart = useAppStore((state) => state.clearCart);
@@ -76,6 +93,13 @@ export function PosScreen() {
   const totalFcfa = cartLines.reduce(
     (sum, line) => sum + BigInt(line.unit_price_fcfa) * BigInt(line.unit_count),
     0n,
+  ) + mixedCases.reduce(
+    (sum, item) =>
+      sum + item.lines.reduce(
+        (inner, line) => inner + BigInt(line.unit_price_fcfa) * BigInt(line.quantity_bottles),
+        0n,
+      ),
+    0n,
   );
 
   const checkout = useMutation<SaleResult, Error, void>({
@@ -106,7 +130,7 @@ export function PosScreen() {
         customer_id: selectedCustomerId,
         price_tier: tier,
         lines: cartLines,
-        mixed_cases: [],
+        mixed_cases: mixedCases,
         discount_fcfa: toJsonInteger(parseIntegerFcfa(discount || '0')),
         payments,
         is_online: online,
@@ -138,6 +162,12 @@ export function PosScreen() {
   });
 
   function addToCart(item: InventoryItem, unit: CommercialUnit) {
+    if (unit === 'HALF_CASE' && !canSellHalfCase(item)) {
+      setError(
+        `Demi-casier impossible pour ${item.name} : aucun casier physique, format impair ou demi-casier interdit sur ce format.`,
+      );
+      return;
+    }
     const line: CartLineInput = {
       line_key: `${item.variant_id}_${unit}`,
       variant_id: item.variant_id,
@@ -148,7 +178,7 @@ export function PosScreen() {
       crate_capacity: item.pack_size,
       pack_size: item.pack_size,
       is_reusable: item.container_type === 'Verre' && unit !== 'CAN',
-      allow_half_case: item.pack_size % 2 === 0,
+      allow_half_case: canSellHalfCase(item),
       bottle_profile_id: item.bottle_profile_id,
       crate_type_id: item.crate_type_id,
     };
@@ -224,11 +254,17 @@ export function PosScreen() {
               value={formatFcfa(priceFor(item, 'BOTTLE', tier))}
             />
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-              {UNITS.map((unit) => (
-                <Pressable key={unit} onPress={() => addToCart(item, unit)}>
-                  <Text style={{ color: c.primary, fontWeight: '700' }}>+ {unit.toLowerCase()}</Text>
-                </Pressable>
-              ))}
+              {UNITS.map((unit) => {
+                const blocked = unit === 'HALF_CASE' && !canSellHalfCase(item);
+                return (
+                  <Pressable key={unit} onPress={() => addToCart(item, unit)}>
+                    <Text style={{ color: blocked ? c.subtitle : c.primary, fontWeight: '700' }}>
+                      + {UNIT_LABEL[unit]}
+                      {unit === 'HALF_CASE' && !blocked ? ` (${halfCaseUnits(item)} btl)` : ''}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
           </View>
         ))}
@@ -261,6 +297,23 @@ export function PosScreen() {
             <Text style={{ color: c.text }}>{line.unit_count}</Text>
             <Pressable onPress={() => updateLineCount(line.line_key, 1)}>
               <Text style={{ color: c.primary, fontSize:20 }}>+</Text>
+            </Pressable>
+          </View>
+        ))}
+        {mixedCases.map((item, index) => (
+          <View key={`mixed_${index}`} style={{ paddingVertical: 6 }}>
+            <Row
+              label={`Casier mixte${item.is_half_case ? ' (demi)' : ''} · ${item.lines
+                .reduce((sum, line) => sum + line.quantity_bottles, 0)} bouteilles`}
+              value={formatFcfa(
+                item.lines.reduce((sum, line) => sum + line.unit_price_fcfa * line.quantity_bottles, 0),
+              )}
+            />
+            <Text style={{ color: c.subtitle, fontSize: 11 }}>
+              {item.lines.map((line) => `${line.variant_name} ×${line.quantity_bottles}`).join(' · ')}
+            </Text>
+            <Pressable onPress={() => removeMixedCase(index)}>
+              <Text style={{ color: c.danger, fontSize: 12 }}>Retirer ce casier mixte</Text>
             </Pressable>
           </View>
         ))}

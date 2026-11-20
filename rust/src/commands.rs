@@ -356,6 +356,46 @@ fn prepare_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
             line["available_stock_units"] = json!(stock);
         }
     }
+
+    // Capacité de casier et autorisation de demi-casier : relues en base pour
+    // chaque ligne, jamais reprises du client.
+    if let Some(lines) = enriched["lines"].as_array_mut() {
+        for line in lines.iter_mut() {
+            let unit = line.get("unit").and_then(Value::as_str).unwrap_or_default();
+            if unit != "CASE" && unit != "HALF_CASE" {
+                continue;
+            }
+            if let Some(spec) = crate::crates::crate_spec_owned_for_line(conn, line) {
+                line["crate_type_id"] = json!(spec.id);
+                line["crate_capacity"] = json!(spec.capacity);
+                line["allow_half_case"] = json!(spec.allow_half);
+            }
+        }
+    }
+
+    // Formats de casiers mixtes : résolus en base (catalogues, formats créés par
+    // l'OWNER), puis transmis au domaine qui reste pur. Un format inconnu est
+    // simplement absent : le domaine le refusera explicitement (CRATE_NOT_FOUND).
+    if let Some(cases) = enriched.get("mixed_cases").and_then(Value::as_array) {
+        let mut specs = Vec::new();
+        for case in cases {
+            if let Some(id) = case.get("crate_type_id").and_then(Value::as_str) {
+                if let Ok(spec) = crate::crates::crate_spec_owned_from_db(conn, id) {
+                    specs.push(json!({
+                        "id": spec.id,
+                        "code": spec.code,
+                        "capacity": spec.capacity,
+                        "group": spec.group,
+                        "allow_half": spec.allow_half,
+                        "replacement_fcfa": spec.replacement_fcfa
+                    }));
+                }
+            }
+        }
+        if !specs.is_empty() {
+            enriched["resolved_crate_specs"] = json!(specs);
+        }
+    }
     Ok(enriched)
 }
 
@@ -431,7 +471,9 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
         .cloned()
         .unwrap_or_default();
     for case in &mixed_cases {
-        let validated = validate_mixed_case(case)?;
+        let crate_id = field_str(case, "crate_type_id")?.to_string();
+        let spec = resolved_crate_spec(&enriched, &crate_id)?;
+        let validated = validate_mixed_case_with(case, &spec)?;
         for line in field_array(case, "lines")? {
             let qty = field_i64(line, "quantity_bottles")?;
             let variant = field_str(line, "variant_id")?;
@@ -547,7 +589,13 @@ fn base_revision(conn: &Connection, branch: &str) -> i64 {
 
 pub fn create_mixed_order(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let _ = actor(conn, payload)?;
-    validate_mixed_case(payload)
+    // Commande de **vérification** : le casier mixte n'est enregistré qu'au
+    // moment de la vente (`createSale`), qui revalide et écrit tout dans une
+    // seule transaction. Rien n'est créé ici : ni vente, ni stock, ni mouvement.
+    let crate_id = field_str(payload, "crate_type_id")?.to_string();
+    let spec = crate::crates::crate_spec_owned_from_db(conn, &crate_id)?;
+    let validated = validate_mixed_case_with(payload, &spec)?;
+    Ok(validated)
 }
 
 /// Compatibilité de l'ancienne commande `registerPackagingReturn`.

@@ -644,6 +644,53 @@ function applyCatalogImport(normalized: AnyRecord) {
   };
 }
 
+/**
+ * Validation d'un casier mixte, identique aux règles du moteur Rust :
+ * capacité exacte, groupe physique identique, jetables interdits, demi-casier
+ * seulement si le format l'autorise et si la capacité est paire.
+ */
+function validateMixedCase(payload: AnyRecord): AnyRecord {
+  const requested = String(payload.crate_type_id ?? '');
+  const crate = crates.find((item) => item.crate_type_id === requested || item.code === requested);
+  if (!crate) throw new Error(`CRATE_NOT_FOUND: format casier inconnu (${requested || 'aucun'})`);
+  const half = Boolean(payload.is_half_case);
+  const capacity = Number(crate.capacity ?? 0);
+  if (capacity <= 0) throw new Error('INVALID_CRATE_CAPACITY: capacité du casier inconnue, à vérifier');
+  if (half && crate.allow_half_case === false) throw new Error('HALF_CASE_NOT_ALLOWED: demi-casier interdit sur ce format');
+  if (half && capacity % 2 !== 0) throw new Error('NON_INTEGER_HALF_CASE: le demi-casier doit contenir un nombre entier de bouteilles');
+  const slots = half ? capacity / 2 : capacity;
+  const lines = (payload.lines ?? []) as AnyRecord[];
+  if (lines.length === 0) throw new Error('EMPTY_MIXED_CASE: ajoutez au moins une boisson');
+  let total = 0;
+  let amount = 0;
+  const bottles: Record<string, number> = {};
+  const resolved: AnyRecord[] = [];
+  for (const line of lines) {
+    const qty = integer(line.quantity_bottles, 'quantity_bottles');
+    if (qty <= 0) throw new Error('INVALID_BOTTLE_QTY: quantité entière positive requise');
+    const variant = variants.find((item) => item.variant_id === line.variant_id);
+    if (!variant) throw new Error('VARIANT_NOT_FOUND: produit inconnu dans le casier mixte');
+    const group = String(line.compatibility_group_id ?? variant.compatibility_group_id ?? '');
+    if (!group) throw new Error('INCOMPATIBLE_CRATE_PROFILE: profil physique manquant pour ce produit');
+    if (group !== crate.compatibility_group_id) {
+      throw new Error('INCOMPATIBLE_CRATE_PROFILE: profil physique incompatible avec le casier (le volume seul ne suffit pas)');
+    }
+    if (line.is_reusable === false) throw new Error('DISPOSABLE_IN_MIXED_CRATE: un emballage jetable ne peut pas entrer dans un casier suivi');
+    const price = integer(line.unit_price_fcfa, 'unit_price_fcfa');
+    total += qty;
+    amount += qty * price;
+    const profile = String(line.bottle_profile_id ?? variant.bottle_profile_id ?? variant.variant_id);
+    bottles[profile] = (bottles[profile] ?? 0) + qty;
+    resolved.push({ variant_id: variant.variant_id, variant_name: line.variant_name ?? variant.name, quantity_bottles: qty, unit_price_fcfa: price });
+  }
+  if (total !== slots) throw new Error(`MIXED_CASE_CAPACITY_MISMATCH: casier incomplet ${total}/${slots} bouteilles`);
+  return {
+    crate_type_id: crate.crate_type_id, crate_code: crate.code, is_half_case: half,
+    slot_capacity: slots, total_drinks_fcfa: amount, expected_crates_count: 1,
+    expected_empty_bottles_by_profile: bottles, lines: resolved,
+  };
+}
+
 function execute(command: string, payload: AnyRecord = {}): unknown {
   switch (command) {
     case 'initializeDatabase': return { database: payload.path ?? '/depotpro-preview/depotpro_local.db', schema_version: 12, seeded_demo: payload.seed_demo !== false };
@@ -686,7 +733,13 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       return { applied: updates.length, skipped: 0, server_sequence: payload.server_sequence ?? state.serverSequence };
     }
     case 'getDashboard': return dashboard();
-    case 'getInventory': return { full_drinks: variants, empty_bottles_qty: 48, empty_crates_qty: 18 };
+    case 'getInventory': return {
+      full_drinks: variants.map((item) => {
+        const crate = item.crate_type_id ? crates.find((row) => row.crate_type_id === item.crate_type_id) : undefined;
+        return { ...item, allow_half_case: crate ? crate.allow_half_case !== false : false, crate_capacity: crate?.capacity ?? item.pack_size };
+      }),
+      empty_bottles_qty: 48, empty_crates_qty: 18,
+    };
     case 'getCustomers': return { customers: customers.map(({ total_purchases_fcfa: _total_purchases_fcfa, total_paid_fcfa: _total_paid_fcfa, ...rest }) => ({ ...rest, outstanding_fcfa: rest.financial_balance_fcfa, available_credit_fcfa: Math.max(0, rest.credit_limit_fcfa - rest.financial_balance_fcfa) })) };
     case 'getSuppliers': return { suppliers };
     case 'getSales': return { sales: sales.map(({ id, receipt_number, customer_name, total_fcfa, credit_fcfa, sync_status, occurred_at }) => ({ id, receipt_number, customer_name, total_fcfa, credit_fcfa, sync_status, occurred_at })) };
@@ -725,17 +778,63 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     }
     case 'validateSale': {
       const lines = (payload.lines ?? []) as AnyRecord[];
-      const subtotal = lines.reduce((sum, line) => sum + integer(line.unit_count, 'unit_count') * integer(line.unit_price_fcfa, 'unit_price_fcfa'), 0) - integer(payload.discount_fcfa ?? 0, 'discount_fcfa');
+      const physical: Record<string, number> = {};
+      let goodsAmount = 0;
+      for (const line of lines) {
+        const count = integer(line.unit_count, 'unit_count');
+        const pack = integer(line.pack_size ?? 1, 'pack_size');
+        const unit = String(line.unit ?? 'UNIT');
+        // La capacité d'un casier ne vient jamais du client : elle est relue
+        // dans le référentiel du dépôt, comme le fait le moteur Rust.
+        const variant = variants.find((item) => item.variant_id === line.variant_id);
+        const crateId = String(line.crate_type_id ?? variant?.crate_type_id ?? '');
+        const crate = crateId ? crates.find((row) => row.crate_type_id === crateId || row.code === crateId) : undefined;
+        const caseCapacity = crate ? Number(crate.capacity) : pack;
+        if (unit === 'HALF_CASE') {
+          if (!crate) throw new Error('HALF_CASE_NOT_ALLOWED: aucun casier physique pour ce produit');
+          if (crate.allow_half_case === false) throw new Error('HALF_CASE_NOT_ALLOWED: demi-casier interdit sur ce format');
+          if (caseCapacity <= 0 || caseCapacity % 2 !== 0) throw new Error('NON_INTEGER_HALF_CASE: capacité impaire ou inconnue');
+        }
+        const units = unit === 'CASE' ? count * caseCapacity
+          : unit === 'HALF_CASE' ? count * (caseCapacity / 2)
+            : unit === 'CARTON' || unit === 'PACK' ? count * pack
+              : count;
+        physical[String(line.variant_id)] = (physical[String(line.variant_id)] ?? 0) + units;
+        goodsAmount += count * integer(line.unit_price_fcfa, 'unit_price_fcfa');
+      }
+      const mixedCases = (payload.mixed_cases ?? []) as AnyRecord[];
+      for (const item of mixedCases) {
+        const validated = validateMixedCase(item);
+        goodsAmount += Number(validated.total_drinks_fcfa);
+        for (const line of validated.lines as AnyRecord[]) {
+          const key = String(line.variant_id);
+          physical[key] = (physical[key] ?? 0) + Number(line.quantity_bottles);
+        }
+      }
+      const subtotal = goodsAmount - integer(payload.discount_fcfa ?? 0, 'discount_fcfa');
       const payments = (payload.payments ?? []) as AnyRecord[];
       const confirmed = payments.filter((item) => item.method !== 'MOBILE_MONEY' || item.reference).reduce((sum, item) => sum + integer(item.amount_fcfa, 'amount_fcfa'), 0);
       const pending = payments.filter((item) => item.method === 'MOBILE_MONEY' && !item.reference).reduce((sum, item) => sum + integer(item.amount_fcfa, 'amount_fcfa'), 0);
-      return { subtotal_fcfa: subtotal, discount_fcfa: integer(payload.discount_fcfa ?? 0, 'discount_fcfa'), total_fcfa: subtotal, confirmed_paid_fcfa: confirmed, pending_mobile_money_fcfa: pending, credit_fcfa: Math.max(0, subtotal - confirmed - pending), physical_units_by_variant: {}, offline_stock_warnings: [] };
+      return { subtotal_fcfa: subtotal, discount_fcfa: integer(payload.discount_fcfa ?? 0, 'discount_fcfa'), total_fcfa: subtotal, confirmed_paid_fcfa: confirmed, pending_mobile_money_fcfa: pending, credit_fcfa: Math.max(0, subtotal - confirmed - pending), physical_units_by_variant: physical, offline_stock_warnings: [] };
     }
     case 'createSale': {
       const validation = execute('validateSale', payload) as AnyRecord;
       const id = nextId('sale');
       const customer = customers.find((item) => item.id === payload.customer_id);
-      const lines = (payload.lines ?? []).map((line: AnyRecord) => ({ variant_name: String(line.variant_name ?? ''), unit: String(line.unit ?? 'UNIT'), unit_count: integer(line.unit_count, 'unit_count'), physical_units: integer(line.unit_count, 'unit_count') * integer(line.pack_size ?? 1, 'pack_size'), unit_price_fcfa: integer(line.unit_price_fcfa, 'unit_price_fcfa'), line_total_fcfa: integer(line.unit_count, 'unit_count') * integer(line.unit_price_fcfa, 'unit_price_fcfa') }));
+      const lines = (payload.lines ?? []).map((line: AnyRecord) => {
+        const count = integer(line.unit_count, 'unit_count');
+        const pack = integer(line.pack_size ?? 1, 'pack_size');
+        const unit = String(line.unit ?? 'UNIT');
+        const variant = variants.find((item) => item.variant_id === line.variant_id);
+        const crateId = String(line.crate_type_id ?? variant?.crate_type_id ?? '');
+        const crate = crateId ? crates.find((row) => row.crate_type_id === crateId || row.code === crateId) : undefined;
+        const caseCapacity = crate ? Number(crate.capacity) : pack;
+        const physical = unit === 'CASE' ? count * caseCapacity
+          : unit === 'HALF_CASE' ? count * (caseCapacity / 2)
+            : unit === 'CARTON' || unit === 'PACK' ? count * pack
+              : count;
+        return { variant_name: String(line.variant_name ?? ''), unit, unit_count: count, physical_units: physical, unit_price_fcfa: integer(line.unit_price_fcfa, 'unit_price_fcfa'), line_total_fcfa: count * integer(line.unit_price_fcfa, 'unit_price_fcfa'), is_mixed: false };
+      });
       const record = { id, receipt_number: `REC-PREVIEW-${sequence}`, customer_id: payload.customer_id ?? null, customer_name: customer?.name ?? 'Client comptoir', total_fcfa: validation.total_fcfa, credit_fcfa: validation.credit_fcfa, subtotal_fcfa: validation.subtotal_fcfa, discount_fcfa: validation.discount_fcfa, paid_confirmed_fcfa: validation.confirmed_paid_fcfa, pending_mobile_money_fcfa: validation.pending_mobile_money_fcfa, sync_status: 'PENDING', occurred_at: Date.now(), lines };
       sales.unshift(record);
       state.operations.unshift({ operation_id: nextId('op'), command_type: 'SALE_CREATE', summary: `Vente ${record.receipt_number}`, status: 'PENDING', attempt_count: 0, created_at: Date.now(), synced_at: null, server_sequence: null, last_error: null });
@@ -755,10 +854,39 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
         const result = applyCrateMove({
           crate_type_id: String(crateId), movement_type: 'sale_full_out', qty: count,
           full_delta: -count, empty_delta: half ? count : 0,
-          partner_type: payload.customer_id ? 'CUSTOMER' : null, partner_id: payload.customer_id ? String(payload.customer_id) : null,
+          // Un demi-casier reste au dépôt : il n'est jamais imputé au client.
+          partner_type: half ? null : (payload.customer_id ? 'CUSTOMER' : null),
+          partner_id: half ? null : (payload.customer_id ? String(payload.customer_id) : null),
           partner_delta: half ? 0 : count, document_id: id,
           reason: half ? `Demi-casier vendu : casier ouvert au dépôt (${record.receipt_number})` : `Casiers pleins sortis à la vente (${record.receipt_number})`,
           origin: 'DEPOT', destination: half ? 'DEPOT' : 'CLIENT', idempotency_key: `sale_crate:${id}:${crateId}:${line.line_key ?? line.variant_id ?? ''}`,
+        });
+        crateMovementsMade.push(result.movement);
+      });
+      ((payload.mixed_cases ?? []) as AnyRecord[]).forEach((item, index) => {
+        const validated = validateMixedCase(item);
+        for (const mixedLine of validated.lines as AnyRecord[]) {
+          lines.push({
+            variant_name: String(mixedLine.variant_name ?? ''), unit: 'BOTTLE',
+            unit_count: Number(mixedLine.quantity_bottles), physical_units: Number(mixedLine.quantity_bottles),
+            unit_price_fcfa: Number(mixedLine.unit_price_fcfa),
+            line_total_fcfa: Number(mixedLine.quantity_bottles) * Number(mixedLine.unit_price_fcfa),
+            is_mixed: true,
+          });
+        }
+        const crateId = String(validated.crate_type_id);
+        const half = Boolean(validated.is_half_case);
+        const result = applyCrateMove({
+          crate_type_id: crateId, movement_type: 'sale_full_out', qty: 1,
+          full_delta: -1, empty_delta: half ? 1 : 0,
+          partner_type: half ? null : (payload.customer_id ? 'CUSTOMER' : null),
+          partner_id: half ? null : (payload.customer_id ? String(payload.customer_id) : null),
+          partner_delta: half ? 0 : 1, document_id: id,
+          reason: half
+            ? `Demi-casier mixte vendu : casier ouvert au dépôt (${record.receipt_number})`
+            : `Casier mixte sorti à la vente (${record.receipt_number})`,
+          origin: 'DEPOT', destination: half ? 'DEPOT' : 'CLIENT',
+          idempotency_key: `sale_mixed_crate:${id}:${index}:${crateId}`,
         });
         crateMovementsMade.push(result.movement);
       });
@@ -783,9 +911,10 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       return { ...sale, is_receipt_not_invoice: true };
     }
     case 'createMixedOrder': {
-      const lines = (payload.lines ?? []) as AnyRecord[];
-      const total = lines.reduce((sum, line) => sum + integer(line.quantity_bottles, 'quantity_bottles') * integer(line.unit_price_fcfa, 'unit_price_fcfa'), 0);
-      return { crate_type_id: payload.crate_type_id, crate_code: crates.find((item) => item.crate_type_id === payload.crate_type_id)?.code ?? 'B12-50', is_half_case: Boolean(payload.is_half_case), slot_capacity: payload.is_half_case ? 6 : 12, total_drinks_fcfa: total, expected_crates_count: 1, expected_empty_bottles_by_profile: {} };
+      // Le moteur Rust ne fait que valider : aucune vente, aucun stock, aucun
+      // mouvement de casier n'est créé par cette commande.
+      const validated = validateMixedCase(payload);
+      return { ...validated, validated_only: true };
     }
     case 'registerPackagingReturn': return { status: 'RECORDED', qty: integer(payload.qty, 'qty'), document_id: nextId('doc') };
     case 'createPurchaseOrder': {
@@ -1244,6 +1373,20 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     }
     case 'archiveProductVariant': return { variant_id: payload.variant_id, status: 'ARCHIVED' };
     case 'createCrateType': return { crate_type_id: nextId('crate'), code: payload.code };
+    case 'updateCrateType': {
+      const crate = crates.find((item) => item.crate_type_id === payload.crate_type_id);
+      if (!crate) throw new Error('CRATE_NOT_FOUND: format de casier introuvable');
+      if (payload.capacity !== undefined) {
+        const capacity = integer(payload.capacity, 'capacity');
+        if (capacity < 0) throw new Error('INVALID_CRATE_CAPACITY: capacité négative interdite');
+        crate.capacity = capacity;
+        crate.capacity_to_verify = capacity === 0;
+      }
+      if (payload.allow_half_case !== undefined) crate.allow_half_case = Boolean(payload.allow_half_case);
+      if (payload.replacement_value_fcfa !== undefined) crate.replacement_value_fcfa = integer(payload.replacement_value_fcfa, 'replacement_value_fcfa');
+      if (payload.empty_sale_price_fcfa !== undefined) crate.empty_sale_price_fcfa = integer(payload.empty_sale_price_fcfa, 'empty_sale_price_fcfa');
+      return { crate_type_id: crate.crate_type_id, capacity: crate.capacity, allow_half_case: crate.allow_half_case, capacity_to_verify: crate.capacity_to_verify };
+    }
     case 'configureDeviceQuota': return { reserved_qty: payload.reserved_qty };
     default: throw new Error(`COMMAND_NOT_MOCKED:${command}`);
   }

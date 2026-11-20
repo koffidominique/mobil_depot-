@@ -55,6 +55,10 @@ export interface InventoryItem {
   category: string | null;
   full_units_qty: number;
   min_alert_units: number;
+  /** Le format de casier physique de la variante autorise-t-il le demi-casier ? */
+  allow_half_case?: boolean;
+  /** Emplacements du format de casier, si connu. */
+  crate_capacity?: number;
 }
 
 export interface Inventory {
@@ -138,6 +142,8 @@ export interface ValidatedMixedCase {
   total_drinks_fcfa: number;
   expected_crates_count: number;
   expected_empty_bottles_by_profile: Record<string, number>;
+  /** `createMixedOrder` ne fait que vérifier : la vente s'écrit dans `createSale`. */
+  validated_only?: boolean;
 }
 
 export interface SaleValidation {

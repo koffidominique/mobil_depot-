@@ -32,6 +32,7 @@ import { CratesScreen } from './screens/CratesScreen';
 import { CashScreen } from './screens/CashScreen';
 import { ReportsScreen } from './screens/ReportsScreen';
 import { CatalogScreen } from './screens/CatalogScreen';
+import { MixedOrderScreen } from './screens/MixedOrderScreen';
 import { ReceiptsScreen } from './screens/ReceiptsScreen';
 import { StatementScreen } from './screens/StatementScreen';
 
@@ -198,6 +199,7 @@ function Bootstrap() {
             <Stack.Screen name="Cash" component={CashScreen} options={{ headerShown: true, title: 'Caisse' }} />
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ headerShown: true, title: 'Rapports' }} />
             <Stack.Screen name="Catalog" component={CatalogScreen} options={{ headerShown: true, title: 'Catalogue' }} />
+            <Stack.Screen name="MixedOrder" component={MixedOrderScreen} options={{ headerShown: true, title: 'Casier mixte' }} />
             <Stack.Screen name="Receipts" component={ReceiptsScreen} options={{ headerShown: true, title: 'Reçus' }} />
             <Stack.Screen name="Statement" component={StatementScreen} options={{ headerShown: true, title: 'Bordereaux' }} />
             <Stack.Screen name="Desktop" component={DesktopScreen} options={{ headerShown: true, title: 'Parité Desktop' }} />

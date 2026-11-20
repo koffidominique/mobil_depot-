@@ -451,3 +451,31 @@
 - **Tests** : `__tests__/part22-ci-catalogs.test.ts` vérifie l'unicité de
   `B24-33` et de `B12-60`, l'absence de `C24-33`/`CI-60`, et la contenance 12.
   Jest **20 suites / 106 tests**, `tsc` x2, `vite build` OK.
+
+## LOT 45 — DEMI-CASIER ET CASIER MIXTE RÉELLEMENT VENDABLES
+
+- **Constat corrigé** : le moteur savait calculer un demi-casier et valider un
+  casier mixte, mais l'écran de vente n'offrait pas `HALF_CASE`, envoyait
+  `mixed_cases: []` en dur, et l'assistant « Commande mixte » n'était pas
+  enregistré dans le navigateur ; `createMixedOrder` ne faisait que vérifier.
+- **Prix (décision OWNER)** : demi-casier = `prix bouteille × (unités du casier ÷ 2)`,
+  règle unique dans `src/core/pricing.ts`.
+- **Vente** : unité demi-casier proposée et bloquée si le format l'interdit ;
+  casiers mixtes visibles, totalisés et transmis à `createSale`, qui les valide
+  de nouveau et les écrit (lignes `is_mixed`, journal des casiers, caisse,
+  audit, outbox) dans une seule transaction.
+- **Sécurité backend** : capacité de casier et autorisation de demi-casier sont
+  relues **en base** (`prepare_sale` → `crate_spec_owned_for_line`), plus jamais
+  reprises du panier ; un format importé (absent du référentiel compilé) est
+  accepté via `resolved_crate_specs`.
+- **Physique** : casier mixte complet → `sale_full_out` imputé au client ;
+  demi-casier (simple ou mixte) → casier ouvert au dépôt, `partner_delta = 0`,
+  aucune dette, aucune caisse.
+- **Interface** : `MixedOrderScreen` enregistré (route + menu), retour au POS
+  après validation, retrait d'un casier mixte du panier.
+- **Tests** : `__tests__/part23-half-mixed.test.ts` (13 cas) + test de domaine
+  Rust `mixed_case_uses_format_resolved_by_the_database_layer`.
+- **Validation exécutée** : Jest **21 suites / 119 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 6 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Détail et
+  limites : `docs/PART23_HALF_MIXED.md`.
