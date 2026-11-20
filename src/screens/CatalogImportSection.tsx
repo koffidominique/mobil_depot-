@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Banner, Card, Field, PrimaryButton, Row, useColors } from '../components/ui';
+import { STARTER_CATALOGS, starterCatalogText } from '../../assets/catalogs';
 import { depot } from '../core/client';
 import { formatFcfa, formatQuantity } from '../core/format';
 import { newRequestKey } from '../core/requestKey';
@@ -59,7 +60,7 @@ export function CatalogImportSection() {
   };
 
   const analyse = useMutation({
-    mutationFn: () => depot.previewCatalogImport({ json_text: raw }),
+    mutationFn: (text: string) => depot.previewCatalogImport({ json_text: text }),
     onSuccess: (data) => {
       setPreview(data);
       setReport(null);
@@ -121,6 +122,14 @@ export function CatalogImportSection() {
     onError: (err: Error) => setError(err.message),
   });
 
+  function loadStarter(id: string) {
+    const text = starterCatalogText(id);
+    setRaw(text);
+    setReport(null);
+    setMessage(null);
+    analyse.mutate(text);
+  }
+
   const capacitiesToVerify = preview?.preview.crate_capacities_to_verify ?? [];
   const blockedByCapacity = capacitiesToVerify.length > 0 && !capacityAccepted;
   const canApply = Boolean(preview?.can_apply) && !blockedByCapacity && raw.trim().length > 0;
@@ -147,6 +156,21 @@ export function CatalogImportSection() {
       </Card>
 
       <Card>
+        <Text style={{ color: c.text, fontWeight: '800' }}>Catalogues de démarrage — brasseries ivoiriennes</Text>
+        <Text style={{ color: c.subtitle, fontSize: 11 }}>
+          Marques, contenances et casiers publiés par SOLIBRA et BRASSIVOIRE. Aucun prix n’est fourni :
+          les prix se saisissent depuis vos factures, et l’import ne les écrase jamais. Vérifiez l’aperçu,
+          complétez les casiers « à vérifier », puis appliquez.
+        </Text>
+        {STARTER_CATALOGS.map((catalog) => (
+          <Pressable key={catalog.id} onPress={() => loadStarter(catalog.id)} style={{ paddingVertical: 6 }}>
+            <Row label={catalog.label} value={`${formatQuantity(catalog.variants_count)} variantes`} />
+            <Text style={{ color: c.subtitle, fontSize: 11 }}>{catalog.documented}</Text>
+          </Pressable>
+        ))}
+      </Card>
+
+      <Card>
         <Text style={{ color: c.text, fontWeight: '800' }}>Importer un fichier JSON de brasserie</Text>
         <Text style={{ color: c.subtitle, fontSize: 11 }}>
           Collez le contenu du fichier reçu (formats SOLIBRA ancien et nouveau, BRASSIVOIRE, générique).
@@ -164,7 +188,11 @@ export function CatalogImportSection() {
           placeholder='{"supplier": {"code": "SOLIBRA"}, ...}'
           multiline
         />
-        <PrimaryButton label="Analyser sans rien enregistrer" loading={analyse.isPending} onPress={() => analyse.mutate()} />
+        <PrimaryButton
+          label="Analyser sans rien enregistrer"
+          loading={analyse.isPending}
+          onPress={() => analyse.mutate(raw)}
+        />
         {preview ? (
           <View style={{ gap: 4 }}>
             <Row label="Format détecté" value={preview.detected_format} />
@@ -249,6 +277,7 @@ export function CatalogImportSection() {
             <Text style={{ color: c.subtitle, fontSize: 11 }}>
               {row.producer_name || row.brand} · casier {row.crate_code || 'aucun'} ·{' '}
               {row.crate_capacity > 0 ? `${row.crate_capacity} emplacements` : 'capacité à vérifier'} ·{' '}
+              {row.pack_size > 1 ? `${row.pack_size} unités/casier` : 'unités par casier à vérifier'} ·{' '}
               détail {formatFcfa(row.retail_case_fcfa)}
               {row.to_verify ? ' · à vérifier' : ''}
             </Text>

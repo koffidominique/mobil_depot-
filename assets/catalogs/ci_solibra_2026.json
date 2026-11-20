@@ -1,0 +1,435 @@
+{
+  "catalog_id": "SOLIBRA-CI-2026-11",
+  "producer": {
+    "code": "SOLIBRA",
+    "name": "SOLIBRA (Société de Limonaderies et Brasseries d'Afrique)",
+    "city": "Abidjan",
+    "country": "Côte d'Ivoire"
+  },
+  "note": "Catalogue de démarrage : produits et conditionnements publics au 20/11/2026. Aucun prix n'est fourni : les prix locaux se saisissent depuis les factures du fournisseur.",
+  "categories": [
+    {
+      "code": "BIERES",
+      "name": "Bières",
+      "is_alcoholic": true
+    },
+    {
+      "code": "MALT",
+      "name": "Boissons maltées",
+      "is_alcoholic": false
+    }
+  ],
+  "brands": [
+    {
+      "code": "BEAUFORT",
+      "name": "Beaufort Lager"
+    },
+    {
+      "code": "BOCK",
+      "name": "Bock"
+    },
+    {
+      "code": "CASTEL",
+      "name": "Castel Beer"
+    },
+    {
+      "code": "CHILL",
+      "name": "Chill"
+    },
+    {
+      "code": "DOPPEL",
+      "name": "Doppel Munich"
+    },
+    {
+      "code": "DOPPEL_ENERGY",
+      "name": "Doppel Energy Malt"
+    },
+    {
+      "code": "GUINNESS",
+      "name": "Guinness"
+    },
+    {
+      "code": "RACINES",
+      "name": "Racines"
+    },
+    {
+      "code": "RACINES_FORT",
+      "name": "Racines Fort"
+    }
+  ],
+  "packaging_types": [
+    {
+      "type": "plastic_crate",
+      "code": "C24-33",
+      "name": "Casier 24 × 33 cl",
+      "capacity": 24
+    },
+    {
+      "type": "plastic_crate",
+      "code": "C12-50",
+      "name": "Casier 12 × 50 cl",
+      "capacity": 12
+    },
+    {
+      "type": "plastic_crate",
+      "code": "C12-65",
+      "name": "Casier 12 × 65 cl",
+      "capacity": 12
+    },
+    {
+      "type": "plastic_crate",
+      "code": "C12-100",
+      "name": "Casier 12 × 100 cl",
+      "capacity": 12
+    },
+    {
+      "type": "plastic_crate",
+      "code": "C20-50",
+      "name": "Casier 20 × 50 cl",
+      "capacity": 20
+    },
+    {
+      "type": "returnable_glass_bottle",
+      "code": "BTE-VC"
+    },
+    {
+      "type": "one_way_glass_bottle",
+      "code": "BTE-VP"
+    },
+    {
+      "type": "can",
+      "code": "CAN"
+    },
+    {
+      "type": "carton",
+      "code": "CARTON"
+    }
+  ],
+  "products": [
+    {
+      "code": "BEAUFORT-LAGER",
+      "name": "Beaufort Lager",
+      "category": "BIERES",
+      "brand": "BEAUFORT",
+      "description": "Bière blonde 5,0 % — canette 33 cl, verre consigné 50 et 33 cl, verre perdu 25 cl."
+    },
+    {
+      "code": "BOCK",
+      "name": "Bock",
+      "category": "BIERES",
+      "brand": "BOCK",
+      "description": "Bière blonde 4,8 % — 33, 50, 65 et 100 cl."
+    },
+    {
+      "code": "CASTEL-BEER",
+      "name": "Castel Beer",
+      "category": "BIERES",
+      "brand": "CASTEL",
+      "description": "Bière blonde 5,2 % — verre consigné 33 et 50 cl."
+    },
+    {
+      "code": "CHILL",
+      "name": "Chill",
+      "category": "BIERES",
+      "brand": "CHILL",
+      "description": "Bière aromatisée citron — 50 cl et canette 33 cl."
+    },
+    {
+      "code": "DOPPEL-MUNICH",
+      "name": "Doppel Munich",
+      "category": "BIERES",
+      "brand": "DOPPEL",
+      "description": "Bière brune 5,5 % — 33 et 50 cl."
+    },
+    {
+      "code": "DOPPEL-ENERGY-MALT",
+      "name": "Doppel Energy Malt",
+      "category": "MALT",
+      "brand": "DOPPEL_ENERGY",
+      "description": "Boisson maltée énergisante sans alcool — 33 cl."
+    },
+    {
+      "code": "GUINNESS",
+      "name": "Guinness",
+      "category": "BIERES",
+      "brand": "GUINNESS",
+      "description": "Stout — 33 cl, 65 cl et canette 33 cl."
+    },
+    {
+      "code": "RACINES",
+      "name": "Racines",
+      "category": "BIERES",
+      "brand": "RACINES",
+      "description": "Bière aux racines — 33 cl (casier de 24), 50 cl (casier de 20), canette 33 cl."
+    },
+    {
+      "code": "RACINES-FORT",
+      "name": "Racines Fort",
+      "category": "BIERES",
+      "brand": "RACINES_FORT",
+      "description": "Bière aux racines plus corsée — 50 cl (casier de 12)."
+    }
+  ],
+  "variants": [
+    {
+      "sku": "BFT-33-C24",
+      "name": "Beaufort Lager 33 cl",
+      "product_id": "BEAUFORT-LAGER",
+      "brand": "BEAUFORT",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C24-33",
+      "crate_capacity": 24
+    },
+    {
+      "sku": "BFT-50-C12",
+      "name": "Beaufort Lager 50 cl",
+      "product_id": "BEAUFORT-LAGER",
+      "brand": "BEAUFORT",
+      "volume_label": "50 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-50",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "BFT-25-CARTON",
+      "name": "Beaufort Lager 25 cl",
+      "product_id": "BEAUFORT-LAGER",
+      "brand": "BEAUFORT",
+      "volume_label": "25 cl",
+      "pack_size": 24,
+      "container_type": "one_way_glass_bottle"
+    },
+    {
+      "sku": "BFT-CAN33-CARTON",
+      "name": "Beaufort canette 33 cl",
+      "product_id": "BEAUFORT-LAGER",
+      "brand": "BEAUFORT",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "can"
+    },
+    {
+      "sku": "BOCK-33-C24",
+      "name": "Bock 33 cl",
+      "product_id": "BOCK",
+      "brand": "BOCK",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C24-33",
+      "crate_capacity": 24
+    },
+    {
+      "sku": "BOCK-50-C12",
+      "name": "Bock 50 cl",
+      "product_id": "BOCK",
+      "brand": "BOCK",
+      "volume_label": "50 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-50",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "BOCK-65-C12",
+      "name": "Bock 65 cl",
+      "product_id": "BOCK",
+      "brand": "BOCK",
+      "volume_label": "65 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-65",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "BOCK-100-C12",
+      "name": "Bock 100 cl",
+      "product_id": "BOCK",
+      "brand": "BOCK",
+      "volume_label": "100 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-100",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "BOCK-CAN33-CARTON",
+      "name": "Bock canette 33 cl",
+      "product_id": "BOCK",
+      "brand": "BOCK",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "can"
+    },
+    {
+      "sku": "BOCK-CAN50-CARTON",
+      "name": "Bock canette 50 cl",
+      "product_id": "BOCK",
+      "brand": "BOCK",
+      "volume_label": "50 cl",
+      "pack_size": 24,
+      "container_type": "can"
+    },
+    {
+      "sku": "CASTEL-33-C24",
+      "name": "Castel Beer 33 cl",
+      "product_id": "CASTEL-BEER",
+      "brand": "CASTEL",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C24-33",
+      "crate_capacity": 24
+    },
+    {
+      "sku": "CASTEL-50-C12",
+      "name": "Castel Beer 50 cl",
+      "product_id": "CASTEL-BEER",
+      "brand": "CASTEL",
+      "volume_label": "50 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-50",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "CHILL-CITRON-50-C12",
+      "name": "Chill Citron 50 cl",
+      "product_id": "CHILL",
+      "brand": "CHILL",
+      "volume_label": "50 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-50",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "CHILL-CAN33-CARTON",
+      "name": "Chill canette 33 cl",
+      "product_id": "CHILL",
+      "brand": "CHILL",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "can"
+    },
+    {
+      "sku": "DOPPEL-33-C24",
+      "name": "Doppel Munich 33 cl",
+      "product_id": "DOPPEL-MUNICH",
+      "brand": "DOPPEL",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C24-33",
+      "crate_capacity": 24
+    },
+    {
+      "sku": "DOPPEL-50-C12",
+      "name": "Doppel Munich 50 cl",
+      "product_id": "DOPPEL-MUNICH",
+      "brand": "DOPPEL",
+      "volume_label": "50 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-50",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "DOPPEL-ENERGY-33-C24",
+      "name": "Doppel Energy Malt 33 cl",
+      "product_id": "DOPPEL-ENERGY-MALT",
+      "brand": "DOPPEL_ENERGY",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C24-33",
+      "crate_capacity": 24
+    },
+    {
+      "sku": "GUINNESS-33-C24",
+      "name": "Guinness 33 cl",
+      "product_id": "GUINNESS",
+      "brand": "GUINNESS",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C24-33",
+      "crate_capacity": 24
+    },
+    {
+      "sku": "GUINNESS-65-C12",
+      "name": "Guinness 65 cl",
+      "product_id": "GUINNESS",
+      "brand": "GUINNESS",
+      "volume_label": "65 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-65",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "GUINNESS-CAN33-CARTON",
+      "name": "Guinness canette 33 cl",
+      "product_id": "GUINNESS",
+      "brand": "GUINNESS",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "can"
+    },
+    {
+      "sku": "RACINES-33-C24",
+      "name": "Racines 33 cl",
+      "product_id": "RACINES",
+      "brand": "RACINES",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C24-33",
+      "crate_capacity": 24
+    },
+    {
+      "sku": "RACINES-50-C20",
+      "name": "Racines 50 cl",
+      "product_id": "RACINES",
+      "brand": "RACINES",
+      "volume_label": "50 cl",
+      "pack_size": 20,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C20-50",
+      "crate_capacity": 20
+    },
+    {
+      "sku": "RACINES-CAN33-CARTON",
+      "name": "Racines canette 33 cl",
+      "product_id": "RACINES",
+      "brand": "RACINES",
+      "volume_label": "33 cl",
+      "pack_size": 24,
+      "container_type": "can"
+    },
+    {
+      "sku": "RACINES-FORT-50-C12",
+      "name": "Racines Fort 50 cl",
+      "product_id": "RACINES-FORT",
+      "brand": "RACINES_FORT",
+      "volume_label": "50 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "C12-50",
+      "crate_capacity": 12
+    }
+  ],
+  "source_ids": [
+    {
+      "label": "SOLIBRA Chez Vous — Bières & Vins (formats et conditionnements)",
+      "url": "https://solibrachezvous.ci/categorie-produit/bieres/"
+    },
+    {
+      "label": "SOLIBRA — nos marques (fiches produits)",
+      "url": "https://www.solibra.ci/nos-marques/bieres-97.html"
+    }
+  ]
+}

@@ -414,3 +414,27 @@
   toutes les requêtes de `catalog.rs`.
 - **Non exécuté** : `cargo test` / `cargo check` (chaîne Rust absente), builds
   natifs, E2E, sync réelle. Détail : `docs/PART21_CATALOG.md`.
+
+## LOT 44 — CATALOGUES DE DÉMARRAGE DES BRASSERIES IVOIRIENNES
+
+- **Livré** : `assets/catalogs/ci_solibra_2026.json` (9 marques, 24 variantes,
+  5 formats de casiers documentés : 24×33 cl, 12×50 cl, 12×65 cl, 12×100 cl,
+  20×50 cl) et `assets/catalogs/ci_brassivoire_2026.json` (5 marques,
+  11 variantes, casier 60 cl « à vérifier »). `assets/catalogs/index.ts` expose
+  les métadonnées et le texte prêt à coller.
+- **Interface** : nouvelle carte « Catalogues de démarrage — brasseries
+  ivoiriennes » dans `CatalogImportSection` ; un appui charge le JSON et lance
+  l'aperçu, l'application reste une action explicite de l'OWNER.
+- **Règles respectées** : aucun prix livré (saisie depuis les factures, jamais
+  écrasée par un import), aucune contenance inventée (60 cl Brassivoire →
+  `capacity_to_verify`), aucun produit activé, aucune conversion automatique,
+  bouteilles/canettes/cartons = caractéristiques et non casiers, sources
+  publiques conservées dans `source_ids`.
+- **Tests** : `__tests__/part22-ci-catalogs.test.ts` (9 cas) — présence des deux
+  catalogues, absence de prix, import complet, contenances 24/12/12/20,
+  casier 60 cl à vérifier, non-confusion casier/contenant, cohabitation des deux
+  producteurs, rejeu idempotent, traçabilité des sources.
+- **Validation exécutée** : `tsc --noEmit` (0), `tsc -p web/tsconfig.json` (0),
+  ESLint (0 erreur), Jest **20 suites / 106 tests**, `vite build`.
+- **Non exécuté** : `cargo test` / `cargo check` (chaîne Rust absente), builds
+  natifs, E2E. Détail et limites : `docs/CATALOGUES_CI.md`.
