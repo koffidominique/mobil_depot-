@@ -97,24 +97,28 @@ describe('catalogues de démarrage Côte d’Ivoire', () => {
       .map((variant) => variant.crate_type ?? null);
     crateCodes.forEach((code) => expect(code).toBeNull());
     const crates = call('getCrateTypes').crate_types.map((item: any) => item.code);
-    expect(crates).toContain('C24-33');
-    expect(crates).toContain('C20-50');
+    expect(crates).toContain('B24-33');
+    expect(crates).toContain('B20-50');
+    // Aucun format en double : les catalogues réutilisent le référentiel existant.
+    expect(crates.filter((code: string) => code === 'B24-33').length).toBe(1);
+    expect(crates).not.toContain('C24-33');
     expect(crates).not.toContain('CAN');
     expect(crates).not.toContain('CARTON');
   });
 
-  it('importe le catalogue BRASSIVOIRE et signale la contenance non publiée', () => {
+  it('importe le catalogue BRASSIVOIRE sur le format 60 cl du référentiel', () => {
     const preview = call('previewCatalogImport', { json_text: starterCatalogText('ci-brassivoire-2026-11') });
     expect(preview.detected_format).toBe('GENERIC');
-    expect(preview.preview.crate_capacities_to_verify).toContain('CI-60');
+    // Le format 60 cl existe déjà au référentiel : aucun casier n'est à créer.
+    expect(preview.preview.crate_capacities_to_verify).not.toContain('B12-60');
     const report = importStarter('ci-brassivoire-2026-11');
     expect(report.counts.variants_created).toBe(documentVariants(brassivoireDocument).length);
-    expect(report.to_verify.crate_capacities).toContain('CI-60');
-    const crate = call('getCrateTypes').crate_types.find((item: any) => item.code === 'CI-60');
-    expect(crate.capacity).toBe(0);
-    expect(crate.capacity_to_verify).toBe(true);
-    // La contenance n'est jamais devinée (ni 12 ni 24).
-    expect([12, 24]).not.toContain(crate.capacity);
+    const crate = call('getCrateTypes').crate_types.find((item: any) => item.code === 'B12-60');
+    expect(crate.capacity).toBe(12);
+    expect(crate.capacity_to_verify).toBe(false);
+    const crates = call('getCrateTypes').crate_types.map((item: any) => item.code);
+    expect(crates.filter((code: string) => code === 'B12-60').length).toBe(1);
+    expect(crates).not.toContain('CI-60');
   });
 
   it('les deux catalogues cohabitent sans doublon de producteur', () => {

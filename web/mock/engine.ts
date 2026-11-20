@@ -45,7 +45,7 @@ const crates: AnyRecord[] = [
   crate_type_id: String(id), code: String(code), name: String(code), capacity: Number(capacity),
   compatibility_group_id: String(group), allow_half_case: true,
   acquisition_value_fcfa: Number(value), reference_value_fcfa: Number(value), empty_sale_price_fcfa: 0,
-  status: 'ACTIVE', is_physical_crate: true,
+  status: 'ACTIVE', is_physical_crate: true, capacity_to_verify: false,
   // Champs historiques conservés pour les écrans qui les lisent encore.
   replacement_value_fcfa: Number(value), deposit_value_fcfa: Number(value),
   empty_crates_qty: 18, compartments: 1, dimensions: null, physical_profile_id: null,

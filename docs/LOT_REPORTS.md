@@ -438,3 +438,16 @@
   ESLint (0 erreur), Jest **20 suites / 106 tests**, `vite build`.
 - **Non exécuté** : `cargo test` / `cargo check` (chaîne Rust absente), builds
   natifs, E2E. Détail et limites : `docs/CATALOGUES_CI.md`.
+
+## LOT 44 bis — CORRECTION : CASIERS DES CATALOGUES ALIGNÉS SUR LE RÉFÉRENTIEL
+
+- **Défaut corrigé** : les catalogues de démarrage créaient `C24-33`, `C12-50`,
+  `C12-65`, `C12-100`, `C20-50` et `CI-60`, alors que le référentiel contient déjà
+  `B24-33`, `B12-50`, `B12-65`, `B12-100`, `B20-50` et `B12-60`. Deux codes pour
+  un même objet physique auraient dupliqué les formats et cassé la validation des
+  casiers mixtes (qui résout le format par identifiant du référentiel).
+- **Correction** : codes alignés sur le référentiel ; le 60 cl de Brassivoire
+  utilise `B12-60` (12 places), à confirmer physiquement. Aucun casier dupliqué.
+- **Tests** : `__tests__/part22-ci-catalogs.test.ts` vérifie l'unicité de
+  `B24-33` et de `B12-60`, l'absence de `C24-33`/`CI-60`, et la contenance 12.
+  Jest **20 suites / 106 tests**, `tsc` x2, `vite build` OK.

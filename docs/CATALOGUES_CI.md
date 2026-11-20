@@ -4,8 +4,8 @@ Deux catalogues sont livrés avec l'application, dans `assets/catalogs/` :
 
 | Fichier | Producteur | Marques | Variantes | Casiers |
 | --- | --- | --- | --- | --- |
-| `ci_solibra_2026.json` | SOLIBRA (Groupe Castel) | 9 | 24 | `C24-33` (24), `C12-50` (12), `C12-65` (12), `C12-100` (12), `C20-50` (20) |
-| `ci_brassivoire_2026.json` | Brassivoire (Heineken · CFAO) | 5 | 11 | `CI-60` (contenance **à vérifier**) |
+| `ci_solibra_2026.json` | SOLIBRA (Groupe Castel) | 9 | 24 | `B24-33` (24), `B12-50` (12), `B12-65` (12), `B12-100` (12), `B20-50` (20) |
+| `ci_brassivoire_2026.json` | Brassivoire (Heineken · CFAO) | 5 | 11 | `B12-60` (12, format déjà au référentiel) |
 
 Ils s'importent depuis **Catalogue → Catalogues de démarrage** : le texte JSON est
 chargé dans la zone d'import, l'aperçu est calculé, puis l'OWNER applique avec une
@@ -39,10 +39,11 @@ Desperados).
 1. **Aucun prix.** Les prix d'un dépôt dépendent de ses factures et de sa zone ;
    les inventer serait faux. Ils se saisissent dans l'écran Catalogue
    (`updateVariantPrices`), et un import ultérieur ne les écrase jamais.
-2. **Aucune contenance devinée.** Le nombre de bouteilles par casier 60 cl de
-   Brassivoire n'est pas publié : le casier `CI-60` est créé avec
-   `capacity_to_verify = 1` et les variantes correspondantes sont marquées
-   « à vérifier ». Ni 12 ni 24 ne sont supposés.
+2. **Aucune contenance devinée.** Les formats portent le code et la contenance
+   déjà présents au référentiel du dépôt (`CRATE_TYPES` / `crate_types`) : les
+   catalogues ne créent donc aucun doublon de casier. Pour le 60 cl de
+   Brassivoire, le format `B12-60` (12 places) existe déjà ; il doit être
+   confirmé physiquement et corrigé (`updateCrateType`) si vos casiers diffèrent.
 3. **Aucun produit activé.** Comme pour tout import, `is_active = 0` : un produit
    livré n'est pas vendable avant activation explicite par l'OWNER.
 4. **Aucune conversion automatique.** Les casiers 33 cl, 50 cl, 65 cl, 100 cl et
@@ -57,7 +58,7 @@ Desperados).
 | À faire | Où | Pourquoi |
 | --- | --- | --- |
 | Prix détail / gros / bouteille | Catalogue → variante → prix | aucun prix n'est livré |
-| Contenance du casier `CI-60` | Catalogue → Formats de casiers (`updateCrateType`) | non publiée par Brassivoire |
+| Confirmer le format `B12-60` (12 places) | Catalogue → Formats de casiers (`updateCrateType`) | contenance non publiée par Brassivoire |
 | Unités par casier des variantes Brassivoire 25/33/50 cl | Catalogue → `updateCatalogVariant` | conditionnement non publié |
 | Valeur de remplacement / valeur vide des casiers | Catalogue → Formats de casiers | dépend du stock réel |
 | Activation des variantes vendues | Catalogue → variantes | un import n'active rien |
@@ -69,8 +70,11 @@ Desperados).
    `createCatalogProducer`).
 2. Coller le JSON du brasseur (ou un JSON `producer` + `products` + `variants`
    minimal), analyser, appliquer.
-3. Si le brasseur ne publie pas ses contenances, laisser `capacity` vide : le
-   casier sera créé « à vérifier » plutôt que rempli d'une valeur inventée.
+3. Si le format existe déjà au référentiel, réutiliser son code (`B24-33`…) :
+   un nouveau code créerait un second casier pour le même objet physique.
+4. Si le brasseur ne publie pas ses contenances et qu'aucun format n'existe,
+   laisser `capacity` vide : le casier sera créé « à vérifier » plutôt que rempli
+   d'une valeur inventée.
 
 Les fichiers livrés sont versionnés : `catalog_id` porte la date
 (`SOLIBRA-CI-2026-11`), ce qui permet de reconnaître un import déjà appliqué.

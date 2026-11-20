@@ -6,7 +6,7 @@
     "city": "Anyama — Zone industrielle PK 24",
     "country": "Côte d'Ivoire"
   },
-  "note": "Catalogue de démarrage : marques et contenances publiées au 20/11/2026. Le nombre de bouteilles par casier 60 cl n'est pas publié : le casier est créé « à vérifier » et la contenance en unités reste à saisir.",
+  "note": "Catalogue de démarrage : marques et contenances publiées au 20/11/2026. Le casier 60 cl utilise le format déjà présent au référentiel du dépôt (B12-60, 12 places) ; confirmez physiquement vos casiers avant d'y stocker, et corrigez le format si les vôtres diffèrent.",
   "categories": [
     {
       "code": "BIERES",
@@ -44,8 +44,9 @@
   "packaging_types": [
     {
       "type": "plastic_crate",
-      "code": "CI-60",
-      "name": "Casier bouteilles 60 cl (contenance à vérifier)"
+      "code": "B12-60",
+      "name": "Casier 12 × 60 cl (format du référentiel, à confirmer physiquement)",
+      "capacity": 12
     },
     {
       "type": "returnable_glass_bottle",
@@ -104,9 +105,10 @@
       "product_id": "IVOIRE-CLASSIC",
       "brand": "IVOIRE",
       "volume_label": "60 cl",
-      "pack_size": null,
+      "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "CI-60"
+      "crate_type": "B12-60",
+      "crate_capacity": 12
     },
     {
       "sku": "IVOIRE-33",
@@ -122,9 +124,10 @@
       "product_id": "IVOIRE-BLACK",
       "brand": "IVOIRE_BLACK",
       "volume_label": "60 cl",
-      "pack_size": null,
+      "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "CI-60"
+      "crate_type": "B12-60",
+      "crate_capacity": 12
     },
     {
       "sku": "IVOIRE-BLACK-33",

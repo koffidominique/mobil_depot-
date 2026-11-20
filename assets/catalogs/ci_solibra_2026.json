@@ -60,31 +60,31 @@
   "packaging_types": [
     {
       "type": "plastic_crate",
-      "code": "C24-33",
+      "code": "B24-33",
       "name": "Casier 24 × 33 cl",
       "capacity": 24
     },
     {
       "type": "plastic_crate",
-      "code": "C12-50",
+      "code": "B12-50",
       "name": "Casier 12 × 50 cl",
       "capacity": 12
     },
     {
       "type": "plastic_crate",
-      "code": "C12-65",
+      "code": "B12-65",
       "name": "Casier 12 × 65 cl",
       "capacity": 12
     },
     {
       "type": "plastic_crate",
-      "code": "C12-100",
+      "code": "B12-100",
       "name": "Casier 12 × 100 cl",
       "capacity": 12
     },
     {
       "type": "plastic_crate",
-      "code": "C20-50",
+      "code": "B20-50",
       "name": "Casier 20 × 50 cl",
       "capacity": 20
     },
@@ -179,7 +179,7 @@
       "volume_label": "33 cl",
       "pack_size": 24,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C24-33",
+      "crate_type": "B24-33",
       "crate_capacity": 24
     },
     {
@@ -190,7 +190,7 @@
       "volume_label": "50 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-50",
+      "crate_type": "B12-50",
       "crate_capacity": 12
     },
     {
@@ -219,7 +219,7 @@
       "volume_label": "33 cl",
       "pack_size": 24,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C24-33",
+      "crate_type": "B24-33",
       "crate_capacity": 24
     },
     {
@@ -230,7 +230,7 @@
       "volume_label": "50 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-50",
+      "crate_type": "B12-50",
       "crate_capacity": 12
     },
     {
@@ -241,7 +241,7 @@
       "volume_label": "65 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-65",
+      "crate_type": "B12-65",
       "crate_capacity": 12
     },
     {
@@ -252,7 +252,7 @@
       "volume_label": "100 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-100",
+      "crate_type": "B12-100",
       "crate_capacity": 12
     },
     {
@@ -281,7 +281,7 @@
       "volume_label": "33 cl",
       "pack_size": 24,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C24-33",
+      "crate_type": "B24-33",
       "crate_capacity": 24
     },
     {
@@ -292,7 +292,7 @@
       "volume_label": "50 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-50",
+      "crate_type": "B12-50",
       "crate_capacity": 12
     },
     {
@@ -303,7 +303,7 @@
       "volume_label": "50 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-50",
+      "crate_type": "B12-50",
       "crate_capacity": 12
     },
     {
@@ -323,7 +323,7 @@
       "volume_label": "33 cl",
       "pack_size": 24,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C24-33",
+      "crate_type": "B24-33",
       "crate_capacity": 24
     },
     {
@@ -334,7 +334,7 @@
       "volume_label": "50 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-50",
+      "crate_type": "B12-50",
       "crate_capacity": 12
     },
     {
@@ -345,7 +345,7 @@
       "volume_label": "33 cl",
       "pack_size": 24,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C24-33",
+      "crate_type": "B24-33",
       "crate_capacity": 24
     },
     {
@@ -356,7 +356,7 @@
       "volume_label": "33 cl",
       "pack_size": 24,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C24-33",
+      "crate_type": "B24-33",
       "crate_capacity": 24
     },
     {
@@ -367,7 +367,7 @@
       "volume_label": "65 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-65",
+      "crate_type": "B12-65",
       "crate_capacity": 12
     },
     {
@@ -387,7 +387,7 @@
       "volume_label": "33 cl",
       "pack_size": 24,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C24-33",
+      "crate_type": "B24-33",
       "crate_capacity": 24
     },
     {
@@ -398,7 +398,7 @@
       "volume_label": "50 cl",
       "pack_size": 20,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C20-50",
+      "crate_type": "B20-50",
       "crate_capacity": 20
     },
     {
@@ -418,7 +418,7 @@
       "volume_label": "50 cl",
       "pack_size": 12,
       "container_type": "returnable_glass_bottle",
-      "crate_type": "C12-50",
+      "crate_type": "B12-50",
       "crate_capacity": 12
     }
   ],
