@@ -114,8 +114,24 @@ export function StockScreen() {
       {tab === 'crates' ? (
         <Card>
           <Row
-            label="Casiers plastique vides"
-            value={formatQuantity(inventory.data?.empty_crates_qty ?? 0)}
+            label="Casiers plastique vides au dépôt"
+            value={formatQuantity(packaging.data?.totals?.empty_qty ?? inventory.data?.empty_crates_qty ?? 0)}
+          />
+          <Row
+            label="Casiers pleins au dépôt"
+            value={formatQuantity(packaging.data?.totals?.full_qty ?? 0)}
+          />
+          <Row
+            label="Chez les clients (solde physique)"
+            value={formatQuantity(packaging.data?.totals?.at_customers_qty ?? 0)}
+          />
+          <Row
+            label="Chez les fournisseurs (solde physique)"
+            value={formatQuantity(packaging.data?.totals?.at_suppliers_qty ?? 0)}
+          />
+          <Row
+            label="Valeur indicative du stock"
+            value={formatFcfa(packaging.data?.valuation?.stock_value_fcfa ?? 0)}
           />
           {(packaging.data?.crates ?? []).map((item) => (
             <Row
@@ -124,6 +140,16 @@ export function StockScreen() {
               value={`${formatQuantity(item.empty_qty)} vides / ${formatQuantity(item.full_qty)} pleins`}
             />
           ))}
+          {(packaging.data?.totals?.untracked_full_out_qty ?? 0) > 0 ? (
+            <Row
+              label="Pleins sortis sans référentiel exploitable"
+              value={formatQuantity(packaging.data?.totals?.untracked_full_out_qty ?? 0)}
+            />
+          ) : null}
+          <Text style={{ color: c.subtitle, fontSize: 11 }}>
+            Les casiers sont le seul emballage suivi. Leur valeur est indicative : elle n&apos;entre jamais dans
+            le compte commercial, et aucun mouvement de caisse n&apos;est créé par un retour physique.
+          </Text>
         </Card>
       ) : null}
 

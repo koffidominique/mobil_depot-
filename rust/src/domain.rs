@@ -103,7 +103,7 @@ pub struct CrateSpec {
 
 /// Profils physiques déclarés explicitement : deux formats de même volume
 /// mais de profils différents ne sont jamais compatibles.
-pub const CRATE_TYPES: [CrateSpec; 8] = [
+pub const CRATE_TYPES: [CrateSpec; 9] = [
     CrateSpec { id: "crate_b24_33", code: "B24-33", capacity: 24, group: "G_B24_33", allow_half: true, replacement_fcfa: 3500 },
     CrateSpec { id: "crate_b12_50", code: "B12-50", capacity: 12, group: "G_B12_50", allow_half: true, replacement_fcfa: 3000 },
     CrateSpec { id: "crate_b12_60", code: "B12-60", capacity: 12, group: "G_B12_60", allow_half: true, replacement_fcfa: 3000 },
@@ -112,6 +112,8 @@ pub const CRATE_TYPES: [CrateSpec; 8] = [
     CrateSpec { id: "crate_b12_100", code: "B12-100", capacity: 12, group: "G_B12_100", allow_half: true, replacement_fcfa: 3400 },
     CrateSpec { id: "crate_b20_50", code: "B20-50", capacity: 20, group: "G_B20_50", allow_half: true, replacement_fcfa: 4500 },
     CrateSpec { id: "crate_b6_150", code: "B6-150", capacity: 6, group: "G_B6_150", allow_half: true, replacement_fcfa: 1800 },
+    // Profil ALT déclaré explicitement : même volume, casier physiquement différent.
+    CrateSpec { id: "crate_b12_50_alt", code: "B12-50-ALT", capacity: 12, group: "G_B12_50_ALT", allow_half: true, replacement_fcfa: 3000 },
 ];
 
 pub fn crate_spec(id: &str) -> CoreResult<CrateSpec> {

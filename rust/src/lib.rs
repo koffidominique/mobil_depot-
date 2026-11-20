@@ -2,6 +2,7 @@
 //! Interface C stable consommée par le TurboModule React Native.
 
 mod commands;
+mod crates;
 mod crypto;
 mod db;
 mod domain;
@@ -35,7 +36,7 @@ fn execute_inner(input: &str) -> CoreResult<String> {
             .map_err(|_| CoreError::new("STATE_POISONED", "Chemin SQLite verrouillé."))?;
         *path_guard = path.to_string();
         return Ok(json!({"ok": true, "data": {
-            "database": path, "schema_version": 10, "seeded_demo": seed_demo
+            "database": path, "schema_version": 11, "seeded_demo": seed_demo
         }}).to_string());
     }
 

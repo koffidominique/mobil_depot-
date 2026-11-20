@@ -63,6 +63,55 @@ export function useCrateTypes() {
   return useQuery({ queryKey: ['crate-types'], queryFn: () => depot.getCrateTypes() });
 }
 
+/** Stock physique des casiers : pleins, vides, chez les clients, chez les fournisseurs. */
+export function useCrateStock() {
+  return useQuery({ queryKey: ['crate-stock'], queryFn: () => depot.getCrateStock() });
+}
+
+export function useCrateMovements(filter: {
+  crate_type_id?: string;
+  partner_type?: 'CUSTOMER' | 'SUPPLIER';
+  partner_id?: string;
+  movement_type?: string;
+  limit?: number;
+}) {
+  return useQuery({
+    queryKey: ['crate-movements', filter],
+    queryFn: () => depot.getCrateMovementHistory(filter),
+  });
+}
+
+export function useCrateValuations(crateTypeId?: string) {
+  return useQuery({
+    queryKey: ['crate-valuations', crateTypeId ?? 'all'],
+    queryFn: () => depot.getCrateValuationHistory(crateTypeId),
+  });
+}
+
+export function useCustomerCrateBalance(customerId: string) {
+  return useQuery({
+    queryKey: ['customer-crate-balance', customerId],
+    queryFn: () => depot.getCustomerCrateBalance(customerId),
+    enabled: customerId.length > 0,
+  });
+}
+
+export function useSupplierCrateBalance(supplierId: string) {
+  return useQuery({
+    queryKey: ['supplier-crate-balance', supplierId],
+    queryFn: () => depot.getSupplierCrateBalance(supplierId),
+    enabled: supplierId.length > 0,
+  });
+}
+
+/** Rapport de rapprochement des casiers ambigus laissés par l'ancien moteur. */
+export function useCrateMigrationReview(includeResolved = false) {
+  return useQuery({
+    queryKey: ['crate-migration-review', includeResolved],
+    queryFn: () => depot.getCrateMigrationReview(includeResolved),
+  });
+}
+
 export function usePurchaseOrders() {
   return useQuery({ queryKey: ['purchase-orders'], queryFn: () => depot.getPurchaseOrders() });
 }

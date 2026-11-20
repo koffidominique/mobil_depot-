@@ -5,6 +5,7 @@ export type RootStackParamList = {
   Sync: undefined;
   Purchases: undefined;
   Suppliers: undefined;
+  Crates: undefined;
   Cash: undefined;
   Reports: undefined;
   Catalog: undefined;

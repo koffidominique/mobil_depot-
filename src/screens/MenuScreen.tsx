@@ -15,8 +15,9 @@ export function MenuScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const entries: Array<{ label: string; detail: string; screen: Destination }> = [
-    { label: 'Achats & réceptions', detail: 'Bons de commande, écarts et retours fournisseurs', screen: 'Purchases' },
-    { label: 'Fournisseurs', detail: 'Dettes et comptes emballages séparés', screen: 'Suppliers' },
+    { label: 'Achats & réceptions', detail: 'Bons de commande, écarts et échanges de casiers', screen: 'Purchases' },
+    { label: 'Fournisseurs', detail: 'Dette commerciale et casiers suivis séparément', screen: 'Suppliers' },
+    { label: 'Casiers plastique', detail: 'Stock physique, journal immuable, valeurs et rapprochement', screen: 'Crates' },
     { label: 'Caisse', detail: 'Ouverture, fond, encaissements et clôture', screen: 'Cash' },
     { label: 'Rapports', detail: 'CA, encaissements, créances et emballages', screen: 'Reports' },
     { label: 'Catalogue', detail: 'Produits, variantes et formats de casiers', screen: 'Catalog' },

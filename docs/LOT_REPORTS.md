@@ -356,3 +356,31 @@
 - **Rapport** : `docs/PART17_ACCEPTANCE.md` évalue chaque critère des sections application, métier, hors ligne, intégration et fiabilité.
 - **Décision** : **non accepté pour production pilote** ; les critères exécutables passent, mais builds natifs, E2E, sync réelle et audit crypto restent à faire.
 - **Validation locale** : 9 contrôles PASS, 6 catégories SKIP, aucune réussite annoncée sans exécution.
+
+
+## LOT 42 — CASIERS PLASTIQUE (cahier des charges `cata_product.md`)
+
+- **Modèle** : `MIGRATION_11` (`schema_version = 11`) ajoute `crate_movements`
+  (13 types, journal immuable), `crate_value_history`, `partner_crate_balances`,
+  `crate_migration_review`, les valeurs de casier et les permissions
+  `crate.adjust` / `crate.loss` / `crate.sell`.
+- **Neutralisation 0015** : `packaging_expectations` et
+  `partner_packaging_ledger` sont gelés par triggers ; les données historiques
+  sont reconstituées en `initial_balance` avec provenance et
+  `crate_migration_review` liste les cas ambigus. Aucune conversion en dette.
+- **Services** : `rust/src/crates.rs` (moteur physique) + commandes
+  `getCrateStock`, `getCustomerCrateBalance`, `recordCustomerCrateReturn`,
+  `recordSupplierCrateExchange`, `recordCrateLoss`, `recordEmptyCrateSale`,
+  `configureCrateValuation`, `getCrateMigrationReview`… ; `createSale` et
+  `receivePurchase` intègrent les mouvements de casiers dans leur transaction.
+- **Interface** : nouvel écran `CratesScreen`, refonte de `StockScreen`,
+  `CustomersScreen` et `SuppliersScreen`, entrée de menu et route dédiées.
+- **Tests** : `rust/tests/part18_crates.rs` (nouveau), `part5_model.rs` et
+  `part7_schema.rs` réalignés, `__tests__/part20-crates.test.ts` (24 tests pour
+  les cas 16 à 50 du §20).
+- **Validation exécutée** : `tsc --noEmit`, `tsc -p web/tsconfig.json`, ESLint
+  (0 erreur), Jest **18 suites / 76 tests**, parseur Rust (12 fichiers),
+  11 migrations jouées en SQLite (base neuve et base v10), préparation `EXPLAIN`
+  de toutes les requêtes SQL du cœur.
+- **Non exécuté** : `cargo test`/`cargo check` (chaîne absente), builds natifs,
+  E2E. Détail et matrice de tests : `docs/PART20_CRATES.md`.

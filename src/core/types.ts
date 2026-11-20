@@ -24,6 +24,15 @@ export interface Dashboard {
   credits_granted_fcfa: number;
   out_of_stock_alerts: number;
   packaging_alerts: number;
+  crate_alerts?: number;
+  crate_full_qty?: number;
+  crate_empty_qty?: number;
+  crates_at_customers_qty?: number;
+  crates_at_suppliers_qty?: number;
+  crate_stock_value_fcfa?: number;
+  crate_untracked_full_qty?: number;
+  crate_value_is_receivable?: boolean;
+  legacy_packaging_engine_active?: boolean;
   confirmed_revenue_fcfa: number;
   local_revenue_fcfa: number;
   branch_id: string;
@@ -148,6 +157,8 @@ export interface SaleResult {
   total_fcfa: number;
   credit_fcfa: number;
   outbox_status: string;
+  crate_movements?: CrateMovement[];
+  crate_balance_is_physical?: boolean;
 }
 
 export interface CustomerAccount extends Customer {
@@ -156,12 +167,19 @@ export interface CustomerAccount extends Customer {
   available_credit_fcfa: number;
   total_purchases_fcfa: number;
   total_paid_fcfa: number;
+  /** Solde physique des casiers, toujours distinct du compte commercial. */
+  crate_account?: CrateAccount;
+  crate_balance_qty?: number;
+  crate_indicative_value_fcfa?: number;
+  crate_balance_is_financial_debt?: boolean;
+  /** Historique gelé de l'ancien moteur d'emballages (lecture seule). */
   packaging_ledger: Array<{
     item_kind: string;
     ref_id: string;
     direction: string;
     qty: number;
     occurred_at: number;
+    is_legacy?: boolean;
   }>;
 }
 
@@ -240,9 +258,18 @@ export interface CrateTypeInfo {
   name: string;
   compartments: number;
   dimensions: string | null;
+  /** Colonne historique de l'ancien moteur : jamais présentée comme une consigne. */
   deposit_value_fcfa: number;
+  deposit_value_is_legacy?: boolean;
   physical_profile_id: string | null;
   is_reusable: boolean;
+  acquisition_value_fcfa?: number;
+  reference_value_fcfa?: number;
+  empty_sale_price_fcfa?: number;
+  status?: string;
+  is_physical_crate?: boolean;
+  full_crates_qty?: number;
+  stock_value_fcfa?: number;
 }
 
 export interface PurchaseOrderRecord {
@@ -309,6 +336,11 @@ export interface SupplierAccount extends Supplier {
   total_purchased_fcfa: number;
   total_paid_fcfa: number;
   debt_fcfa: number;
+  /** Casiers pleins reçus et vides remis : suivi physique, jamais financier. */
+  crate_account?: CrateAccount;
+  crate_balance_qty?: number;
+  crate_indicative_value_fcfa?: number;
+  crate_balance_is_financial_debt?: boolean;
 }
 
 export interface SyncConflict {
@@ -339,7 +371,17 @@ export interface CrateStockItem {
 
 export interface PackagingStock {
   empty_bottles: EmptyBottleStockItem[];
-  crates: CrateStockItem[];
+  crates: CrateStockEntry[];
+  totals?: CrateStockSummary['totals'];
+  valuation?: CrateStockSummary['valuation'];
+  engine?: 'PHYSICAL_CRATES';
+  legacy_engine?: CrateStockSummary['legacy_engine'];
+  bottles_tracking?: {
+    state: string;
+    creates_stock: false;
+    creates_debt: false;
+    note: string;
+  };
 }
 
 export interface PartnerStatement {
@@ -402,6 +444,13 @@ export interface CrateTypeInput {
 export interface PackagingAccount {
   partner_type: 'CUSTOMER' | 'SUPPLIER';
   partner_id: string;
+  engine?: 'PHYSICAL_CRATES';
+  crate_account?: CrateAccount;
+  total_balance_qty?: number;
+  indicative_value_fcfa?: number;
+  is_financial_debt?: boolean;
+  counts_as_receivable?: boolean;
+  /** Ancien format : conservé en lecture seule pour les intégrations existantes. */
   balances: Array<{
     item_kind: string;
     ref_id: string;
@@ -426,6 +475,36 @@ export interface PackagingAccount {
   financial_value_fcfa: number;
   has_billing_rule: boolean;
   is_immutable_ledger: boolean;
+  legacy?: {
+    engine: string;
+    state: 'FROZEN' | string;
+    balances: Array<{
+      item_kind: string;
+      ref_id: string;
+      expected_qty: number;
+      received_qty: number;
+      outstanding_qty: number;
+      status: string;
+      financial_value_fcfa: number;
+    }>;
+    movements: Array<{
+      movement_id: string;
+      item_kind: string;
+      ref_id: string;
+      direction: string;
+      qty: number;
+      document_id: string;
+      reason: string;
+      occurred_at: number;
+      user_id: string;
+      device_id: string;
+      reversal_of: string;
+      engine: string;
+    }>;
+    bottle_tracking: 'DISABLED' | string;
+    converted_to_financial_debt: boolean;
+    note: string;
+  };
 }
 
 export interface StockMovement {
@@ -468,4 +547,214 @@ export interface DesktopSnapshot {
   rules_source: string;
   rules_version: number;
   data: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Casiers plastiques : stock physique, mouvements, valeurs et rapprochement
+// ---------------------------------------------------------------------------
+
+export interface CrateStockEntry {
+  crate_type_id: string;
+  code: string;
+  name: string;
+  capacity: number;
+  compatibility_group_id: string;
+  acquisition_value_fcfa: number;
+  reference_value_fcfa: number;
+  empty_sale_price_fcfa: number;
+  status: string;
+  full_qty: number;
+  empty_qty: number;
+  depot_qty: number;
+  at_customers_qty: number;
+  at_suppliers_qty: number;
+  lost_or_damaged_qty: number;
+  untracked_full_out_qty: number;
+  stock_value_fcfa: number;
+  at_customers_indicative_fcfa: number;
+  at_suppliers_indicative_fcfa: number;
+  last_movement_at: number;
+}
+
+export interface CrateStockSummary {
+  crates: CrateStockEntry[];
+  totals: {
+    full_qty: number;
+    empty_qty: number;
+    depot_qty: number;
+    at_customers_qty: number;
+    at_suppliers_qty: number;
+    lost_or_damaged_qty: number;
+    untracked_full_out_qty: number;
+    stock_value_fcfa: number;
+  };
+  valuation: {
+    stock_value_fcfa: number;
+    at_customers_indicative_fcfa: number;
+    at_suppliers_indicative_fcfa: number;
+    is_financial_debt: false;
+    counts_as_receivable: false;
+    note: string;
+  };
+  engine: 'PHYSICAL_CRATES';
+  legacy_engine: {
+    state: string;
+    kind: string;
+    frozen_expectations: number;
+    open_migration_reviews: number;
+    note: string;
+  };
+}
+
+export interface CrateMovement {
+  movement_id: string;
+  crate_type_id: string;
+  movement_type:
+    | 'initial_balance'
+    | 'purchase_receipt_full_in'
+    | 'sale_full_out'
+    | 'customer_empty_return_in'
+    | 'supplier_empty_exchange_out'
+    | 'supplier_crate_receipt_in'
+    | 'empty_case_sale_out'
+    | 'empty_case_purchase_in'
+    | 'adjustment_in'
+    | 'adjustment_out'
+    | 'damaged'
+    | 'lost'
+    | 'writeoff';
+  qty: number;
+  direction: 'IN' | 'OUT' | 'NEUTRAL';
+  full_before?: number;
+  full_after?: number;
+  empty_before?: number;
+  empty_after?: number;
+  untracked_qty?: number;
+  partner_type: 'CUSTOMER' | 'SUPPLIER' | null;
+  partner_id: string | null;
+  partner_delta?: number;
+  document_id: string;
+  origin?: string;
+  destination?: string;
+  reason: string;
+  unit_value_fcfa?: number;
+  user_id?: string;
+  device_id?: string;
+  source?: string;
+  reversal_of?: string | null;
+  occurred_at: number;
+  idempotent?: boolean;
+}
+
+export interface CrateBalanceLine {
+  crate_type_id: string;
+  code: string;
+  name: string;
+  reference_value_fcfa: number;
+  out_qty: number;
+  in_qty: number;
+  balance_qty: number;
+  indicative_value_fcfa: number;
+  last_movement_at: number;
+}
+
+export interface CrateAccount {
+  partner_type: 'CUSTOMER' | 'SUPPLIER';
+  partner_id: string;
+  balances: CrateBalanceLine[];
+  total_balance_qty: number;
+  indicative_value_fcfa: number;
+  movements: CrateMovement[];
+  is_physical_balance: true;
+  is_financial_debt: false;
+  counts_as_receivable: false;
+  engine: 'PHYSICAL_CRATES';
+}
+
+export interface CrateReturnResult {
+  status: string;
+  crate_type_id: string;
+  qty: number;
+  matched_qty: number;
+  exceptional_qty: number;
+  balance_after: number;
+  document_id: string;
+  movements: CrateMovement[];
+  creates_financial_debt: false;
+}
+
+export interface CrateExchangeLineInput {
+  crate_type_id: string;
+  full_received_qty?: number;
+  empty_returned_qty?: number;
+  empty_received_qty?: number;
+  reason?: string;
+}
+
+export interface CrateExchangeResult {
+  status: string;
+  supplier_id: string;
+  document_id: string;
+  full_received_qty: number;
+  empty_returned_qty: number;
+  empty_received_qty: number;
+  physical_gap_qty: number;
+  financial_impact_fcfa: number;
+  creates_debt: false;
+  movements: CrateMovement[];
+  note: string;
+}
+
+export interface CrateValuation {
+  valuation_id: string;
+  crate_type_id: string;
+  acquisition_value_fcfa: number;
+  reference_value_fcfa: number;
+  empty_sale_price_fcfa: number;
+  effective_from: number;
+  effective_to: number | null;
+  changed_by: string;
+  reason: string;
+  created_at: number;
+}
+
+export interface CrateValuationHistory {
+  valuations: CrateValuation[];
+  current_values: Array<{
+    crate_type_id: string;
+    name: string;
+    acquisition_value_fcfa: number;
+    reference_value_fcfa: number;
+    empty_sale_price_fcfa: number;
+  }>;
+  note: string;
+}
+
+export interface CrateMigrationReviewItem {
+  review_id: string;
+  category: string;
+  partner_type: 'CUSTOMER' | 'SUPPLIER' | null;
+  partner_id: string | null;
+  reference: string;
+  qty: number;
+  suggested_qty: number;
+  detail: string;
+  resolved: boolean;
+  created_at: number;
+}
+
+export interface CrateMigrationReview {
+  reviews: CrateMigrationReviewItem[];
+  converted_to_financial_debt: false;
+  note: string;
+}
+
+export interface EmptyCrateSaleInput {
+  crate_type_id: string;
+  qty: number;
+  customer_id: string | null;
+  unit_price_fcfa?: number;
+  payments: PaymentInput[];
+  request_key: string;
+  is_online?: boolean;
 }

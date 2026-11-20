@@ -6,7 +6,7 @@ jest.mock('../src/specs/NativeDepotCore', () => ({
   __esModule: true,
   default: {
     executeCommand: jest.fn(() =>
-      JSON.stringify({ ok: true, data: { database: '/tmp/base.sqlite', schema_version: 10, seeded_demo: false } }),
+      JSON.stringify({ ok: true, data: { database: '/tmp/base.sqlite', schema_version: 11, seeded_demo: false } }),
     ),
   },
 }));

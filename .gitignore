@@ -46,3 +46,4 @@ rust/target/
 debug.keystore
 !android/app/debug.keystore
 my-upload-key.jks
+.cache/

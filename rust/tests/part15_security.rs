@@ -32,7 +32,7 @@ fn pin_is_salted_and_backup_policy_is_enforced() {
     let _ = std::fs::remove_file(&path);
     let path_str = path.to_str().unwrap();
     let init = ok(call("initializeDatabase", json!({ "path": path_str })));
-    assert_eq!(init["schema_version"], 10);
+    assert_eq!(init["schema_version"], 11);
 
     // Le jeu pilote est créé directement avec PBKDF2 + sel aléatoire.
     let conn = Connection::open(&path).unwrap();
