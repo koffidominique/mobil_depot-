@@ -56,7 +56,7 @@ describe('§20 casiers (16-37)', () => {
       crate_type_id: 'crate_inexistant', qty: 1, direction: 'IN', state: 'EMPTY', reason: 'Test refus', request_key: 'k-19-ko',
     });
     expect(ko.ok).toBe(false);
-    expect(ko.error?.code).toBe('CRATE_TYPE_UNKNOWN');
+    expect(ko.error?.code).toBe('CRATE_NOT_FOUND');
   });
 
   it('20-22. réception, vente d’un casier plein et stock de boissons inchangé', () => {

@@ -144,3 +144,18 @@ multi-formats ; l'application mobile ne contient pas d'importateur de catalogue.
 
 À exécuter en CI : `npm run typecheck`, `npm run web:typecheck`, `npm run lint`,
 `npm test`, `cargo test --manifest-path rust/Cargo.toml`.
+
+## 9. Codes d'erreur du domaine casiers
+
+| Code | Sens |
+| --- | --- |
+| `CRATE_NOT_FOUND` | Type de casier absent du référentiel. |
+| `CRATE_RETURN_EXCEEDS_BALANCE` | Retour supérieur au solde physique du client (sauf `allow_overflow`). |
+| `INSUFFICIENT_EMPTY_CRATE_STOCK` | Remise ou vente de vides supérieure au stock disponible. |
+| `EMPTY_CRATE_PRICE_REQUIRED` | Aucun prix de vente du casier vide configuré et aucun prix fourni. |
+| `BOTTLE_PACKAGING_NOT_TRACKED` | Ancienne commande invoquée sur des bouteilles : plus aucun suivi. |
+| `REQUEST_KEY_REQUIRED` | Opération sans clé d'idempotence. |
+| `REASON_REQUIRED` | Ajustement, perte, retour ou valorisation sans motif. |
+| `PERMISSION_DENIED` | Rôle sans `crate.adjust`, `crate.loss`, `crate.sell`, `purchase.write` ou `sales.write`, selon l'opération. |
+| `CRATE_MOVEMENT_IMMUTABLE` | Tentative de modification ou suppression d'un mouvement (trigger). |
+| `LEGACY_PACKAGING_ENGINE_DISABLED` / `LEGACY_PACKAGING_ENGINE_FROZEN` | Tentative d'écriture dans l'ancien moteur 0015 (trigger). |

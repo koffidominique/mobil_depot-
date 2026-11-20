@@ -160,7 +160,7 @@ function crateBalance(partnerType: string, partnerId: string) {
 
 function crateMeta(crateTypeId: string) {
   const crate = crates.find((item) => item.crate_type_id === crateTypeId);
-  if (!crate) throw new Error(`CRATE_TYPE_UNKNOWN: type de casier inconnu (${crateTypeId})`);
+  if (!crate) throw new Error(`CRATE_NOT_FOUND: type de casier inconnu (${crateTypeId})`);
   return crate;
 }
 
