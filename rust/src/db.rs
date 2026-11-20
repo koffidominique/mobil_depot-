@@ -840,10 +840,9 @@ pub const MIGRATION_11: &str = r#"
          GROUP BY l.ref_id, l.partner_id
         HAVING SUM(l.qty) > 0;
 
-        -- 6. Lignes commerciales de casiers vides (circuit de vente normal)
-        ALTER TABLE sale_lines ADD COLUMN is_packaging INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE sale_lines ADD COLUMN crate_type_id TEXT;
-        ALTER TABLE sales ADD COLUMN packaging_sales_fcfa INTEGER NOT NULL DEFAULT 0;
+        -- 6. Lignes commerciales de casiers vides (circuit de vente normal).
+        --    Les colonnes sont ajoutées par `ensure_sale_crate_columns` : un
+        --    `ALTER TABLE` nu casserait une base où elles existent déjà.
 
         -- 7. Permissions explicites des opérations sur casiers
         INSERT OR IGNORE INTO permissions (code, description) VALUES
@@ -892,7 +891,16 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
     }
     ensure_security_columns(conn)?;
     ensure_desktop_columns(conn)?;
+    ensure_sale_crate_columns(conn)?;
     Ok(())
+}
+
+/// Colonnes de vente propres aux casiers vides, ajoutées de façon rejouable :
+/// une base créée avant la migration 11 peut déjà les posséder.
+fn ensure_sale_crate_columns(conn: &Connection) -> CoreResult<()> {
+    ensure_column(conn, "sale_lines", "is_packaging", "is_packaging INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "sale_lines", "crate_type_id", "crate_type_id TEXT")?;
+    ensure_column(conn, "sales", "packaging_sales_fcfa", "packaging_sales_fcfa INTEGER NOT NULL DEFAULT 0")
 }
 
 fn insert_if_absent<P: rusqlite::Params>(conn: &Connection, sql: &str, values: P) -> CoreResult<()> {
