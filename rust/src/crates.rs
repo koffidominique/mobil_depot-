@@ -1224,7 +1224,9 @@ pub fn record_empty_crate_sale(conn: &mut Connection, payload: &Value) -> CoreRe
     let subtotal = checked_mul(configured, qty, "vente casier vide")?;
     let now = now_ms();
     let sale_id = new_id("sale");
-    let receipt = format!("RC-{now}");
+    // Plusieurs ventes dans la même milliseconde : le suffixe garde le numéro unique.
+    let suffix = sale_id.rsplit('_').next().unwrap_or("0000");
+    let receipt = format!("RC-{}-{}", now, &suffix[..suffix.len().min(4)]);
     let customer_name = match customer_id.as_deref() {
         Some(id) => tx
             .query_row("SELECT name FROM customers WHERE id = ?1", params![id], |r| r.get::<_, String>(0))
@@ -1322,6 +1324,23 @@ pub fn record_empty_crate_sale(conn: &mut Connection, payload: &Value) -> CoreRe
                 status, amount, now
             ],
         )?;
+        // Espèces : le tiroir doit refléter la vente du casier vide, comme pour
+        // une vente de boissons.
+        if field_str(payment, "method")? == "CASH" && status == "CONFIRMED" {
+            if let Some(session) = crate::commands::open_cash_session(&tx, &a.branch_id)? {
+                tx.execute(
+                    "UPDATE cash_sessions SET expected_closing_fcfa = expected_closing_fcfa + ?1 WHERE id = ?2",
+                    params![amount, session],
+                )?;
+                tx.execute(
+                    "INSERT INTO cash_movements (id, session_id, branch_id, movement_type, signed_amount_fcfa, label, occurred_at) VALUES (?1,?2,?3,'IN',?4,?5,?6)",
+                    params![
+                        new_id("cmv"), session, a.branch_id, amount,
+                        format!("Encaissement casier vide {receipt}"), now
+                    ],
+                )?;
+            }
+        }
     }
     if let Some(id) = customer_id.as_deref() {
         tx.execute(

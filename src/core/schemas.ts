@@ -28,11 +28,30 @@ export const paymentSchema = z.object({
   confirmed_by_provider: z.boolean(),
 });
 
+export const mixedCaseLineSchema = z.object({
+  variant_id: z.string().min(1),
+  variant_name: z.string().min(1),
+  quantity_bottles: z.number().int().positive('Quantité entière positive requise.'),
+  unit_price_fcfa: z.number().int().nonnegative(),
+  compatibility_group_id: z.string().min(1, 'Groupe physique requis pour un casier mixte.'),
+  bottle_profile_id: z.string().min(1, 'Profil de bouteille requis pour un casier mixte.'),
+  is_reusable: z.boolean(),
+});
+
+export const mixedCaseSchema = z.object({
+  crate_type_id: z.string().min(1, 'Format de casier requis.'),
+  is_half_case: z.boolean(),
+  lines: z.array(mixedCaseLineSchema).min(1, 'Ajoutez au moins une boisson.'),
+});
+
 export const saleSchema = z.object({
   customer_id: z.string().nullable(),
   price_tier: z.enum(['RETAIL', 'WHOLESALE']),
   lines: z.array(cartLineSchema),
-  mixed_cases: z.array(z.unknown()),
+  mixed_cases: z.array(mixedCaseSchema),
+  // Clé d'idempotence : une vente rejouée (retry réseau, double appui) ne doit
+  // jamais produire un second ticket ni un second mouvement de casiers.
+  request_key: z.string().min(8).optional(),
   discount_fcfa: z.number().int().nonnegative(),
   payments: z.array(paymentSchema),
   is_online: z.boolean(),

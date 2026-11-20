@@ -206,6 +206,8 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
+    /** Clé d'idempotence de la vente : le rejeu renvoie la vente déjà enregistrée. */
+    request_key?: string;
     /** Casiers vides rendus par le client au moment de la vente (retour physique). */
     empty_crates_returned?: Array<{ crate_type_id: string; qty: number; reason?: string }>;
   }) => {
@@ -221,6 +223,8 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
+    /** Clé d'idempotence de la vente : le rejeu renvoie la vente déjà enregistrée. */
+    request_key?: string;
     /** Casiers vides rendus par le client au moment de la vente (retour physique). */
     empty_crates_returned?: Array<{ crate_type_id: string; qty: number; reason?: string }>;
   }) => {

@@ -342,6 +342,27 @@ fn prepare_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
         enriched["outstanding_balance_fcfa"] = json!(balance);
     }
 
+    // Stock disponible par boisson : lignes normales ET lignes des casiers
+    // mixtes, pour que les alertes de stock portent sur la vraie référence.
+    if let Some(cases) = enriched["mixed_cases"].as_array_mut() {
+        for case in cases.iter_mut() {
+            if let Some(lines) = case.get_mut("lines").and_then(Value::as_array_mut) {
+                for line in lines.iter_mut() {
+                    let variant = field_str(line, "variant_id")?.to_string();
+                    let stock: i64 = conn
+                        .query_row(
+                            "SELECT full_units_qty FROM stock_balances WHERE branch_id = ?1 AND variant_id = ?2",
+                            params![a.branch_id, variant],
+                            |r| r.get(0),
+                        )
+                        .optional()?
+                        .unwrap_or(0);
+                    line["available_stock_units"] = json!(stock);
+                }
+            }
+        }
+    }
+
     if let Some(lines) = enriched["lines"].as_array_mut() {
         for line in lines.iter_mut() {
             let variant = field_str(line, "variant_id")?.to_string();
@@ -407,15 +428,43 @@ pub fn validate_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
 pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let now = now_ms();
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let a = actor(&tx, payload)?;
+
+    // Idempotence : la vente écrit plusieurs tables (vente, lignes, paiements,
+    // stock, casiers, caisse, audit, outbox). Un rejeu avec la même clé — double
+    // appui, nouvelle tentative après coupure réseau — renvoie la vente déjà
+    // enregistrée au lieu d'en créer une seconde.
+    let request_key = field_str_opt(payload, "request_key").map(str::to_string);
+    if let Some(key) = request_key.as_deref() {
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT payload_json FROM sync_outbox WHERE branch_id = ?1 AND idempotency_key = ?2",
+                params![a.branch_id, key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(stored_json) = previous {
+            let stored: Value = serde_json::from_str(&stored_json).unwrap_or(Value::Null);
+            return Ok(json!({
+                "sale_id": stored.get("sale_id").cloned().unwrap_or(Value::Null),
+                "receipt_number": stored.get("receipt_number").cloned().unwrap_or(Value::Null),
+                "total_fcfa": stored.get("total_fcfa").cloned().unwrap_or(json!(0)),
+                "credit_fcfa": stored.get("credit_fcfa").cloned().unwrap_or(json!(0)),
+                "outbox_status": "PENDING",
+                "idempotent": true,
+                "crate_movements": [],
+                "crate_balance_is_physical": true
+            }));
+        }
+    }
+
     let enriched = prepare_sale(&tx, payload)?;
     let result = validate_sale_rules(&enriched)?;
-    let a = actor(&tx, payload)?;
     let customer_id = field_str_opt(payload, "customer_id").map(str::to_string);
     let sale_id = new_id("sale");
-    let receipt = format!(
-        "RC-{}",
-        now
-    );
+    // Deux ventes dans la même milliseconde ne doivent pas partager un numéro.
+    let suffix = sale_id.rsplit('_').next().unwrap_or("0000");
+    let receipt = format!("RC-{}-{}", now, &suffix[..suffix.len().min(4)]);
 
     let total = field_i64(&result, "total_fcfa")?;
     let paid = field_i64(&result, "confirmed_paid_fcfa")?;
@@ -438,7 +487,7 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
         ],
     )?;
 
-    for line in field_array(payload, "lines")? {
+    for line in field_array(&enriched, "lines")? {
         let count = field_i64(line, "unit_count")?;
         let physical = physical_units(
             field_str(line, "unit")?, count, field_i64(line, "crate_capacity")?,
@@ -449,23 +498,30 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
             "INSERT INTO sale_lines (id, sale_id, variant_id, variant_name, unit_code, unit_count, physical_units, unit_price_fcfa, line_total_fcfa, is_mixed) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0)",
             params![new_id("sline"), sale_id, field_str(line, "variant_id")?, field_str(line, "variant_name")?, field_str(line, "unit")?, count, physical, field_i64(line, "unit_price_fcfa")?, line_total],
         )?;
-        let current: i64 = tx.query_row(
-            "SELECT full_units_qty FROM stock_balances WHERE branch_id = ?1 AND variant_id = ?2",
-            params![a.branch_id, field_str(line, "variant_id")?],
-            |r| r.get(0),
-        )?;
-        let next = current - physical;
+        // Sortie de stock réelle : la quantité physique quitte le dépôt, même si
+        // la vente est à crédit. Un variant jamais approvisionné reçoit une ligne
+        // négative plutôt qu'une erreur SQL (le décalage reste visible).
         tx.execute(
-            "UPDATE stock_balances SET full_units_qty = ?1 WHERE branch_id = ?2 AND variant_id = ?3",
-            params![next, a.branch_id, field_str(line, "variant_id")?],
+            "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units, server_revision)
+             VALUES (?1,?2,?3,12,1)
+             ON CONFLICT(branch_id,variant_id) DO UPDATE SET
+               full_units_qty = stock_balances.full_units_qty - ?4,
+               server_revision = server_revision + 1",
+            params![a.branch_id, field_str(line, "variant_id")?, -physical, physical],
         )?;
+        // Journal de stock : c'est ici que la sortie se lit (le journal de caisse
+        // ne doit contenir que des montants).
         tx.execute(
-            "INSERT INTO cash_movements (id, branch_id, movement_type, signed_amount_fcfa, label, occurred_at) VALUES (?1,?2,'STOCK_OUT',0,?3,?4)",
-            params![new_id("cmov"), a.branch_id, format!("Sortie vente {receipt}"), now],
+            "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+             VALUES (?1,?2,?3,'SALE_OUT',?4,?5,?6,?7,?8,?9)",
+            params![
+                new_id("smov"), a.branch_id, field_str(line, "variant_id")?, -physical,
+                format!("Vente {receipt}"), sale_id, a.user_id, a.device_id, now
+            ],
         )?;
     }
 
-    let mixed_cases: Vec<Value> = payload
+    let mixed_cases: Vec<Value> = enriched
         .get("mixed_cases")
         .and_then(Value::as_array)
         .cloned()
@@ -477,18 +533,25 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
         for line in field_array(case, "lines")? {
             let qty = field_i64(line, "quantity_bottles")?;
             let variant = field_str(line, "variant_id")?;
-            let current: i64 = tx.query_row(
-                "SELECT full_units_qty FROM stock_balances WHERE branch_id = ?1 AND variant_id = ?2",
-                params![a.branch_id, variant],
-                |r| r.get(0),
-            )?;
             tx.execute(
-                "UPDATE stock_balances SET full_units_qty = ?1 WHERE branch_id = ?2 AND variant_id = ?3",
-                params![current - qty, a.branch_id, variant],
+                "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units, server_revision)
+                 VALUES (?1,?2,?3,12,1)
+                 ON CONFLICT(branch_id,variant_id) DO UPDATE SET
+                   full_units_qty = stock_balances.full_units_qty - ?4,
+                   server_revision = server_revision + 1",
+                params![a.branch_id, variant, -qty, qty],
             )?;
             tx.execute(
                 "INSERT INTO sale_lines (id, sale_id, variant_id, variant_name, unit_code, unit_count, physical_units, unit_price_fcfa, line_total_fcfa, is_mixed) VALUES (?1,?2,?3,?4,'BOTTLE',?5,?6,?7,?8,1)",
                 params![new_id("sline"), sale_id, variant, field_str(line, "variant_name")?, qty, qty, field_i64(line, "unit_price_fcfa")?, checked_mul(field_i64(line, "unit_price_fcfa")?, qty, "mixte")?],
+            )?;
+            tx.execute(
+                "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+                 VALUES (?1,?2,?3,'SALE_OUT',?4,?5,?6,?7,?8,?9)",
+                params![
+                    new_id("smov"), a.branch_id, variant, -qty,
+                    format!("Vente {receipt} (casier mixte)"), sale_id, a.user_id, a.device_id, now
+                ],
             )?;
         }
         let _ = field_i64(&validated, "total_drinks_fcfa")?;
@@ -517,6 +580,15 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
                     "UPDATE cash_sessions SET expected_closing_fcfa = expected_closing_fcfa + ?1 WHERE id = ?2",
                     params![amount, session],
                 )?;
+                // Traçabilité : les rapports somment les mouvements de caisse
+                // positifs, une vente en espèces doit donc y figurer.
+                tx.execute(
+                    "INSERT INTO cash_movements (id, session_id, branch_id, movement_type, signed_amount_fcfa, label, occurred_at) VALUES (?1,?2,?3,'IN',?4,?5,?6)",
+                    params![
+                        new_id("cmv"), session, a.branch_id, amount,
+                        format!("Encaissement vente {receipt}"), now
+                    ],
+                )?;
             }
         }
     }
@@ -530,7 +602,7 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
 
     // Casiers plastiques : journal physique séparé, dans la même transaction.
     // Aucune attente d'emballage, aucune bouteille, aucune dette n'est créée ici.
-    let crate_outcome = crates::apply_sale_crate_movements(&tx, &a, &sale_id, &receipt, payload)?;
+    let crate_outcome = crates::apply_sale_crate_movements(&tx, &a, &sale_id, &receipt, &enriched)?;
 
     let command = if !mixed_cases.is_empty() {
         "MIXED_SALE_CREATE"
@@ -542,7 +614,8 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
     let base = base_revision(&tx, &a.branch_id)?;
     db::enqueue(
         &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, command, &summary,
-        &outbox_payload.to_string(), base, &format!("idem_{sale_id}"),
+        &outbox_payload.to_string(), base,
+        &request_key.clone().unwrap_or_else(|| format!("idem_{sale_id}")),
     )?;
     db::audit(&tx, &a.branch_id, &a.user_id, command, &summary)?;
     tx.commit()?;
@@ -568,7 +641,7 @@ fn actor_full_name(conn: &Connection, id: &str) -> CoreResult<String> {
         .map_err(|_| CoreError::new("USER_NOT_FOUND", "Utilisateur introuvable."))
 }
 
-fn open_cash_session(conn: &Connection, branch: &str) -> CoreResult<Option<String>> {
+pub(crate) fn open_cash_session(conn: &Connection, branch: &str) -> CoreResult<Option<String>> {
     Ok(conn
         .query_row(
             "SELECT id FROM cash_sessions WHERE branch_id = ?1 AND status = 'OPEN' LIMIT 1",

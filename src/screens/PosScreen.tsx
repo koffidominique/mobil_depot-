@@ -4,6 +4,8 @@ import { Pressable, Text, TextInput, View } from 'react-native';
 import { Banner, Card, Field, PrimaryButton, Row, Screen, useColors } from '../components/ui';
 import { depot } from '../core/client';
 import { formatFcfa, formatFcfaExact, parseIntegerFcfa, toJsonInteger } from '../core/format';
+import { newRequestKey } from '../core/requestKey';
+import { useCrateStock } from '../hooks/useCore';
 import { canSellHalfCase, halfCasePrice, halfCaseUnits } from '../core/pricing';
 import type { CartLineInput, CommercialUnit, InventoryItem, PaymentInput, SaleResult } from '../core/types';
 import { useConnectivity, useCustomers, useInventory } from '../hooks/useCore';
@@ -36,6 +38,7 @@ export function PosScreen() {
   const c = useColors();
   const queryClient = useQueryClient();
   const inventory = useInventory();
+  const crateStock = useCrateStock();
   const customers = useCustomers();
   const cartLines = useAppStore((state) => state.cartLines);
   const mixedCases = useAppStore((state) => state.mixedCases);
@@ -66,6 +69,9 @@ export function PosScreen() {
   const [emptyCrateQty, setEmptyCrateQty] = useState('0');
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
+  // Clé d'idempotence conservée en cas d'échec : un nouvel appui rejoue la même
+  // vente au lieu d'en créer une seconde.
+  const [saleRequestKey, setSaleRequestKey] = useState<string | null>(null);
 
   const catalog = useMemo(() => inventory.data?.full_drinks ?? [], [inventory.data]);
   const brands = useMemo(() => [...new Set(catalog.map((item) => item.brand))], [catalog]);
@@ -102,10 +108,47 @@ export function PosScreen() {
     0n,
   );
 
+  // Contrôle avant envoi : une vente de casiers consomme des casiers PLEINS du
+  // dépôt. Sans stock suffisant, le moteur refuse la vente (INSUFFICIENT_FULL_CRATE_STOCK)
+  // après coup ; on prévient donc avant, et on bloque la validation.
+  const requiredCrates = useMemo(() => {
+    const needed: Record<string, number> = {};
+    for (const line of cartLines) {
+      if (line.unit !== 'CASE' && line.unit !== 'HALF_CASE') continue;
+      if (!line.crate_type_id) continue;
+      needed[line.crate_type_id] = (needed[line.crate_type_id] ?? 0) + line.unit_count;
+    }
+    for (const item of mixedCases) {
+      needed[item.crate_type_id] = (needed[item.crate_type_id] ?? 0) + 1;
+    }
+    return needed;
+  }, [cartLines, mixedCases]);
+
+  const crateShortages = useMemo(() => {
+    const rows = crateStock.data?.crates ?? [];
+    if (rows.length === 0) return [] as string[];
+    return Object.entries(requiredCrates).flatMap(([crateTypeId, qty]) => {
+      const crate = rows.find((row) => row.crate_type_id === crateTypeId);
+      if (!crate || crate.full_qty >= qty) return [];
+      return [`${crate.code} : ${qty} casier(s) plein(s) requis, ${crate.full_qty} en stock au dépôt.`];
+    });
+  }, [crateStock.data, requiredCrates]);
+
+  // La remise se déduit du sous-total : le montant à encaisser par défaut doit
+  // être le net, sinon la vente part en OVERPAYMENT côté moteur.
+  const discountFcfa = useMemo(() => {
+    try {
+      return BigInt(toJsonInteger(parseIntegerFcfa(discount || '0')));
+    } catch {
+      return 0n;
+    }
+  }, [discount]);
+  const payableFcfa = totalFcfa > discountFcfa ? totalFcfa - discountFcfa : 0n;
+
   const checkout = useMutation<SaleResult, Error, void>({
     mutationFn: async () => {
       const ref = reference.trim() || null;
-      const first = parseIntegerFcfa(amount1 || String(totalFcfa));
+      const first = parseIntegerFcfa(amount1 || String(payableFcfa));
       const second = method2 === 'NONE' ? 0n : parseIntegerFcfa(amount2 || '0');
       const payments: PaymentInput[] = [
         {
@@ -126,6 +169,8 @@ export function PosScreen() {
       // Retour immédiat : le client rend des casiers vides en même temps qu'il
       // achète. C'est un mouvement physique, jamais un paiement ni une remise.
       const emptyCratesReturned = Number.parseInt(emptyCrateQty, 10);
+      const requestKey = saleRequestKey ?? newRequestKey('sale');
+      if (!saleRequestKey) setSaleRequestKey(requestKey);
       const input = {
         customer_id: selectedCustomerId,
         price_tier: tier,
@@ -134,6 +179,7 @@ export function PosScreen() {
         discount_fcfa: toJsonInteger(parseIntegerFcfa(discount || '0')),
         payments,
         is_online: online,
+        request_key: requestKey,
         ...(selectedCustomerId && emptyCratesReturned > 0
           ? { empty_crates_returned: [{ crate_type_id: emptyCrateType, qty: emptyCratesReturned }] }
           : {}),
@@ -144,6 +190,7 @@ export function PosScreen() {
     onSuccess: async (result) => {
       setReceipt(result.receipt_number);
       setError(null);
+      setSaleRequestKey(null);
       clearCart();
       notify(
         online
@@ -175,7 +222,7 @@ export function PosScreen() {
       unit,
       unit_count: 1,
       unit_price_fcfa: priceFor(item, unit, tier),
-      crate_capacity: item.pack_size,
+      crate_capacity: item.crate_capacity ?? item.pack_size,
       pack_size: item.pack_size,
       is_reusable: item.container_type === 'Verre' && unit !== 'CAN',
       allow_half_case: canSellHalfCase(item),
@@ -183,6 +230,7 @@ export function PosScreen() {
       crate_type_id: item.crate_type_id,
     };
     addLine(line);
+    setSaleRequestKey(null);
     setError(null);
   }
 
@@ -291,11 +339,21 @@ export function PosScreen() {
             <Text style={{ flex: 1, color: c.text }}>
               {line.variant_name} · {line.unit}
             </Text>
-            <Pressable onPress={() => updateLineCount(line.line_key, -1)}>
+            <Pressable
+              onPress={() => {
+                setSaleRequestKey(null);
+                updateLineCount(line.line_key, -1);
+              }}
+            >
               <Text style={{ color: c.danger, fontSize: 20 }}>−</Text>
             </Pressable>
             <Text style={{ color: c.text }}>{line.unit_count}</Text>
-            <Pressable onPress={() => updateLineCount(line.line_key, 1)}>
+            <Pressable
+              onPress={() => {
+                setSaleRequestKey(null);
+                updateLineCount(line.line_key, 1);
+              }}
+            >
               <Text style={{ color: c.primary, fontSize:20 }}>+</Text>
             </Pressable>
           </View>
@@ -312,12 +370,19 @@ export function PosScreen() {
             <Text style={{ color: c.subtitle, fontSize: 11 }}>
               {item.lines.map((line) => `${line.variant_name} ×${line.quantity_bottles}`).join(' · ')}
             </Text>
-            <Pressable onPress={() => removeMixedCase(index)}>
+            <Pressable
+              onPress={() => {
+                setSaleRequestKey(null);
+                removeMixedCase(index);
+              }}
+            >
               <Text style={{ color: c.danger, fontSize: 12 }}>Retirer ce casier mixte</Text>
             </Pressable>
           </View>
         ))}
-        <Row label="Total calculé par le moteur Rust" value={formatFcfaExact(totalFcfa)} />
+        <Row label="Sous-total (brut)" value={formatFcfaExact(totalFcfa)} />
+        {discountFcfa > 0n ? <Row label="Remise" value={`- ${formatFcfaExact(discountFcfa)}`} /> : null}
+        <Row label="Net à encaisser" value={formatFcfaExact(payableFcfa)} />
       </Card>
 
       <Card>
@@ -362,9 +427,22 @@ export function PosScreen() {
           Un retour de casiers vides est un mouvement physique : il réduit le solde du client, sans créer de
           paiement, de remise ni de mouvement de caisse. Un client enregistré est requis.
         </Text>
+        {discountFcfa > totalFcfa ? (
+          <Banner tone="error" message="La remise dépasse le sous-total : réduisez-la avant de valider." />
+        ) : null}
+        {crateShortages.length > 0 ? (
+          <Banner
+            tone="error"
+            message={`Stock de casiers pleins insuffisant : ${crateShortages.join(' ')} Approvisionnez les casiers vides au dépôt avant de valider.`}
+          />
+        ) : null}
         <PrimaryButton
           label="Valider la vente"
-          disabled={cartLines.length === 0}
+          disabled={
+            (cartLines.length === 0 && mixedCases.length === 0)
+            || crateShortages.length > 0
+            || discountFcfa > totalFcfa
+          }
           loading={checkout.isPending}
           onPress={() => checkout.mutate()}
         />

@@ -479,3 +479,43 @@
   (0 erreur), `vite build`, tree-sitter sur 6 fichiers Rust.
 - **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Détail et
   limites : `docs/PART23_HALF_MIXED.md`.
+
+## LOT 46 — erreurs d'implémentation et logiques métier
+
+- **Constat** : audit des commandes de vente. Trois défauts déjà identifiés
+  (vente non idempotente, deltas de casiers absents du mock, stock de casiers
+  non vérifié avant envoi) en ont révélé quatre autres, plus graves.
+- **Idempotence** : `create_sale` lit `request_key` **avant toute écriture**
+  (recherche dans `sync_outbox`, portée branche) et renvoie la vente déjà
+  enregistrée (`idempotent: true`) ; la clé devient celle de l'outbox ; le POS
+  la conserve en cas d'échec et l'invalide quand le panier change.
+- **Autorité backend** : `create_sale` écrit `sale_lines`, le stock, les
+  casiers mixtes et les mouvements de casiers depuis la charge **enrichie**
+  (`prepare_sale`), plus depuis le payload client.
+- **Journaux** : les ventes écrivent enfin un `stock_movements` `SALE_OUT` (au
+  lieu d'une ligne `STOCK_OUT` à 0 FCFA dans `cash_movements`) ; un
+  encaissement espèces confirmé écrit un `cash_movements` `IN`, y compris pour
+  la vente de casiers vides ; l'incrément de stock supporte un variant jamais
+  approvisionné (upsert, quantité négative visible).
+- **Remise** : POS aligné sur le moteur (sous-total brut, remise, **net à
+  encaisser** par défaut) ; le mock applique enfin les règles de
+  `depotpro-core` : `NEGATIVE_DISCOUNT`, `DISCOUNT_EXCEEDS_TOTAL`, plafonds de
+  rôle, `ROLE_FORBIDDEN`, `DUPLICATE_SALE_LINE`, `OVERPAYMENT`,
+  `CUSTOMER_REQUIRED_FOR_CREDIT`, `INSUFFICIENT_STOCK` strict, alertes sinon.
+- **Stock mixte** : `prepare_sale` fournit le stock des lignes de casiers
+  mixtes ; plus d'alerte de stock fantôme sur une boisson vendue uniquement en
+  mixte.
+- **Reçus** : `RC-{ms}-{suffixe}` — deux ventes dans la même milliseconde ne
+  partagent plus un numéro.
+- **Catalogue** : `PACK_SIZE_TO_VERIFY` quand le nombre d'unités par casier
+  n'est pas déclaré (1 n'est plus supposé silencieusement).
+- **Casiers** : `applyCrateMove` expose `full_delta`/`empty_delta` ; le POS
+  compare le stock de casiers pleins requis au stock réel, nomme le format
+  manquant et bloque la validation ; un panier uniquement composé de casiers
+  mixtes n'est plus considéré comme vide.
+- **Tests** : `__tests__/part24-business-integrity.test.ts` (19 cas) + test de
+  domaine Rust `mixed_case_stock_alert_uses_the_line_stock`.
+- **Validation exécutée** : Jest **22 suites / 138 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 6 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Détail des
+  défauts et des écarts assumés : `docs/PART24_INTEGRITE.md`.

@@ -348,6 +348,12 @@ pub fn validate_sale(payload: &Value) -> CoreResult<Value> {
             let qty = field_i64(line, "quantity_bottles")?;
             let entry = physical.entry(variant.to_string()).or_insert(0i64);
             *entry = checked_add(*entry, qty, "casier mixte")?;
+            // Le stock connu d'une boisson vendue uniquement en casier mixte doit
+            // venir de sa propre ligne : sinon tout mixte déclencherait une alerte
+            // de stock fantôme (stock lu = 0).
+            stock
+                .entry(variant.to_string())
+                .or_insert_with(|| field_i64_or(line, "available_stock_units", 0));
         }
     }
 
@@ -633,6 +639,50 @@ mod tests {
         let mut unknown = payload.clone();
         unknown["resolved_crate_specs"][0]["capacity"] = json!(0);
         assert_eq!(validate_mixed_case(&unknown).unwrap_err().code, "INVALID_CRATE_CAPACITY");
+    }
+
+    #[test]
+    fn mixed_case_stock_alert_uses_the_line_stock() {
+        // Une boisson vendue uniquement en casier mixte ne doit pas produire
+        // d'alerte de stock si sa ligne porte un stock suffisant.
+        let base = json!({
+            "role": "MANAGER",
+            "offline_policy": "WARN",
+            "crate_type_id": "crate_b12_50",
+            "is_half_case": false,
+            "resolved_crate_specs": [{
+                "id": "crate_b12_50", "code": "B12-50", "capacity": 12,
+                "group": "G_B12_50", "allow_half": true, "replacement_fcfa": 3000
+            }],
+            "lines": [{
+                "variant_id": "a", "variant_name": "A", "quantity_bottles": 12,
+                "unit_price_fcfa": 500, "compatibility_group_id": "G_B12_50",
+                "bottle_profile_id": "a", "is_reusable": true,
+                "available_stock_units": 24
+            }]
+        });
+        let mut payload = json!({
+            "role": "MANAGER",
+            "offline_policy": "WARN",
+            "lines": [],
+            "mixed_cases": [base],
+            "payments": [{ "method": "CASH", "amount_fcfa": 6000 }],
+            "discount_fcfa": 0
+        });
+        let validation = validate_sale(&payload).expect("mixte valide");
+        assert_eq!(validation["total_fcfa"], json!(6000));
+        assert!(validation["offline_stock_warnings"].as_array().unwrap().is_empty());
+
+        // Stock réellement insuffisant : l'alerte cite la boisson et les quantités.
+        payload["mixed_cases"][0]["lines"][0]["available_stock_units"] = json!(6);
+        let warned = validate_sale(&payload).expect("vente autorisée avec alerte");
+        let warnings = warned["offline_stock_warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].as_str().unwrap().contains("a :"));
+
+        // Politique stricte hors ligne : refus explicite.
+        payload["offline_policy"] = json!("STRICT_LOCAL_BLOCK");
+        assert_eq!(validate_sale(&payload).unwrap_err().code, "INSUFFICIENT_STOCK");
     }
 
     #[test]

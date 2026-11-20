@@ -204,6 +204,7 @@ function applyCrateMove(input: {
   const movement = {
     movement_id: nextId('cmov'), crate_type_id: crate.crate_type_id, movement_type: input.movement_type,
     qty: input.qty, direction: input.full_delta + input.empty_delta >= 0 ? 'IN' : 'OUT',
+    full_delta: input.full_delta, empty_delta: input.empty_delta,
     full_before: before.full, full_after: stock.full, empty_before: before.empty, empty_after: stock.empty,
     untracked_qty: 0, partner_type: input.partner_type ?? null, partner_id: input.partner_id ?? null,
     partner_delta: input.partner_delta ?? 0, document_id: input.document_id,
@@ -238,6 +239,7 @@ const state = {
   operations: [] as AnyRecord[],
   audit: [{ action: 'SYNC_COMPLETED', details: '12 opérations acquittées', occurred_at: now - 1800000 }],
   transfers: [] as AnyRecord[],
+  saleRequests: {} as Record<string, AnyRecord>,
 };
 
 function integer(value: unknown, field: string) {
@@ -778,9 +780,22 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     }
     case 'validateSale': {
       const lines = (payload.lines ?? []) as AnyRecord[];
+      const mixedCases = (payload.mixed_cases ?? []) as AnyRecord[];
+      if (lines.length === 0 && mixedCases.length === 0) throw new Error('EMPTY_CART: le panier est vide');
+      // Plafonds de remise alignés sur depotpro-core::checkout_permission.
+      const role = String(payload.role ?? 'MANAGER');
+      const maxDiscountPercent = ({ OWNER: 100, ADMIN: 50, MANAGER: 25, CASHIER: 5 } as Record<string, number>)[role];
+      if (maxDiscountPercent === undefined) throw new Error('ROLE_FORBIDDEN: ce rôle ne peut pas valider une vente');
+      const discount = integer(payload.discount_fcfa ?? 0, 'discount_fcfa');
+      if (discount < 0) throw new Error('NEGATIVE_DISCOUNT: remise négative interdite');
+      const seen = new Set<string>();
       const physical: Record<string, number> = {};
+      const stockKnown: Record<string, number> = {};
       let goodsAmount = 0;
       for (const line of lines) {
+        const lineKey = String(line.line_key ?? line.variant_id ?? '');
+        if (seen.has(lineKey)) throw new Error('DUPLICATE_SALE_LINE: ligne dupliquée dans le panier');
+        seen.add(lineKey);
         const count = integer(line.unit_count, 'unit_count');
         const pack = integer(line.pack_size ?? 1, 'pack_size');
         const unit = String(line.unit ?? 'UNIT');
@@ -800,26 +815,57 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
             : unit === 'CARTON' || unit === 'PACK' ? count * pack
               : count;
         physical[String(line.variant_id)] = (physical[String(line.variant_id)] ?? 0) + units;
+        stockKnown[String(line.variant_id)] = integer(line.available_stock_units ?? variant?.full_units_qty ?? 0, 'available_stock_units');
         goodsAmount += count * integer(line.unit_price_fcfa, 'unit_price_fcfa');
       }
-      const mixedCases = (payload.mixed_cases ?? []) as AnyRecord[];
       for (const item of mixedCases) {
         const validated = validateMixedCase(item);
         goodsAmount += Number(validated.total_drinks_fcfa);
         for (const line of validated.lines as AnyRecord[]) {
           const key = String(line.variant_id);
           physical[key] = (physical[key] ?? 0) + Number(line.quantity_bottles);
+          stockKnown[key] = stockKnown[key] ?? (variants.find((entry) => entry.variant_id === key)?.full_units_qty ?? 0);
         }
       }
-      const subtotal = goodsAmount - integer(payload.discount_fcfa ?? 0, 'discount_fcfa');
+      if (discount > goodsAmount) throw new Error('DISCOUNT_EXCEEDS_TOTAL: remise supérieure au sous-total');
+      if (discount > Math.floor((goodsAmount * maxDiscountPercent) / 100)) {
+        throw new Error(`DISCOUNT_LIMIT_EXCEEDED: remise au-delà du plafond du rôle (${maxDiscountPercent} %)`);
+      }
+      const total = goodsAmount - discount;
+      const warnings: string[] = [];
+      const strict = String(payload.offline_policy ?? 'WARN') === 'STRICT_LOCAL_BLOCK';
+      for (const [variantId, needed] of Object.entries(physical)) {
+        const available = stockKnown[variantId] ?? 0;
+        if (needed > available) {
+          if (strict) throw new Error(`INSUFFICIENT_STOCK: stock local insuffisant pour ${variantId} : ${needed} > ${available}`);
+          warnings.push(`${variantId} : stock local connu ${available} < vendu ${needed}.`);
+        }
+      }
       const payments = (payload.payments ?? []) as AnyRecord[];
       const confirmed = payments.filter((item) => item.method !== 'MOBILE_MONEY' || item.reference).reduce((sum, item) => sum + integer(item.amount_fcfa, 'amount_fcfa'), 0);
       const pending = payments.filter((item) => item.method === 'MOBILE_MONEY' && !item.reference).reduce((sum, item) => sum + integer(item.amount_fcfa, 'amount_fcfa'), 0);
-      return { subtotal_fcfa: subtotal, discount_fcfa: integer(payload.discount_fcfa ?? 0, 'discount_fcfa'), total_fcfa: subtotal, confirmed_paid_fcfa: confirmed, pending_mobile_money_fcfa: pending, credit_fcfa: Math.max(0, subtotal - confirmed - pending), physical_units_by_variant: physical, offline_stock_warnings: [] };
+      if (confirmed + pending > total) throw new Error('OVERPAYMENT: le montant réglé dépasse le total de la vente');
+      const credit = total - confirmed - pending;
+      if (credit > 0 && !payload.customer_id) {
+        throw new Error('CUSTOMER_REQUIRED_FOR_CREDIT: un client enregistré est requis pour une vente à crédit');
+      }
+      return {
+        subtotal_fcfa: goodsAmount, discount_fcfa: discount, total_fcfa: total,
+        confirmed_paid_fcfa: confirmed, pending_mobile_money_fcfa: pending, credit_fcfa: credit,
+        physical_units_by_variant: physical, offline_stock_warnings: warnings,
+      };
     }
     case 'createSale': {
+      // Une vente rejouée avec la même clé ne crée ni second ticket ni second
+      // mouvement de casier : on renvoie la vente déjà enregistrée.
+      const requestKey = payload.request_key ? String(payload.request_key) : null;
+      if (requestKey && state.saleRequests[requestKey]) {
+        return { ...state.saleRequests[requestKey], idempotent: true };
+      }
       const validation = execute('validateSale', payload) as AnyRecord;
       const id = nextId('sale');
+      // Numéro figé avant les lignes : elles citent le reçu dans le journal de stock.
+      const receiptNumber = `REC-PREVIEW-${sequence}`;
       const customer = customers.find((item) => item.id === payload.customer_id);
       const lines = (payload.lines ?? []).map((line: AnyRecord) => {
         const count = integer(line.unit_count, 'unit_count');
@@ -833,10 +879,17 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
           : unit === 'HALF_CASE' ? count * (caseCapacity / 2)
             : unit === 'CARTON' || unit === 'PACK' ? count * pack
               : count;
+        // Journal de stock : la sortie de bouteilles se lit ici, pas en caisse.
+        movements.unshift({ id: nextId('smov'), variant_id: String(line.variant_id), movement_type: 'SALE_OUT', qty: -physical, reason: `Vente ${receiptNumber}`, document_id: id, occurred_at: Date.now() });
         return { variant_name: String(line.variant_name ?? ''), unit, unit_count: count, physical_units: physical, unit_price_fcfa: integer(line.unit_price_fcfa, 'unit_price_fcfa'), line_total_fcfa: count * integer(line.unit_price_fcfa, 'unit_price_fcfa'), is_mixed: false };
       });
-      const record = { id, receipt_number: `REC-PREVIEW-${sequence}`, customer_id: payload.customer_id ?? null, customer_name: customer?.name ?? 'Client comptoir', total_fcfa: validation.total_fcfa, credit_fcfa: validation.credit_fcfa, subtotal_fcfa: validation.subtotal_fcfa, discount_fcfa: validation.discount_fcfa, paid_confirmed_fcfa: validation.confirmed_paid_fcfa, pending_mobile_money_fcfa: validation.pending_mobile_money_fcfa, sync_status: 'PENDING', occurred_at: Date.now(), lines };
+      const record = { id, receipt_number: receiptNumber, customer_id: payload.customer_id ?? null, customer_name: customer?.name ?? 'Client comptoir', total_fcfa: validation.total_fcfa, credit_fcfa: validation.credit_fcfa, subtotal_fcfa: validation.subtotal_fcfa, discount_fcfa: validation.discount_fcfa, paid_confirmed_fcfa: validation.confirmed_paid_fcfa, pending_mobile_money_fcfa: validation.pending_mobile_money_fcfa, sync_status: 'PENDING', occurred_at: Date.now(), lines };
       sales.unshift(record);
+      // Caisse : seules les espèces confirmées entrent dans le tiroir.
+      const cashIn = ((payload.payments ?? []) as AnyRecord[])
+        .filter((payment) => String(payment.method) === 'CASH')
+        .reduce((sum, payment) => sum + Math.max(0, integer(payment.amount_fcfa ?? 0, 'amount_fcfa')), 0);
+      if (cashIn > 0 && state.cash.session_id) state.cash.expected_closing_fcfa += cashIn;
       state.operations.unshift({ operation_id: nextId('op'), command_type: 'SALE_CREATE', summary: `Vente ${record.receipt_number}`, status: 'PENDING', attempt_count: 0, created_at: Date.now(), synced_at: null, server_sequence: null, last_error: null });
       // Mouvements de casiers de la vente : pleins sortis, demi-casiers ouverts, vides rendus.
       const crateMovementsMade: AnyRecord[] = [];
@@ -866,6 +919,11 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       ((payload.mixed_cases ?? []) as AnyRecord[]).forEach((item, index) => {
         const validated = validateMixedCase(item);
         for (const mixedLine of validated.lines as AnyRecord[]) {
+          movements.unshift({
+            id: nextId('smov'), variant_id: String(mixedLine.variant_id), movement_type: 'SALE_OUT',
+            qty: -Number(mixedLine.quantity_bottles), reason: `Vente ${record.receipt_number} (casier mixte)`,
+            document_id: id, occurred_at: Date.now(),
+          });
           lines.push({
             variant_name: String(mixedLine.variant_name ?? ''), unit: 'BOTTLE',
             unit_count: Number(mixedLine.quantity_bottles), physical_units: Number(mixedLine.quantity_bottles),
@@ -904,7 +962,9 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
         });
         crateMovementsMade.push(result.movement);
       });
-      return { sale_id: id, receipt_number: record.receipt_number, total_fcfa: record.total_fcfa, credit_fcfa: record.credit_fcfa, outbox_status: 'PENDING', crate_movements: crateMovementsMade, untracked_crate_lines: untracked, crate_balance_is_physical: true };
+      const outcome = { sale_id: id, receipt_number: record.receipt_number, total_fcfa: record.total_fcfa, credit_fcfa: record.credit_fcfa, outbox_status: 'PENDING', crate_movements: crateMovementsMade, untracked_crate_lines: untracked, crate_balance_is_physical: true };
+      if (requestKey) state.saleRequests[requestKey] = outcome;
+      return outcome;
     }
     case 'getSaleReceipt': {
       const sale = sales.find((item) => item.id === payload.sale_id) ?? sales[0]!;

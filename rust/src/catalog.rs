@@ -448,9 +448,18 @@ pub fn normalize_catalog(doc: &Value, format: &str) -> CoreResult<NormalizedCata
             _ => "Verre",
         }
         .to_string();
-        let pack_size = int_of(item, &["pack_size", "units_per_case", "bottles_per_case", "pack"])
-            .filter(|value| *value > 0)
-            .unwrap_or(1);
+        let declared_pack = int_of(item, &["pack_size", "units_per_case", "bottles_per_case", "pack"])
+            .filter(|value| *value > 0);
+        let pack_size = declared_pack.unwrap_or(1);
+        // Sans nombre d'unités déclaré, impossible de convertir casier ↔ bouteilles :
+        // on importe à 1 (donc sans conversion) mais l'OWNER doit compléter.
+        if declared_pack.is_none() {
+            out.warnings.push(json!({
+                "code": "PACK_SIZE_TO_VERIFY",
+                "message": "Nombre d'unités par casier absent du JSON : conversion casier/bouteille à confirmer.",
+                "sku": sku
+            }));
+        }
         let crate_code = item
             .get("crate_type_id")
             .or_else(|| item.get("crate_type"))
