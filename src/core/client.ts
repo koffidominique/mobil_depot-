@@ -7,6 +7,7 @@ import type {
   Customer,
   CustomerAccount,
   CreatedCustomer,
+  CustomerMergeResult,
   Dashboard,
   Inventory,
   MixedCaseInput,
@@ -242,6 +243,18 @@ export const depot = {
   },
 
   createMixedOrder: (input: MixedCaseInput) => call<ValidatedMixedCase>('createMixedOrder', input),
+
+  /**
+   * Fusionne deux fiches du même client (doublon poussé par la synchronisation
+   * desktop). `dry_run` renvoie le récapitulatif sans rien écrire.
+   */
+  mergeCustomers: (input: {
+    source_customer_id: string;
+    target_customer_id: string;
+    reason?: string;
+    request_key?: string;
+    dry_run?: boolean;
+  }) => call<CustomerMergeResult>('mergeCustomers', input),
 
   /** Ouvre (ou retrouve) la fiche de clientèle unique. */
   createCustomer: (input: {

@@ -22,6 +22,7 @@ export function MenuScreen() {
     { label: 'Rapports', detail: 'CA, encaissements, créances et emballages', screen: 'Reports' },
     { label: 'Catalogue', detail: 'Brasseries, produits, variantes et formats de casiers', screen: 'Catalog' },
     { label: 'Casier mixte', detail: 'Composer un casier ou un demi-casier de plusieurs boissons', screen: 'MixedOrder' },
+    { label: 'Fusion de fiches clients', detail: 'Réunir un doublon (synchronisation desktop) sans rien supprimer', screen: 'CustomerMerge' },
     { label: 'Reçus', detail: 'Reçus commerciaux et état de synchronisation', screen: 'Receipts' },
     { label: 'Bordereaux', detail: 'Relevés clients/fournisseurs et registre emballages', screen: 'Statement' },
     { label: 'Parité Desktop', detail: 'Snapshot, transferts et import des mises à jour', screen: 'Desktop' },

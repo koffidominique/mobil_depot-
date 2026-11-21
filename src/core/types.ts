@@ -183,6 +183,54 @@ export interface CreatedCustomer {
   outstanding_fcfa: number;
 }
 
+export interface CustomerMergeSummary {
+  customer_id: string;
+  name: string;
+  phone: string;
+  is_archived: boolean;
+  credit_limit_fcfa: number;
+  total_purchases_fcfa: number;
+  total_paid_fcfa: number;
+  financial_balance_fcfa: number;
+  sales_count: number;
+  sales_total_fcfa: number;
+  sales_credit_fcfa?: number;
+  payments_count?: number;
+  payments_total_fcfa?: number;
+  crate_movements_count?: number;
+  crate_balances: Array<{ crate_type_id: string; crate_code: string; balance_qty: number }>;
+  other_branch_rows?: number;
+}
+
+export interface CustomerMergeProjection {
+  customer_id: string;
+  total_purchases_fcfa: number;
+  total_paid_fcfa: number;
+  financial_balance_fcfa: number;
+  credit_limit_fcfa: number;
+  credit_limit_source_fcfa: number;
+  credit_limit_before_fcfa: number;
+  sales_count: number;
+  sales_total_fcfa: number;
+  crate_balances: CustomerMergeSummary['crate_balances'];
+}
+
+export interface CustomerMergeResult {
+  dry_run: boolean;
+  idempotent: boolean;
+  merge_id: string | null;
+  customer_id: string;
+  source: CustomerMergeSummary;
+  target: CustomerMergeSummary;
+  result: CustomerMergeProjection;
+  moved?: {
+    sales: number;
+    payments: number;
+    crate_balances: Array<{ crate_type_id: string; balance_qty: number }>;
+  };
+  warnings: string[];
+}
+
 export interface CustomerAccount extends Customer {
   credit_limit_fcfa: number;
   outstanding_fcfa: number;

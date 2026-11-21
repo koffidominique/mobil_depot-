@@ -299,6 +299,7 @@ const state = {
   audit: [{ action: 'SYNC_COMPLETED', details: '12 opérations acquittées', occurred_at: now - 1800000 }],
   transfers: [] as AnyRecord[],
   saleRequests: {} as Record<string, AnyRecord>,
+  mergeRequests: {} as Record<string, AnyRecord>,
 };
 
 function integer(value: unknown, field: string) {
@@ -1065,6 +1066,137 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
         credit_limit_fcfa: ensured.customer.credit_limit_fcfa,
         outstanding_fcfa: ensured.customer.financial_balance_fcfa,
       };
+    }
+    case 'mergeCustomers': {
+      // Fusion de fiches : même règle que le moteur Rust — la fiche source est
+      // vidée au profit de la fiche conservée, rien n'est supprimé.
+      const role = String(payload.role ?? 'MANAGER');
+      if (!['OWNER', 'ADMIN', 'MANAGER'].includes(role)) {
+        throw new Error('ROLE_FORBIDDEN: rôle non autorisé à fusionner des fiches');
+      }
+      const sourceId = String(payload.source_customer_id ?? '');
+      const targetId = String(payload.target_customer_id ?? '');
+      if (!sourceId || !targetId) throw new Error('CUSTOMER_REQUIRED: les deux fiches sont requises');
+      if (sourceId === targetId) throw new Error('CUSTOMER_MERGE_SAME: la fiche à fusionner et la fiche à conserver sont identiques');
+      // Rejeu d'une fusion déjà appliquée : on répond avant tout contrôle d'état,
+      // la fiche source étant archivée par la fusion elle-même.
+      const requestKey = payload.request_key ? `merge_${String(payload.request_key)}` : null;
+      if (requestKey && state.mergeRequests[requestKey]) {
+        return { ...state.mergeRequests[requestKey], idempotent: true };
+      }
+      const source = customers.find((entry) => entry.id === sourceId) as AnyRecord | undefined;
+      const target = customers.find((entry) => entry.id === targetId) as AnyRecord | undefined;
+      if (!source) throw new Error('CUSTOMER_NOT_FOUND: fiche à fusionner introuvable');
+      if (!target) throw new Error('CUSTOMER_NOT_FOUND: fiche à conserver introuvable');
+      if (target.is_archived) throw new Error('CUSTOMER_ARCHIVED_TARGET: la fiche à conserver est archivée');
+      if (source.is_archived) throw new Error('CUSTOMER_ALREADY_ARCHIVED: cette fiche est déjà archivée');
+
+      const summarize = (customer: AnyRecord) => {
+        const rows = sales.filter((sale) => sale.customer_id === customer.id);
+        const balance = crateBalance('CUSTOMER', String(customer.id));
+        return {
+          customer_id: customer.id, name: customer.name, phone: customer.phone,
+          is_archived: Boolean(customer.is_archived),
+          credit_limit_fcfa: customer.credit_limit_fcfa,
+          total_purchases_fcfa: customer.total_purchases_fcfa,
+          total_paid_fcfa: customer.total_paid_fcfa,
+          financial_balance_fcfa: customer.financial_balance_fcfa,
+          sales_count: rows.length,
+          sales_total_fcfa: rows.reduce((sum, sale) => sum + Number(sale.total_fcfa ?? 0), 0),
+          sales_credit_fcfa: rows.reduce((sum, sale) => sum + Number(sale.credit_fcfa ?? 0), 0),
+          // Le mock ne conserve pas la table des paiements : la preview l'annonce à zéro.
+          payments_count: 0,
+          payments_total_fcfa: 0,
+          crate_movements_count: balance.movements.length,
+          crate_balances: balance.balances
+            .filter((entry: AnyRecord) => Number(entry.balance_qty) !== 0)
+            .map((entry: AnyRecord) => ({ crate_type_id: entry.crate_type_id, crate_code: entry.code, balance_qty: entry.balance_qty })),
+          other_branch_rows: 0,
+        };
+      };
+
+      const sourceSummary = summarize(source);
+      const targetSummary = summarize(target);
+      const mergedLimit = Math.max(Number(target.credit_limit_fcfa), Number(source.credit_limit_fcfa));
+      const projection = {
+        customer_id: target.id,
+        total_purchases_fcfa: Number(target.total_purchases_fcfa) + Number(source.total_purchases_fcfa),
+        total_paid_fcfa: Number(target.total_paid_fcfa) + Number(source.total_paid_fcfa),
+        financial_balance_fcfa: Number(target.financial_balance_fcfa) + Number(source.financial_balance_fcfa),
+        credit_limit_fcfa: mergedLimit,
+        credit_limit_source_fcfa: Number(source.credit_limit_fcfa),
+        credit_limit_before_fcfa: Number(target.credit_limit_fcfa),
+        sales_count: sourceSummary.sales_count + targetSummary.sales_count,
+        sales_total_fcfa: sourceSummary.sales_total_fcfa + targetSummary.sales_total_fcfa,
+        crate_balances: sourceSummary.crate_balances,
+      };
+      const warnings: string[] = [];
+      if (mergedLimit !== Number(target.credit_limit_fcfa)) {
+        warnings.push(`Plafond de crédit porté de ${target.credit_limit_fcfa} à ${mergedLimit} FCFA (plafond le plus élevé des deux fiches).`);
+      }
+
+      if (payload.dry_run) {
+        return { dry_run: true, merge_id: null, idempotent: false, source: sourceSummary, target: targetSummary, result: projection, warnings };
+      }
+
+      const reason = String(payload.reason ?? '').trim();
+      if (reason.length < 3) throw new Error('REASON_REQUIRED: un motif est obligatoire pour fusionner deux fiches clients');
+
+      const mergeId = nextId('merge');
+      let salesMoved = 0;
+      sales.forEach((sale) => {
+        if (sale.customer_id === sourceId) {
+          sale.customer_id = targetId;
+          salesMoved += 1;
+        }
+      });
+      // Casiers : ré-attribution neutre (aucun impact sur le stock du dépôt).
+      const cratesMoved: AnyRecord[] = [];
+      sourceSummary.crate_balances.forEach((entry) => {
+        const crateTypeId = String(entry.crate_type_id);
+        const balance = Number(entry.balance_qty);
+        if (!balance) return;
+        const qty = Math.abs(balance);
+        applyCrateMove({
+          crate_type_id: crateTypeId, movement_type: 'adjustment_out', qty,
+          full_delta: 0, empty_delta: 0, partner_type: 'CUSTOMER', partner_id: sourceId,
+          partner_delta: -balance, document_id: mergeId,
+          reason: `Fusion de fiche ${sourceId} vers ${targetId} : ${reason}`,
+          origin: 'CLIENT', destination: 'CLIENT', idempotency_key: `merge:${mergeId}:${crateTypeId}:out`,
+        });
+        applyCrateMove({
+          crate_type_id: crateTypeId, movement_type: 'adjustment_in', qty,
+          full_delta: 0, empty_delta: 0, partner_type: 'CUSTOMER', partner_id: targetId,
+          partner_delta: balance, document_id: mergeId,
+          reason: `Fusion de fiche ${sourceId} vers ${targetId} : reprise du solde de casiers`,
+          origin: 'CLIENT', destination: 'CLIENT', idempotency_key: `merge:${mergeId}:${crateTypeId}:in`,
+        });
+        cratesMoved.push({ crate_type_id: crateTypeId, balance_qty: balance });
+      });
+
+      target.total_purchases_fcfa = projection.total_purchases_fcfa;
+      target.total_paid_fcfa = projection.total_paid_fcfa;
+      target.financial_balance_fcfa = projection.financial_balance_fcfa;
+      target.credit_limit_fcfa = mergedLimit;
+      source.total_purchases_fcfa = 0;
+      source.total_paid_fcfa = 0;
+      source.financial_balance_fcfa = 0;
+      source.is_archived = true;
+
+      const outcome = {
+        dry_run: false, idempotent: false, merge_id: mergeId, customer_id: targetId,
+        source: sourceSummary, target: targetSummary, result: projection,
+        moved: { sales: salesMoved, payments: 0, crate_balances: cratesMoved },
+        warnings,
+      };
+      if (requestKey) state.mergeRequests[requestKey] = outcome;
+      state.operations.unshift({
+        operation_id: nextId('op'), command_type: 'CUSTOMER_MERGE',
+        summary: `Fusion ${sourceSummary.name} → ${targetSummary.name}`,
+        status: 'PENDING', attempt_count: 0, created_at: Date.now(),
+        synced_at: null, server_sequence: null, last_error: null,
+      });
+      return outcome;
     }
     case 'createMixedOrder': {
       // Le moteur Rust ne fait que valider : aucune vente, aucun stock, aucun

@@ -550,3 +550,31 @@
 - **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Écarts
   (historique anonyme non réécrit, fusion de fiches absente) :
   `docs/PART25_CLIENT_UNIQUE.md`.
+
+## LOT 48 — outil de fusion de fiches clients
+
+- **Besoin** : la synchronisation desktop peut pousser le même client sous un
+  second identifiant (ou le comptoir crée une fiche qui existe déjà).
+- **Commande** `mergeCustomers` : `dry_run` renvoie le récapitulatif sans écrire ;
+  la fusion ré-attribue ventes, paiements, obligations historiques (références
+  seulement), revues de migration, soldes de casiers et totaux ; la fiche source
+  est **archivée** (jamais supprimée). Motif obligatoire, `request_key`
+  idempotente namespacée `merge_…`.
+- **Casiers** : journal immuable ⇒ re-attribution par deux mouvements neutres
+  (`adjustment_out` sur la source, `adjustment_in` sur la cible, deltas
+  physiques à 0) ; le stock du dépôt ne bouge pas.
+- **Crédit** : plafond = le plus élevé des deux fiches (jamais de retrait
+  silencieux), signalé dans `warnings`.
+- **Droits** : permission `catalog.write` + contrôle de rôle OWNER/ADMIN/MANAGER
+  (`ROLE_FORBIDDEN` sinon), audit `CUSTOMER_MERGED`, opération d'outbox.
+- **Refus** : `CUSTOMER_MERGE_SAME`, `CUSTOMER_NOT_FOUND`,
+  `CUSTOMER_ARCHIVED_TARGET`, `CUSTOMER_ALREADY_ARCHIVED`, `REASON_REQUIRED`.
+- **Interface** : écran « Fusion de fiches clients » (recherche, choix
+  source/cible, analyse, motif, confirmation) enregistré dans la navigation et
+  le menu.
+- **Tests** : `__tests__/part26-customer-merge.test.ts` (9 cas).
+- **Validation exécutée** : Jest **24 suites / 162 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 4 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Limites
+  (fusion par point de vente, pas de dé-fusion) :
+  `docs/PART26_FUSION_CLIENTS.md`.
