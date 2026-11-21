@@ -31,6 +31,65 @@ const customers = [
   { id: 'cocody', name: 'Maquis Cocody', phone: '01 23 45 67 89', neighborhood: 'Cocody', credit_limit_fcfa: 150000, financial_balance_fcfa: 35000, total_purchases_fcfa: 420000, total_paid_fcfa: 385000 },
 ];
 
+function normalizedPhone(raw: unknown) {
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  // Indicatif ivoirien : « +225 07 07 12 34 56 » et « 07 07 12 34 56 » identifient
+  // le même client, donc la même fiche.
+  for (const prefix of ['00225', '225']) {
+    if (digits.startsWith(prefix) && digits.length === prefix.length + 10) {
+      return digits.slice(prefix.length);
+    }
+  }
+  return digits;
+}
+
+function normalizedCustomerName(raw: unknown) {
+  return String(raw ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+/** Fiche unique : téléphone d'abord, puis nom exact. Jamais de doublon. */
+function findCustomerIndex(name: string, phone: string) {
+  const wantedName = normalizedCustomerName(name);
+  let sameName = -1;
+  for (let index = 0; index < customers.length; index += 1) {
+    const entry = customers[index]!;
+    if (phone && normalizedPhone(entry.phone) === phone) return index;
+    if (sameName < 0 && wantedName && normalizedCustomerName(entry.name) === wantedName) sameName = index;
+  }
+  return sameName;
+}
+
+/** Retrouve ou ouvre la fiche de clientèle. Aucun crédit n'est offert d'office. */
+function ensureCustomer(name: string, phone: string) {
+  const index = findCustomerIndex(name, phone);
+  if (index >= 0) return { customer: customers[index]!, created: false };
+  const customer = {
+    id: nextId('cust'), name: name.trim().replace(/\s+/g, ' '), phone,
+    neighborhood: '', credit_limit_fcfa: 0, financial_balance_fcfa: 0,
+    total_purchases_fcfa: 0, total_paid_fcfa: 0,
+  };
+  customers.push(customer);
+  return { customer, created: true };
+}
+
+function resolveSaleCustomer(payload: AnyRecord) {
+  const customerId = payload.customer_id ? String(payload.customer_id) : null;
+  if (customerId) {
+    const customer = customers.find((entry) => entry.id === customerId);
+    if (!customer) throw new Error('CUSTOMER_NOT_FOUND: client introuvable');
+    return { customer, anonymous: false };
+  }
+  const name = String(payload.customer_name ?? '').trim().replace(/\s+/g, ' ');
+  if (name.length < 2) {
+    if (name.length > 0) throw new Error('CUSTOMER_NAME_REQUIRED: nom du client trop court');
+    throw new Error('CUSTOMER_REQUIRED: chaque vente doit être rattachée à une fiche client');
+  }
+  const phone = normalizedPhone(payload.customer_phone);
+  if (phone && phone.length < 8) throw new Error('INVALID_PHONE: téléphone trop court');
+  const index = findCustomerIndex(name, phone);
+  return { customer: index >= 0 ? customers[index]! : null, anonymous: index < 0, preview: name };
+}
+
 const suppliers = [
   { id: 'sup_brasserie', name: "Brasseries de Côte d'Ivoire", phone: '20 30 40 50', debt_fcfa: 180000, total_purchased_fcfa: 1240000, total_paid_fcfa: 1060000 },
 ];
@@ -783,6 +842,9 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       const mixedCases = (payload.mixed_cases ?? []) as AnyRecord[];
       if (lines.length === 0 && mixedCases.length === 0) throw new Error('EMPTY_CART: le panier est vide');
       // Plafonds de remise alignés sur depotpro-core::checkout_permission.
+      // Aucune vente anonyme : la commande est rattachée à une fiche client,
+      // retrouvée ou ouverte par la vente elle-même.
+      const identity = resolveSaleCustomer(payload);
       const role = String(payload.role ?? 'MANAGER');
       const maxDiscountPercent = ({ OWNER: 100, ADMIN: 50, MANAGER: 25, CASHIER: 5 } as Record<string, number>)[role];
       if (maxDiscountPercent === undefined) throw new Error('ROLE_FORBIDDEN: ce rôle ne peut pas valider une vente');
@@ -846,8 +908,15 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       const pending = payments.filter((item) => item.method === 'MOBILE_MONEY' && !item.reference).reduce((sum, item) => sum + integer(item.amount_fcfa, 'amount_fcfa'), 0);
       if (confirmed + pending > total) throw new Error('OVERPAYMENT: le montant réglé dépasse le total de la vente');
       const credit = total - confirmed - pending;
-      if (credit > 0 && !payload.customer_id) {
-        throw new Error('CUSTOMER_REQUIRED_FOR_CREDIT: un client enregistré est requis pour une vente à crédit');
+      if (credit > 0 && identity.anonymous) {
+        // Fiche inconnue : elle sera ouverte sans plafond, donc sans crédit.
+        throw new Error('CREDIT_LIMIT_EXCEEDED: plafond de crédit dépassé (fiche sans plafond)');
+      }
+      if (credit > 0 && identity.customer) {
+        const available = identity.customer.credit_limit_fcfa - identity.customer.financial_balance_fcfa;
+        if (credit > available) {
+          throw new Error(`CREDIT_LIMIT_EXCEEDED: plafond de crédit dépassé (${credit} > ${available} FCFA disponibles)`);
+        }
       }
       return {
         subtotal_fcfa: goodsAmount, discount_fcfa: discount, total_fcfa: total,
@@ -866,7 +935,13 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       const id = nextId('sale');
       // Numéro figé avant les lignes : elles citent le reçu dans le journal de stock.
       const receiptNumber = `REC-PREVIEW-${sequence}`;
-      const customer = customers.find((item) => item.id === payload.customer_id);
+      // Fiche de clientèle : retrouvée (téléphone/nom) ou ouverte par la vente.
+      const identity = resolveSaleCustomer(payload);
+      const ensured = identity.customer
+        ? { customer: identity.customer, created: false }
+        : ensureCustomer(String(payload.customer_name), normalizedPhone(payload.customer_phone));
+      const customer = ensured.customer;
+      const customerCreated = ensured.created;
       const lines = (payload.lines ?? []).map((line: AnyRecord) => {
         const count = integer(line.unit_count, 'unit_count');
         const pack = integer(line.pack_size ?? 1, 'pack_size');
@@ -883,7 +958,10 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
         movements.unshift({ id: nextId('smov'), variant_id: String(line.variant_id), movement_type: 'SALE_OUT', qty: -physical, reason: `Vente ${receiptNumber}`, document_id: id, occurred_at: Date.now() });
         return { variant_name: String(line.variant_name ?? ''), unit, unit_count: count, physical_units: physical, unit_price_fcfa: integer(line.unit_price_fcfa, 'unit_price_fcfa'), line_total_fcfa: count * integer(line.unit_price_fcfa, 'unit_price_fcfa'), is_mixed: false };
       });
-      const record = { id, receipt_number: receiptNumber, customer_id: payload.customer_id ?? null, customer_name: customer?.name ?? 'Client comptoir', total_fcfa: validation.total_fcfa, credit_fcfa: validation.credit_fcfa, subtotal_fcfa: validation.subtotal_fcfa, discount_fcfa: validation.discount_fcfa, paid_confirmed_fcfa: validation.confirmed_paid_fcfa, pending_mobile_money_fcfa: validation.pending_mobile_money_fcfa, sync_status: 'PENDING', occurred_at: Date.now(), lines };
+      const record = { id, receipt_number: receiptNumber, customer_id: customer.id, customer_name: customer.name, total_fcfa: validation.total_fcfa, credit_fcfa: validation.credit_fcfa, subtotal_fcfa: validation.subtotal_fcfa, discount_fcfa: validation.discount_fcfa, paid_confirmed_fcfa: validation.confirmed_paid_fcfa, pending_mobile_money_fcfa: validation.pending_mobile_money_fcfa, sync_status: 'PENDING', occurred_at: Date.now(), lines };
+      customer.total_purchases_fcfa += Number(validation.total_fcfa);
+      customer.total_paid_fcfa += Number(validation.confirmed_paid_fcfa);
+      customer.financial_balance_fcfa += Number(validation.credit_fcfa);
       sales.unshift(record);
       // Caisse : seules les espèces confirmées entrent dans le tiroir.
       const cashIn = ((payload.payments ?? []) as AnyRecord[])
@@ -908,8 +986,8 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
           crate_type_id: String(crateId), movement_type: 'sale_full_out', qty: count,
           full_delta: -count, empty_delta: half ? count : 0,
           // Un demi-casier reste au dépôt : il n'est jamais imputé au client.
-          partner_type: half ? null : (payload.customer_id ? 'CUSTOMER' : null),
-          partner_id: half ? null : (payload.customer_id ? String(payload.customer_id) : null),
+          partner_type: half ? null : 'CUSTOMER',
+          partner_id: half ? null : customer.id,
           partner_delta: half ? 0 : count, document_id: id,
           reason: half ? `Demi-casier vendu : casier ouvert au dépôt (${record.receipt_number})` : `Casiers pleins sortis à la vente (${record.receipt_number})`,
           origin: 'DEPOT', destination: half ? 'DEPOT' : 'CLIENT', idempotency_key: `sale_crate:${id}:${crateId}:${line.line_key ?? line.variant_id ?? ''}`,
@@ -937,8 +1015,8 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
         const result = applyCrateMove({
           crate_type_id: crateId, movement_type: 'sale_full_out', qty: 1,
           full_delta: -1, empty_delta: half ? 1 : 0,
-          partner_type: half ? null : (payload.customer_id ? 'CUSTOMER' : null),
-          partner_id: half ? null : (payload.customer_id ? String(payload.customer_id) : null),
+          partner_type: half ? null : 'CUSTOMER',
+          partner_id: half ? null : customer.id,
           partner_delta: half ? 0 : 1, document_id: id,
           reason: half
             ? `Demi-casier mixte vendu : casier ouvert au dépôt (${record.receipt_number})`
@@ -951,18 +1029,18 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       ((payload.empty_crates_returned ?? []) as AnyRecord[]).forEach((line, index) => {
         const qty = integer(line.qty ?? 0, 'qty');
         if (qty <= 0) return;
-        const currentBalance = crateBalance('CUSTOMER', String(payload.customer_id ?? 'cust_palmier'))
+        const currentBalance = crateBalance('CUSTOMER', customer.id)
           .balances.find((entry) => entry.crate_type_id === line.crate_type_id)?.balance_qty ?? 0;
         if (qty > currentBalance) throw new Error(`CRATE_RETURN_EXCEEDS_BALANCE: solde physique ${currentBalance}`);
         const result = applyCrateMove({
           crate_type_id: String(line.crate_type_id), movement_type: 'customer_empty_return_in', qty,
-          full_delta: 0, empty_delta: qty, partner_type: 'CUSTOMER', partner_id: String(payload.customer_id ?? 'cust_palmier'),
+          full_delta: 0, empty_delta: qty, partner_type: 'CUSTOMER', partner_id: customer.id,
           partner_delta: -qty, document_id: id, reason: `Casiers vides rendus à la vente (${record.receipt_number})`,
           origin: 'CLIENT', destination: 'DEPOT', idempotency_key: `sale_crate_return:${id}:${index}`,
         });
         crateMovementsMade.push(result.movement);
       });
-      const outcome = { sale_id: id, receipt_number: record.receipt_number, total_fcfa: record.total_fcfa, credit_fcfa: record.credit_fcfa, outbox_status: 'PENDING', crate_movements: crateMovementsMade, untracked_crate_lines: untracked, crate_balance_is_physical: true };
+      const outcome = { sale_id: id, receipt_number: record.receipt_number, total_fcfa: record.total_fcfa, credit_fcfa: record.credit_fcfa, customer_id: customer.id, customer_name: customer.name, customer_created: customerCreated, outbox_status: 'PENDING', crate_movements: crateMovementsMade, untracked_crate_lines: untracked, crate_balance_is_physical: true };
       if (requestKey) state.saleRequests[requestKey] = outcome;
       return outcome;
     }
@@ -970,11 +1048,38 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       const sale = sales.find((item) => item.id === payload.sale_id) ?? sales[0]!;
       return { ...sale, is_receipt_not_invoice: true };
     }
+    case 'createCustomer': {
+      const name = String(payload.name ?? payload.customer_name ?? '').trim().replace(/\s+/g, ' ');
+      if (name.length < 2) throw new Error('CUSTOMER_NAME_REQUIRED: le nom du client est obligatoire');
+      const phone = normalizedPhone(payload.phone ?? payload.customer_phone);
+      if (phone && phone.length < 8) throw new Error('INVALID_PHONE: téléphone trop court');
+      const ensured = ensureCustomer(name, phone);
+      if (String(payload.neighborhood ?? '').trim() && !ensured.customer.neighborhood) {
+        ensured.customer.neighborhood = String(payload.neighborhood).trim();
+      }
+      return {
+        customer_id: ensured.customer.id,
+        created: ensured.created,
+        name: ensured.customer.name,
+        phone: ensured.customer.phone,
+        credit_limit_fcfa: ensured.customer.credit_limit_fcfa,
+        outstanding_fcfa: ensured.customer.financial_balance_fcfa,
+      };
+    }
     case 'createMixedOrder': {
       // Le moteur Rust ne fait que valider : aucune vente, aucun stock, aucun
       // mouvement de casier n'est créé par cette commande.
       const validated = validateMixedCase(payload);
-      return { ...validated, validated_only: true };
+      // Composition exempte d'écriture : la fiche de clientèle est exigée et
+      // ouverte au moment de la vente, on annonce seulement son sort.
+      const hasIdentity = Boolean(payload.customer_id) || String(payload.customer_name ?? '').trim().length >= 2;
+      const identity = hasIdentity ? resolveSaleCustomer(payload) : null;
+      return {
+        ...validated, validated_only: true,
+        customer_id: identity?.customer?.id ?? null,
+        customer_will_be_created: Boolean(identity?.anonymous),
+        customer_required: !hasIdentity,
+      };
     }
     case 'registerPackagingReturn': return { status: 'RECORDED', qty: integer(payload.qty, 'qty'), document_id: nextId('doc') };
     case 'createPurchaseOrder': {
@@ -1364,14 +1469,27 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       const existing = key ? crateMovements.find((m) => m.idempotency_key === `${key}:stock`) : undefined;
       if (existing) return { status: 'RECORDED', idempotent: true, sale_id: existing.document_id, crate_type_id: crate.crate_type_id, qty, movement: existing, is_commercial_sale: true as const };
       const total = unitPrice * qty;
+      // Vente de casier vide = vente : elle passe par une fiche de clientèle.
+      const identity = resolveSaleCustomer(payload);
+      const ensured = identity.customer
+        ? { customer: identity.customer, created: false }
+        : ensureCustomer(String(payload.customer_name), normalizedPhone(payload.customer_phone));
+      const customer = ensured.customer;
       const payments = (payload.payments ?? []) as AnyRecord[];
       const confirmed = payments.reduce((sum, item) => sum + (item.method === 'CREDIT' ? 0 : integer(item.amount_fcfa ?? 0, 'amount_fcfa')), 0);
       const credit = Math.max(0, total - confirmed);
+      if (credit > 0) {
+        const available = customer.credit_limit_fcfa - customer.financial_balance_fcfa;
+        if (credit > available) throw new Error(`CREDIT_LIMIT_EXCEEDED: plafond de crédit dépassé (${credit} > ${available} FCFA disponibles)`);
+      }
       const saleId = nextId('sale');
       const receipt = `REC-CRATE-${sequence}`;
-      sales.unshift({ id: saleId, receipt_number: receipt, customer_id: payload.customer_id ?? null, customer_name: 'Client Comptoir', total_fcfa: total, credit_fcfa: credit, subtotal_fcfa: total, discount_fcfa: 0, paid_confirmed_fcfa: confirmed, pending_mobile_money_fcfa: 0, sync_status: 'PENDING', occurred_at: Date.now(), lines: [{ variant_name: `Casier vide ${crate.code}`, unit: 'EMPTY_CRATE', unit_count: qty, physical_units: qty, unit_price_fcfa: unitPrice, line_total_fcfa: total }] });
+      sales.unshift({ id: saleId, receipt_number: receipt, customer_id: customer.id, customer_name: customer.name, total_fcfa: total, credit_fcfa: credit, subtotal_fcfa: total, discount_fcfa: 0, paid_confirmed_fcfa: confirmed, pending_mobile_money_fcfa: 0, sync_status: 'PENDING', occurred_at: Date.now(), lines: [{ variant_name: `Casier vide ${crate.code}`, unit: 'EMPTY_CRATE', unit_count: qty, physical_units: qty, unit_price_fcfa: unitPrice, line_total_fcfa: total }] });
       const result = applyCrateMove({ crate_type_id: crate.crate_type_id, movement_type: 'empty_case_sale_out', qty, full_delta: 0, empty_delta: -qty, document_id: saleId, reason: `Vente définitive de casier vide (${receipt})`, origin: 'DEPOT', destination: 'CLIENT', idempotency_key: key ? `${key}:stock` : undefined });
-      return { status: 'RECORDED', idempotent: result.idempotent, sale_id: saleId, receipt_number: receipt, crate_type_id: crate.crate_type_id, qty, unit_price_fcfa: unitPrice, total_fcfa: total, credit_fcfa: credit, movement: result.movement, is_commercial_sale: true as const };
+      customer.total_purchases_fcfa += total;
+      customer.total_paid_fcfa += confirmed;
+      customer.financial_balance_fcfa += credit;
+      return { status: 'RECORDED', idempotent: result.idempotent, sale_id: saleId, receipt_number: receipt, crate_type_id: crate.crate_type_id, qty, unit_price_fcfa: unitPrice, total_fcfa: total, credit_fcfa: credit, customer_id: customer.id, customer_name: customer.name, customer_created: ensured.created, movement: result.movement, is_commercial_sale: true as const };
     }
     case 'getCrateMigrationReview': return {
       reviews: crateReviews.filter((item) => payload.include_resolved || !item.resolved),

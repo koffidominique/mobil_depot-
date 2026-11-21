@@ -65,6 +65,7 @@ fn prototype_abi_dto_error_sqlite_and_rollback() {
     let mut sale = json!({
         "auth": auth,
         "customer_id": null,
+        "customer_name": "Maquis Test FFI",
         "price_tier": "RETAIL",
         "is_online": false,
         "discount_fcfa": 0,

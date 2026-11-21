@@ -73,7 +73,8 @@ fn sale_totals_credit_discount_partial_payment_and_double_submission() {
     assert_eq!(receipt["is_receipt_not_invoice"], true);
 
     let duplicate = call("createSale", json!({
-        "auth": auth, "customer_id": null, "price_tier": "RETAIL", "is_online": false,
+        "auth": auth, "customer_id": null, "customer_name": "Client Test Doublon",
+        "price_tier": "RETAIL", "is_online": false,
         "discount_fcfa": 0, "lines": [line("l1", "var_beaufort_50", "BOTTLE", 1, 650)],
         "mixed_cases": [], "payments": [cash(650)],
     }));
@@ -104,7 +105,8 @@ fn stock_shortage_mixed_cases_purchases_cash_and_price_history() {
         conn.execute("UPDATE tenants SET offline_policy='STRICT_LOCAL_BLOCK' WHERE id='tenant_ci_01'", []).unwrap();
     }
     let insufficient = call("createSale", json!({
-        "auth": auth, "customer_id": null, "price_tier": "RETAIL", "is_online": false,
+        "auth": auth, "customer_id": null, "customer_name": "Client Test Stock",
+        "price_tier": "RETAIL", "is_online": false,
         "discount_fcfa": 0,
         "lines": [{
             "line_key": "l1", "variant_id": "var_beaufort_50", "variant_name": "Beaufort",

@@ -135,7 +135,7 @@ fn permission_for_command(command: &str) -> Option<&'static str> {
         | "listStockTransfers" | "list_stock_transfers" | "exportDesktopSnapshot"
         | "export_desktop_snapshot" | "importDesktopUpdates" => Some("read"),
         "createSale" | "create_sale" | "validateSale" | "validate_sale" | "createMixedOrder"
-        | "create_mixed_order" => Some("sales.write"),
+        | "create_mixed_order" | "createCustomer" | "create_customer" => Some("sales.write"),
         "recordPayment" | "record_payment" | "recordCashMovement" | "record_cash_movement"
         | "openCashSession" | "open_cash_session" | "closeCashSession" | "close_cash_session" => Some("cash.write"),
         "createPurchaseOrder" | "create_purchase_order" | "receivePurchase" | "receive_purchase"
@@ -325,7 +325,24 @@ fn prepare_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     )?;
     enriched["offline_policy"] = json!(policy);
 
-    if let Some(customer_id) = field_str_opt(payload, "customer_id") {
+    // Fiche de clientèle : une vente sans identifiant peut désigner un client
+    // par son nom (et éventuellement son téléphone). On retrouve alors sa fiche
+    // pour appliquer son plafond ; sinon le client sera créé à l'écriture.
+    if field_str_opt(&enriched, "customer_id").is_none() {
+        if let Some(raw_name) = field_str_opt(&enriched, "customer_name") {
+            let name = display_name(raw_name)?;
+            let phone = phone_key(field_str_opt(&enriched, "customer_phone"))?;
+            match find_customer(conn, &a.tenant_id, &name, &phone)? {
+                Some(id) => enriched["customer_id"] = json!(id),
+                None => {
+                    enriched["credit_limit_fcfa"] = json!(0);
+                    enriched["outstanding_balance_fcfa"] = json!(0);
+                }
+            }
+        }
+    }
+
+    if let Some(customer_id) = field_str_opt(&enriched, "customer_id") {
         let customer: Option<(i64, i64, i64)> = conn
             .query_row(
                 "SELECT credit_limit_fcfa, financial_balance_fcfa, is_archived FROM customers WHERE id = ?1",
@@ -450,6 +467,9 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
                 "receipt_number": stored.get("receipt_number").cloned().unwrap_or(Value::Null),
                 "total_fcfa": stored.get("total_fcfa").cloned().unwrap_or(json!(0)),
                 "credit_fcfa": stored.get("credit_fcfa").cloned().unwrap_or(json!(0)),
+                "customer_id": stored.get("customer_id").cloned().unwrap_or(Value::Null),
+                "customer_name": stored.get("customer_name").cloned().unwrap_or(Value::Null),
+                "customer_created": false,
                 "outbox_status": "PENDING",
                 "idempotent": true,
                 "crate_movements": [],
@@ -458,9 +478,34 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
         }
     }
 
-    let enriched = prepare_sale(&tx, payload)?;
+    let mut enriched = prepare_sale(&tx, payload)?;
     let result = validate_sale_rules(&enriched)?;
-    let customer_id = field_str_opt(payload, "customer_id").map(str::to_string);
+    // Fiche de clientèle obligatoire : un client inconnu est enregistré dans la
+    // même transaction que la vente, puis rattaché à la vente, aux mouvements de
+    // casiers et au suivi (achats, crédit, soldes).
+    let mut customer_created = false;
+    let customer_id = match field_str_opt(&enriched, "customer_id") {
+        Some(id) => Some(id.to_string()),
+        None => {
+            let raw_name = field_str(&enriched, "customer_name")?.to_string();
+            let phone = field_str_opt(&enriched, "customer_phone").map(str::to_string);
+            let (id, created) = ensure_customer(
+                &tx, &a, &raw_name, phone.as_deref(), field_str_opt(&enriched, "customer_neighborhood"),
+            )?;
+            customer_created = created;
+            if created {
+                db::audit(
+                    &tx, &a.branch_id, &a.user_id, "CUSTOMER_CREATED",
+                    &format!("Fiche client {} ouverte à la vente", display_name(&raw_name)?),
+                )?;
+            }
+            Some(id)
+        }
+    };
+    if let Some(id) = customer_id.as_deref() {
+        // Les mouvements de casiers de la vente s'imputent à ce client.
+        enriched["customer_id"] = json!(id);
+    }
     let sale_id = new_id("sale");
     // Deux ventes dans la même milliseconde ne doivent pas partager un numéro.
     let suffix = sale_id.rsplit('_').next().unwrap_or("0000");
@@ -610,7 +655,11 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
         "SALE_CREATE"
     };
     let summary = format!("{receipt} • {customer_name} ({total} FCFA)");
-    let outbox_payload = json!({"sale_id": sale_id, "receipt_number": receipt, "total_fcfa": total, "credit_fcfa": credit});
+    let outbox_payload = json!({
+        "sale_id": sale_id, "receipt_number": receipt, "total_fcfa": total, "credit_fcfa": credit,
+        "customer_id": customer_id, "customer_created": customer_created,
+        "customer_name": customer_name
+    });
     let base = base_revision(&tx, &a.branch_id)?;
     db::enqueue(
         &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, command, &summary,
@@ -625,6 +674,9 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
         "receipt_number": receipt,
         "total_fcfa": total,
         "credit_fcfa": credit,
+        "customer_id": customer_id,
+        "customer_name": customer_name,
+        "customer_created": customer_created,
         "outbox_status": "PENDING",
         "crate_movements": crate_outcome["crate_movements"].clone(),
         "crate_balance_is_physical": true
@@ -639,6 +691,106 @@ fn conn_query_customer_name(conn: &Connection, id: &str) -> CoreResult<String> {
 fn actor_full_name(conn: &Connection, id: &str) -> CoreResult<String> {
     conn.query_row("SELECT full_name FROM users WHERE id = ?1", params![id], |r| r.get(0))
         .map_err(|_| CoreError::new("USER_NOT_FOUND", "Utilisateur introuvable."))
+}
+
+/// Téléphone réduit à ses chiffres : « 07 07 12 34 56 » et « +2250707123456 »
+/// désignent la même fiche client.
+pub(crate) fn normalized_phone(raw: &str) -> String {
+    let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+    // Indicatif ivoirien : « +225 07 07 12 34 56 » et « 07 07 12 34 56 » sont le
+    // même numéro, donc la même fiche.
+    for prefix in ["00225", "225"] {
+        if let Some(rest) = digits.strip_prefix(prefix) {
+            if rest.chars().count() == 10 {
+                return rest.to_string();
+            }
+        }
+    }
+    digits
+}
+
+/// Nom réduit à une forme comparable : espaces compactés, casse ignorée.
+pub(crate) fn normalized_name(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ").to_uppercase()
+}
+
+/// Nom tel qu'il sera enregistré : espaces compactés, casse d'origine conservée.
+pub(crate) fn display_name(raw: &str) -> CoreResult<String> {
+    let clean = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.chars().count() < 2 {
+        return Err(CoreError::new(
+            "CUSTOMER_NAME_REQUIRED",
+            "Le nom du client est obligatoire pour ouvrir une fiche de clientèle.",
+        ));
+    }
+    Ok(clean)
+}
+
+/// Téléphone utilisable comme clé d'identité : vide accepté, sinon au moins 8 chiffres.
+pub(crate) fn phone_key(raw: Option<&str>) -> CoreResult<String> {
+    let digits = raw.map(normalized_phone).unwrap_or_default();
+    if !digits.is_empty() && digits.chars().count() < 8 {
+        return Err(CoreError::new(
+            "INVALID_PHONE",
+            "Téléphone trop court : saisissez le numéro complet ou laissez vide.",
+        ));
+    }
+    Ok(digits)
+}
+
+/// Cherche la fiche existante : téléphone d'abord (identité forte), puis nom exact.
+/// Aucune fiche n'est dupliquée pour un même client.
+pub(crate) fn find_customer(
+    conn: &Connection,
+    tenant: &str,
+    name: &str,
+    phone: &str,
+) -> CoreResult<Option<String>> {
+    let wanted_name = normalized_name(name);
+    let mut stmt = conn.prepare(
+        "SELECT id, name, phone FROM customers WHERE tenant_id = ?1
+         ORDER BY is_archived ASC, rowid ASC",
+    )?;
+    let mut rows = stmt.query(params![tenant])?;
+    let mut same_name: Option<String> = None;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let existing_name: String = row.get(1)?;
+        let existing_phone: String = row.get(2)?;
+        if !phone.is_empty() && normalized_phone(&existing_phone) == phone {
+            return Ok(Some(id));
+        }
+        if same_name.is_none() && !wanted_name.is_empty() && normalized_name(&existing_name) == wanted_name {
+            same_name = Some(id);
+        }
+    }
+    Ok(same_name)
+}
+
+/// Fiche de clientèle unique : retrouve le client ou l'ouvre.
+/// Retourne `(customer_id, created)`.
+pub(crate) fn ensure_customer(
+    conn: &Connection,
+    a: &Actor,
+    raw_name: &str,
+    raw_phone: Option<&str>,
+    neighborhood: Option<&str>,
+) -> CoreResult<(String, bool)> {
+    let name = display_name(raw_name)?;
+    let phone = phone_key(raw_phone)?;
+    if let Some(id) = find_customer(conn, &a.tenant_id, &name, &phone)? {
+        return Ok((id, false));
+    }
+    let id = new_id("cust");
+    // Un nouveau comptoir n'obtient aucun crédit tant que l'OWNER ne l'a pas
+    // autorisé : la fiche sert au suivi, pas à l'endettement automatique.
+    conn.execute(
+        "INSERT INTO customers (id, tenant_id, name, phone, neighborhood, customer_type, default_price_tier,
+            credit_limit_fcfa, total_purchases_fcfa, total_paid_fcfa, financial_balance_fcfa, is_archived)
+         VALUES (?1,?2,?3,?4,?5,'DEPOT','RETAIL',0,0,0,0,0)",
+        params![id, a.tenant_id, name, phone, neighborhood.unwrap_or("").trim()],
+    )?;
+    Ok((id, true))
 }
 
 pub(crate) fn open_cash_session(conn: &Connection, branch: &str) -> CoreResult<Option<String>> {
@@ -661,14 +813,85 @@ fn base_revision(conn: &Connection, branch: &str) -> i64 {
 }
 
 pub fn create_mixed_order(conn: &Connection, payload: &Value) -> CoreResult<Value> {
-    let _ = actor(conn, payload)?;
+    let a = actor(conn, payload)?;
     // Commande de **vérification** : le casier mixte n'est enregistré qu'au
     // moment de la vente (`createSale`), qui revalide et écrit tout dans une
     // seule transaction. Rien n'est créé ici : ni vente, ni stock, ni mouvement.
     let crate_id = field_str(payload, "crate_type_id")?.to_string();
     let spec = crate::crates::crate_spec_owned_from_db(conn, &crate_id)?;
-    let validated = validate_mixed_case_with(payload, &spec)?;
+    let mut validated = validate_mixed_case_with(payload, &spec)?;
+    // Compose-t-on ou commande-t-on ? La composition ne crée rien : la fiche de
+    // clientèle est exigée et ouverte au moment de la vente (`createSale`). On
+    // annonce simplement ce que la vente fera de l'identité fournie.
+    let (customer_id, will_create, required) = match field_str_opt(payload, "customer_id") {
+        Some(id) => (Some(id.to_string()), false, false),
+        None => match field_str_opt(payload, "customer_name") {
+            Some(raw_name) => {
+                let name = display_name(raw_name)?;
+                let phone = phone_key(field_str_opt(payload, "customer_phone"))?;
+                match find_customer(conn, &a.tenant_id, &name, &phone)? {
+                    Some(id) => (Some(id), false, false),
+                    None => (None, true, false),
+                }
+            }
+            None => (None, false, true),
+        },
+    };
+    validated["customer_id"] = json!(customer_id);
+    validated["customer_will_be_created"] = json!(will_create);
+    validated["customer_required"] = json!(required);
     Ok(validated)
+}
+
+/// Ouverture (ou récupération) explicite d'une fiche de clientèle.
+///
+/// L'identité est unique : le téléphone, s'il est fourni, sert de clé ; sinon le
+/// nom exact départage. Un client déjà connu n'obtient jamais une seconde fiche.
+pub fn create_customer(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let raw_name = field_str(payload, "name")
+        .or_else(|_| field_str(payload, "customer_name"))?
+        .to_string();
+    let phone = field_str_opt(payload, "phone")
+        .or_else(|| field_str_opt(payload, "customer_phone"))
+        .map(str::to_string);
+    let neighborhood = field_str_opt(payload, "neighborhood").map(str::to_string);
+    let name = display_name(&raw_name)?;
+    let phone_key_value = phone_key(phone.as_deref())?;
+
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let (customer_id, created) = ensure_customer(
+        &tx, &a, &name, phone.as_deref(), neighborhood.as_deref(),
+    )?;
+    if created {
+        db::audit(
+            &tx, &a.branch_id, &a.user_id, "CUSTOMER_CREATED",
+            &format!("Fiche client {name} ouverte"),
+        )?;
+        let outbox_payload = json!({
+            "entity_type": "customer", "customer_id": customer_id,
+            "name": name, "phone": phone_key_value, "neighborhood": neighborhood
+        });
+        db::enqueue(
+            &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "createCustomer",
+            &format!("Fiche client {name}"), &outbox_payload.to_string(),
+            base_revision(&tx, &a.branch_id), &format!("customer_{customer_id}"),
+        )?;
+    }
+    let (stored_name, stored_phone, credit_limit, balance): (String, String, i64, i64) = tx.query_row(
+        "SELECT name, phone, credit_limit_fcfa, financial_balance_fcfa FROM customers WHERE id = ?1",
+        params![customer_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    tx.commit()?;
+    Ok(json!({
+        "customer_id": customer_id,
+        "created": created,
+        "name": stored_name,
+        "phone": stored_phone,
+        "credit_limit_fcfa": credit_limit,
+        "outstanding_fcfa": balance
+    }))
 }
 
 /// Compatibilité de l'ancienne commande `registerPackagingReturn`.
@@ -3139,6 +3362,7 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "archiveProductVariant" | "archive_product_variant" => archive_product_variant(conn, payload),
         "createCrateType" | "create_crate_type" => create_crate_type(conn, payload),
         "updateCrateType" | "update_crate_type" => update_crate_type(conn, payload),
+        "createCustomer" | "create_customer" => create_customer(conn, payload),
         "getCrateStock" | "get_crate_stock" => crate::crates::get_crate_stock(conn, payload),
         "getCrateStockByType" | "get_crate_stock_by_type" => crate::crates::get_crate_stock_by_type(conn, payload),
         "getCustomerCrateBalance" | "get_customer_crate_balance" => crate::crates::get_customer_crate_balance(conn, payload),

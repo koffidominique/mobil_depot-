@@ -1200,7 +1200,6 @@ pub fn record_empty_crate_sale(conn: &mut Connection, payload: &Value) -> CoreRe
             "is_commercial_sale": true
         }));
     }
-    let customer_id = field_str_opt(payload, "customer_id").map(str::to_string);
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let meta = crate_meta(&tx, crate_id)?;
     require_physical(&meta)?;
@@ -1227,6 +1226,22 @@ pub fn record_empty_crate_sale(conn: &mut Connection, payload: &Value) -> CoreRe
     // Plusieurs ventes dans la même milliseconde : le suffixe garde le numéro unique.
     let suffix = sale_id.rsplit('_').next().unwrap_or("0000");
     let receipt = format!("RC-{}-{}", now, &suffix[..suffix.len().min(4)]);
+    // Une vente de casier vide est une vente : elle appartient à une fiche client.
+    // Le client inconnu est enregistré ici, dans la même transaction.
+    let (customer_id, customer_created) = match field_str_opt(payload, "customer_id") {
+        Some(id) => (Some(id.to_string()), false),
+        None => {
+            let raw_name = field_str_opt(payload, "customer_name").ok_or_else(|| {
+                CoreError::new(
+                    "CUSTOMER_REQUIRED",
+                    "Chaque vente doit être rattachée à une fiche client : indiquez le nom du client.",
+                )
+            })?;
+            let phone = field_str_opt(payload, "customer_phone");
+            let (id, created) = crate::commands::ensure_customer(&tx, &a, raw_name, phone, None)?;
+            (Some(id), created)
+        }
+    };
     let customer_name = match customer_id.as_deref() {
         Some(id) => tx
             .query_row("SELECT name FROM customers WHERE id = ?1", params![id], |r| r.get::<_, String>(0))
@@ -1341,6 +1356,12 @@ pub fn record_empty_crate_sale(conn: &mut Connection, payload: &Value) -> CoreRe
                 )?;
             }
         }
+    }
+    if customer_created {
+        crate::db::audit(
+            &tx, &a.branch_id, &a.user_id, "CUSTOMER_CREATED",
+            &format!("Fiche client {customer_name} ouverte à la vente d'un casier vide"),
+        )?;
     }
     if let Some(id) = customer_id.as_deref() {
         tx.execute(

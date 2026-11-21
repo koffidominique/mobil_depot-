@@ -305,6 +305,25 @@ pub fn validate_sale(payload: &Value) -> CoreResult<Value> {
     if lines.is_empty() && mixed.is_empty() {
         return Err(CoreError::new("EMPTY_CART", "Le panier est vide."));
     }
+    // Aucune vente sans fiche de clientèle : le client est suivi par ses achats,
+    // son crédit et ses casiers. Un client inconnu est enregistré à l'écriture.
+    let has_customer = field_str_opt(payload, "customer_id").is_some();
+    match field_str_opt(payload, "customer_name") {
+        Some(name) if name.trim().chars().count() >= 2 => {}
+        Some(_) => {
+            return Err(CoreError::new(
+                "CUSTOMER_NAME_REQUIRED",
+                "Nom du client trop court : la fiche doit rester identifiable.",
+            ))
+        }
+        None if has_customer => {}
+        None => {
+            return Err(CoreError::new(
+                "CUSTOMER_REQUIRED",
+                "Chaque vente doit être rattachée à une fiche client : indiquez le nom du client.",
+            ))
+        }
+    }
     let discount = field_i64_or(payload, "discount_fcfa", 0);
     if discount < 0 {
         return Err(CoreError::new("NEGATIVE_DISCOUNT", "Remise négative interdite."));
@@ -478,16 +497,23 @@ mod tests {
     }
 
     fn sale(lines: Vec<Value>, payments: Vec<Value>, customer: Option<&str>, limit: i64, outstanding: i64) -> Value {
-        json!({
+        // Sans identifiant, la vente désigne un client par son nom : la fiche
+        // correspondante est créée par la couche base au moment de l'écriture.
+        let mut payload = json!({
             "role": "OWNER",
             "offline_policy": "ALLOW_WITH_WARNING",
             "lines": lines,
             "mixed_cases": [],
             "payments": payments,
             "customer_id": customer,
+            "customer_name": null,
             "credit_limit_fcfa": limit,
             "outstanding_balance_fcfa": outstanding
-        })
+        });
+        if customer.is_none() {
+            payload["customer_name"] = json!("Client Test");
+        }
+        payload
     }
 
     fn mixed_line(profile: &str, group: &str, qty: i64) -> Value {
@@ -549,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn credit_limit_is_strict_and_requires_known_customer() {
+    fn credit_limit_is_strict_and_every_sale_needs_a_customer() {
         let line = bottle_line("l1", "var_test", 1000, 10);
         let accepted = sale(vec![line.clone()], vec![], Some("cust_palmier"), 1000, 0);
         assert_eq!(validate_sale(&accepted).expect("plafond exact")["credit_fcfa"], json!(1000));
@@ -557,8 +583,19 @@ mod tests {
         let refused = sale(vec![line.clone()], vec![], Some("cust_palmier"), 999, 0);
         assert_eq!(validate_sale(&refused).unwrap_err().code, "CREDIT_LIMIT_EXCEEDED");
 
-        let anonymous = sale(vec![line], vec![], None, 5000, 0);
-        assert_eq!(validate_sale(&anonymous).unwrap_err().code, "CUSTOMER_REQUIRED_FOR_CREDIT");
+        // Vente totalement anonyme : refusée, aucune vente sans fiche.
+        let mut anonymous = sale(vec![line.clone()], vec![], None, 5000, 0);
+        anonymous["customer_name"] = Value::Null;
+        assert_eq!(validate_sale(&anonymous).unwrap_err().code, "CUSTOMER_REQUIRED");
+
+        // Nom trop court : la fiche ne serait pas identifiable.
+        let mut too_short = sale(vec![line.clone()], vec![], None, 0, 0);
+        too_short["customer_name"] = json!("A");
+        assert_eq!(validate_sale(&too_short).unwrap_err().code, "CUSTOMER_NAME_REQUIRED");
+
+        // Fiche ouverte à la vente : aucun crédit avant autorisation de l'OWNER.
+        let new_fiche = sale(vec![line], vec![], None, 0, 0);
+        assert_eq!(validate_sale(&new_fiche).unwrap_err().code, "CREDIT_LIMIT_EXCEEDED");
     }
 
     #[test]

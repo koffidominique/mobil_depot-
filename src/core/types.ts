@@ -162,9 +162,25 @@ export interface SaleResult {
   receipt_number: string;
   total_fcfa: number;
   credit_fcfa: number;
+  /** Fiche de clientèle rattachée à la vente (toujours présente). */
+  customer_id?: string | null;
+  customer_name?: string | null;
+  /** `true` quand la fiche a été ouverte par cette vente. */
+  customer_created?: boolean;
+  /** `true` quand la vente rejouée avec la même clé n'a rien réécrit. */
+  idempotent?: boolean;
   outbox_status: string;
   crate_movements?: CrateMovement[];
   crate_balance_is_physical?: boolean;
+}
+
+export interface CreatedCustomer {
+  customer_id: string;
+  created: boolean;
+  name: string;
+  phone: string;
+  credit_limit_fcfa: number;
+  outstanding_fcfa: number;
 }
 
 export interface CustomerAccount extends Customer {

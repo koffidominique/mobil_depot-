@@ -135,7 +135,8 @@ describe('casier mixte dans la vente', () => {
     const salesBefore = call('getSales').sales.length;
     const movementsBefore = call('getCrateMovementHistory', {}).movements.length;
 
-    const validated = call('createMixedOrder', MIXED_CASE);
+    // Une commande est toujours rattachée à une fiche client (même ici, sans écriture).
+    const validated = call('createMixedOrder', { ...MIXED_CASE, customer_id: 'cust_palmier' });
     expect(validated.crate_code).toBe('B12-50');
     expect(validated.slot_capacity).toBe(12);
     expect(validated.total_drinks_fcfa).toBe(7500);
@@ -202,7 +203,7 @@ describe('casier mixte dans la vente', () => {
       is_half_case: true,
       lines: [{ ...MIXED_CASE.lines[0]!, quantity_bottles: 6 }],
     };
-    const validated = call('createMixedOrder', halfCasePayload);
+    const validated = call('createMixedOrder', { ...halfCasePayload, customer_id: 'cust_palmier' });
     expect(validated.slot_capacity).toBe(6);
 
     const result = call('createSale', salePayload({ mixed_cases: [halfCasePayload] }));

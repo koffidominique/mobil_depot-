@@ -519,3 +519,34 @@
   (0 erreur), `vite build`, tree-sitter sur 6 fichiers Rust.
 - **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Détail des
   défauts et des écarts assumés : `docs/PART24_INTEGRITE.md`.
+
+## LOT 47 — fiche de clientèle unique pour toute commande
+
+- **Règle appliquée** : aucune vente anonyme. Toute commande est rattachée à une
+  fiche de clientèle, retrouvée si le client est connu, ouverte dans la même
+  transaction sinon.
+- **Identité** : téléphone normalisé (indicatif ivoirien `+225`/`00225` retiré,
+  au moins 8 chiffres) comme clé forte, puis nom compacté et comparé sans casse.
+  Aucune fiche n'est créée si une fiche correspond (`CUSTOMER_REQUIRED`,
+  `CUSTOMER_NAME_REQUIRED`, `INVALID_PHONE`).
+- **Moteur** : `create_sale` accepte `customer_name`/`customer_phone` à la place
+  d'un `customer_id`, ouvre ou retrouve la fiche (`ensure_customer`), puis
+  rattache la vente, les casiers, le crédit, l'audit et l'outbox à cet
+  identifiant ; le rejeu idempotent renvoie la fiche d'origine. Nouvelle
+  commande `createCustomer` (droit `sales.write`). La vente de casier vide suit
+  la même règle.
+- **Crédit** : une fiche ouverte au comptoir a un plafond **0** — le suivi ne
+  vaut pas autorisation d'endettement.
+- **POS** : « Client comptoir » supprimé ; nom obligatoire + téléphone facultatif
+  pour un nouveau client, validation bloquée sans identité, identité vidée après
+  la vente, liste des clients rafraîchie, notification de fiche ouverte.
+- **Composition mixte** : `createMixedOrder` n'écrit rien et annonce
+  `customer_required` / `customer_will_be_created`.
+- **Tests** : `__tests__/part25-customer-identity.test.ts` (14 cas) + test de
+  domaine Rust `credit_limit_is_strict_and_every_sale_needs_a_customer` ; tests
+  d'intégration Rust alignés sur l'identité obligatoire.
+- **Validation exécutée** : Jest **23 suites / 153 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 3 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Écarts
+  (historique anonyme non réécrit, fusion de fiches absente) :
+  `docs/PART25_CLIENT_UNIQUE.md`.

@@ -49,6 +49,11 @@ export const saleSchema = z.object({
   price_tier: z.enum(['RETAIL', 'WHOLESALE']),
   lines: z.array(cartLineSchema),
   mixed_cases: z.array(mixedCaseSchema),
+  // Fiche de clientèle : un client identifié par son nom (et son téléphone) est
+  // créé ou retrouvé automatiquement ; aucune vente n'est anonyme.
+  customer_name: z.string().trim().min(2, 'Nom du client requis.').optional(),
+  customer_phone: z.string().trim().min(1).optional(),
+  customer_neighborhood: z.string().trim().min(1).optional(),
   // Clé d'idempotence : une vente rejouée (retry réseau, double appui) ne doit
   // jamais produire un second ticket ni un second mouvement de casiers.
   request_key: z.string().min(8).optional(),

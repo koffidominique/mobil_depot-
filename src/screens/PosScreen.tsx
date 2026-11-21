@@ -72,6 +72,10 @@ export function PosScreen() {
   // Clé d'idempotence conservée en cas d'échec : un nouvel appui rejoue la même
   // vente au lieu d'en créer une seconde.
   const [saleRequestKey, setSaleRequestKey] = useState<string | null>(null);
+  // Client non encore fiché : son nom suffit à ouvrir une fiche au moment de la
+  // vente, le téléphone (facultatif) sert de clé d'unicité.
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
 
   const catalog = useMemo(() => inventory.data?.full_drinks ?? [], [inventory.data]);
   const brands = useMemo(() => [...new Set(catalog.map((item) => item.brand))], [catalog]);
@@ -145,6 +149,8 @@ export function PosScreen() {
   }, [discount]);
   const payableFcfa = totalFcfa > discountFcfa ? totalFcfa - discountFcfa : 0n;
 
+  const customerMissing = selectedCustomerId === null && newCustomerName.trim().length < 2;
+
   const checkout = useMutation<SaleResult, Error, void>({
     mutationFn: async () => {
       const ref = reference.trim() || null;
@@ -180,6 +186,12 @@ export function PosScreen() {
         payments,
         is_online: online,
         request_key: requestKey,
+        ...(selectedCustomerId
+          ? {}
+          : {
+              customer_name: newCustomerName.trim(),
+              ...(newCustomerPhone.trim() ? { customer_phone: newCustomerPhone.trim() } : {}),
+            }),
         ...(selectedCustomerId && emptyCratesReturned > 0
           ? { empty_crates_returned: [{ crate_type_id: emptyCrateType, qty: emptyCratesReturned }] }
           : {}),
@@ -192,10 +204,19 @@ export function PosScreen() {
       setError(null);
       setSaleRequestKey(null);
       clearCart();
+      // Le client suivant ne doit pas hériter de l'identité précédente.
+      const openedFiche = result.customer_created
+        ? `Fiche client ${result.customer_name ?? newCustomerName.trim()} ouverte. `
+        : '';
+      setCustomer(null);
+      setNewCustomerName('');
+      setNewCustomerPhone('');
       notify(
-        online
-          ? `Vente ${result.receipt_number} enregistrée durablement.`
-          : `Vente ${result.receipt_number} enregistrée localement, non encore confirmée par le serveur.`,
+        `${openedFiche}${
+          online
+            ? `Vente ${result.receipt_number} enregistrée durablement.`
+            : `Vente ${result.receipt_number} enregistrée localement, non encore confirmée par le serveur.`
+        }`,
       );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
@@ -203,6 +224,7 @@ export function PosScreen() {
         queryClient.invalidateQueries({ queryKey: ['sales'] }),
         queryClient.invalidateQueries({ queryKey: ['crate-stock'] }),
         queryClient.invalidateQueries({ queryKey: ['crate-movements'] }),
+        queryClient.invalidateQueries({ queryKey: ['customers'] }),
       ]);
     },
     onError: (err) => setError(err.message),
@@ -320,8 +342,14 @@ export function PosScreen() {
 
       <Card>
         <Text style={{ color: c.text, fontWeight: '800' }}>Client</Text>
+        <Text style={{ color: c.subtitle, fontSize: 11 }}>
+          Toute vente ouvre ou retrouve une fiche de clientèle unique : c&apos;est elle qui porte les achats,
+          le crédit et les casiers du client. Aucune vente anonyme.
+        </Text>
         <Pressable onPress={() => setCustomer(null)}>
-          <Text style={{ color: selectedCustomerId === null ? c.primary : c.subtitle }}>Client comptoir</Text>
+          <Text style={{ color: selectedCustomerId === null ? c.primary : c.subtitle }}>
+            Nouveau client (fiche créée à la vente)
+          </Text>
         </Pressable>
         {(customers.data?.customers ?? []).map((customer) => (
           <Pressable key={customer.id} onPress={() => setCustomer(customer.id)}>
@@ -330,6 +358,31 @@ export function PosScreen() {
             </Text>
           </Pressable>
         ))}
+        {selectedCustomerId === null ? (
+          <>
+            <Field
+              label="Nom du client (obligatoire)"
+              value={newCustomerName}
+              onChangeText={(value) => {
+                setNewCustomerName(value);
+                setSaleRequestKey(null);
+              }}
+              placeholder="Ex. Maquis Le Palmier"
+            />
+            <Field
+              label="Téléphone (facultatif, clé d'unicité)"
+              value={newCustomerPhone}
+              onChangeText={(value) => {
+                setNewCustomerPhone(value);
+                setSaleRequestKey(null);
+              }}
+              placeholder="Ex. 07 07 12 34 56"
+            />
+            <Text style={{ color: c.subtitle, fontSize: 11 }}>
+              Un client déjà fiché (même téléphone, sinon même nom) est reconnu : aucune fiche en double.
+            </Text>
+          </>
+        ) : null}
       </Card>
 
       <Card>
@@ -427,6 +480,9 @@ export function PosScreen() {
           Un retour de casiers vides est un mouvement physique : il réduit le solde du client, sans créer de
           paiement, de remise ni de mouvement de caisse. Un client enregistré est requis.
         </Text>
+        {customerMissing ? (
+          <Banner tone="error" message="Identifiez le client (nom ou fiche existante) : la vente doit être rattachée à une fiche de clientèle." />
+        ) : null}
         {discountFcfa > totalFcfa ? (
           <Banner tone="error" message="La remise dépasse le sous-total : réduisez-la avant de valider." />
         ) : null}
@@ -442,6 +498,7 @@ export function PosScreen() {
             (cartLines.length === 0 && mixedCases.length === 0)
             || crateShortages.length > 0
             || discountFcfa > totalFcfa
+            || customerMissing
           }
           loading={checkout.isPending}
           onPress={() => checkout.mutate()}

@@ -6,6 +6,7 @@ import type {
   AuthSession,
   Customer,
   CustomerAccount,
+  CreatedCustomer,
   Dashboard,
   Inventory,
   MixedCaseInput,
@@ -206,6 +207,10 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
+    /** Client non encore fiché : sa fiche est créée (ou retrouvée) par la vente. */
+    customer_name?: string;
+    customer_phone?: string;
+    customer_neighborhood?: string;
     /** Clé d'idempotence de la vente : le rejeu renvoie la vente déjà enregistrée. */
     request_key?: string;
     /** Casiers vides rendus par le client au moment de la vente (retour physique). */
@@ -223,6 +228,10 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
+    /** Client non encore fiché : sa fiche est créée (ou retrouvée) par la vente. */
+    customer_name?: string;
+    customer_phone?: string;
+    customer_neighborhood?: string;
     /** Clé d'idempotence de la vente : le rejeu renvoie la vente déjà enregistrée. */
     request_key?: string;
     /** Casiers vides rendus par le client au moment de la vente (retour physique). */
@@ -233,6 +242,15 @@ export const depot = {
   },
 
   createMixedOrder: (input: MixedCaseInput) => call<ValidatedMixedCase>('createMixedOrder', input),
+
+  /** Ouvre (ou retrouve) la fiche de clientèle unique. */
+  createCustomer: (input: {
+    name?: string;
+    customer_name?: string;
+    phone?: string;
+    customer_phone?: string;
+    neighborhood?: string;
+  }) => call<CreatedCustomer>('createCustomer', input),
 
   registerPackagingReturn: (input: {
     partner_type: 'CUSTOMER' | 'SUPPLIER';

@@ -194,7 +194,7 @@ describe('§20 casiers (16-37)', () => {
   it('33 et 43. vente définitive d’un casier vide = vraie vente', () => {
     const before = stockOf(B12).empty_qty;
     const sale = call('recordEmptyCrateSale', {
-      crate_type_id: B12, qty: 2, customer_id: null, unit_price_fcfa: 1500,
+      crate_type_id: B12, qty: 2, customer_id: 'cust_palmier', unit_price_fcfa: 1500,
       payments: [{ method: 'CASH', amount_fcfa: 3000, reference: null, confirmed_by_provider: true }],
       request_key: 'k-33',
     });

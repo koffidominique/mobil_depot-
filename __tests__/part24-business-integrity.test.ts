@@ -63,7 +63,7 @@ function saleLine(overrides: Record<string, unknown> = {}) {
 
 function salePayload(extra: Record<string, unknown> = {}) {
   return {
-    customer_id: null as string | null,
+    customer_id: 'cust_palmier' as string | null,
     price_tier: 'RETAIL',
     lines: [saleLine()],
     mixed_cases: [] as unknown[],
@@ -181,9 +181,20 @@ describe('contrôles financiers de la vente', () => {
     expect(refused.error?.code).toBe('OVERPAYMENT');
   });
 
-  it('exige un client enregistré pour une vente à crédit', () => {
-    const refused = attempt('validateSale', salePayload({ payments: [] }));
-    expect(refused.error?.code).toBe('CUSTOMER_REQUIRED_FOR_CREDIT');
+  it('exige une fiche client identifiée pour toute vente', () => {
+    const anonymous = attempt('validateSale', salePayload({ customer_id: null }));
+    expect(anonymous.error?.code).toBe('CUSTOMER_REQUIRED');
+    const tooShort = attempt('validateSale', salePayload({ customer_id: null, customer_name: 'A' }));
+    expect(tooShort.error?.code).toBe('CUSTOMER_NAME_REQUIRED');
+    const accepted = call('validateSale', salePayload({ customer_id: null, customer_name: 'Maquis Nouveau' }));
+    expect(accepted.total_fcfa).toBe(7200);
+  });
+
+  it('refuse le crédit à une fiche inconnue, qui n’a aucun plafond', () => {
+    const refused = attempt('validateSale', salePayload({
+      customer_id: null, customer_name: 'Maquis Inconnu', payments: [],
+    }));
+    expect(refused.error?.code).toBe('CREDIT_LIMIT_EXCEEDED');
     const accepted = call('validateSale', salePayload({ customer_id: 'cust_palmier', payments: [] }));
     expect(accepted.credit_fcfa).toBe(7200);
   });
