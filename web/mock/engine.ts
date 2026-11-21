@@ -284,7 +284,7 @@ const orders: AnyRecord[] = [
   { order_id: 'po_seed_01', reference: 'BC-2026-0041', supplier_id: 'sup_brasserie', supplier_name: "Brasseries de Côte d'Ivoire", total_fcfa: 150000, received_fcfa: 72000, status: 'PARTIAL_RECEIVED', created_at: now - 86400000 },
 ];
 
-const movements = [
+const movements: AnyRecord[] = [
   { id: 'smov_web_1', movement_type: 'SALE', qty: -12, reason: 'Vente REC-2026-0042', document_id: 'sale_web_1', occurred_at: now - 3600000, variant_id: 'var_beaufort_50' },
   { id: 'smov_web_2', movement_type: 'PURCHASE', qty: 120, reason: 'Réception BC-2026-0041', document_id: 'po_seed_01', occurred_at: now - 86400000, variant_id: 'var_drogba_50' },
 ];
@@ -890,11 +890,21 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
         .sort((left, right) => right.occurred_at - left.occurred_at)
         .map((item) => {
           const variant = variants.find((row) => row.variant_id === item.variant_id);
+          // Projection alignée sur le moteur Rust : l'identifiant du mouvement
+          // est `movement_id` (le jeu pilote le stocke en `id`).
           return {
-            ...item, variant_id: item.variant_id,
+            movement_id: String(item.movement_id ?? item.id),
+            variant_id: item.variant_id,
+            movement_type: item.movement_type,
+            qty: item.qty,
+            reason: item.reason,
+            document_id: item.document_id ?? '',
+            user_id: item.user_id ?? 'user_owner',
+            device_id: item.device_id ?? 'dev_mobile_01',
+            occurred_at: item.occurred_at,
             variant_name: variant?.name ?? item.variant_id,
             volume_label: variant?.volume_label ?? '',
-            user_name: 'Awa Koné',
+            user_name: item.user_name ?? 'Awa Koné',
           };
         });
       return { movements: filtered.slice(offset, offset + limit), total_count: filtered.length, limit, offset };

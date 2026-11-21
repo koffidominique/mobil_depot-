@@ -117,6 +117,9 @@ OWNER/ADMIN/MANAGER, `saveProductVariant`/`updateVariantPrices`/
   modifié est celui de la caisse, un archivage conserve le stock compté.
 - Shim de navigation web : `navigate(nom, params)` et `useRoute().params` — le
   filtre client des commandes fonctionne aussi dans l'aperçu.
+- `getStockMovements` projette `movement_id`, `user_id`, `device_id` comme le
+  moteur Rust (le jeu pilote stockait `id`) : sans cette clé, les listes React
+  étaient non clées et l'aperçu émettait un avertissement.
 
 ## 5. Interface
 
@@ -185,6 +188,10 @@ filtres client/crédit/recherche.
 - `vite build` : OK.
 - Contrôle syntaxique Rust (tree-sitter) : `commands.rs`, `db.rs`, `domain.rs`
   sans nœud d'erreur.
+- **Exécution de l'aperçu** : `node scripts/verify-web-preview.mjs` — connexion,
+  puis parcours Stock → Inventaires → Menu → Produits → Stock → Commandes
+  clients, **0 erreur console**. Serveur de développement servi sur le port
+  5173 (`npm run web`).
 
 ## 8. Non exécuté / limites assumées
 

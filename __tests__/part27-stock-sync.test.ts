@@ -163,6 +163,15 @@ describe('lot 49 — une seule source pour le stock, les inventaires et les prod
     const adjustments = call('getStockMovements', { movement_type: 'INVENTORY_ADJUSTMENT' });
     expect(adjustments.movements.every((item: any) => item.movement_type === 'INVENTORY_ADJUSTMENT')).toBe(true);
     expect(adjustments.movements[0].variant_name).toBeTruthy();
+
+    // Identifiants alignés sur le moteur : un mouvement sans `movement_id`
+    // rendait les listes non clés et l'aperçu bavard (avertissement React).
+    for (const movement of page.movements.concat(adjustments.movements)) {
+      expect(typeof movement.movement_id).toBe('string');
+      expect(movement.movement_id.length).toBeGreaterThan(0);
+      expect(typeof movement.user_id).toBe('string');
+      expect(typeof movement.occurred_at).toBe('number');
+    }
   });
 
   it('les commandes clients portent la fiche, les lignes et les totaux de la sélection', () => {
