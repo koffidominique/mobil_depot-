@@ -10,9 +10,16 @@ import type {
   CustomerMergeResult,
   Dashboard,
   Inventory,
+  InventoryCountFilter,
+  InventoryCountPage,
   MixedCaseInput,
-  SaleRecord,
+  ProductVariantFilter,
+  ProductVariantList,
+  SalesFilter,
+  SalesPage,
   SaleResult,
+  StockMovementFilter,
+  StockMovementPage,
   SaleValidation,
   Supplier,
   SyncOperation,
@@ -50,7 +57,6 @@ import type {
   CatalogVariantRow,
   CategoryRow,
   ProducerRow,
-  StockMovement,
   PartnerStatement,
   VariantSaveInput,
   CrateTypeInput,
@@ -185,14 +191,28 @@ export const depot = {
     variant_id: string;
     counted_qty: number;
     reason: string;
-  }) => call<{ previous_qty: number; counted_qty: number; difference_qty: number }>(
-    'recordInventoryCount', input,
-  ),
-  getStockMovements: (variantId?: string) =>
-    call<{ movements: StockMovement[] }>('getStockMovements', variantId ? { variant_id: variantId } : {}),
+    /** Clé d'appel : un rejeu renvoie le comptage déjà enregistré. */
+    request_key?: string;
+  }) => call<{
+    inventory_id?: string;
+    variant_id?: string;
+    previous_qty: number;
+    counted_qty: number;
+    difference_qty: number;
+    idempotent?: boolean;
+  }>('recordInventoryCount', input),
+  getStockMovements: (filter?: string | StockMovementFilter) =>
+    call<StockMovementPage>(
+      'getStockMovements',
+      typeof filter === 'string' ? { variant_id: filter } : filter ?? {},
+    ),
+  getInventoryCounts: (filter: InventoryCountFilter = {}) =>
+    call<InventoryCountPage>('getInventoryCounts', filter),
+  getProductVariants: (filter: ProductVariantFilter = {}) =>
+    call<ProductVariantList>('getProductVariants', filter),
   getCustomers: () => call<{ customers: Customer[] }>('getCustomers'),
   getSuppliers: () => call<{ suppliers: Supplier[] }>('getSuppliers'),
-  getSales: () => call<{ sales: SaleRecord[] }>('getSales'),
+  getSales: (filter: SalesFilter = {}) => call<SalesPage>('getSales', filter),
 
   getCustomerAccount: (customerId: string) =>
     call<CustomerAccount>('getCustomerAccount', { customer_id: customerId }),
@@ -327,7 +347,7 @@ export const depot = {
   }) => call<{ status: string; amount_fcfa: number }>('recordPayment', input),
 
   saveProductVariant: (input: VariantSaveInput) =>
-    call<{ variant_id: string; synced: boolean }>('saveProductVariant', input),
+    call<{ variant_id: string; synced: boolean; is_active?: boolean }>('saveProductVariant', input),
   updateVariantPrices: (input: {
     variant_id: string;
     retail_case_fcfa: number;

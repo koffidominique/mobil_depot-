@@ -90,7 +90,8 @@ npm run ios
 
 - Le serveur parent `ss_depot_rust` n'expose pas encore `/api/v1/sync/*` (voir `docs/AUDIT_PARENT_REPO.md`). Un adaptateur Axum prêt à intégrer est fourni dans `server/` avec le contrat `docs/API_SYNC_V1.md`. Tant que l'URL serveur est vide, l'application reste 100 % locale et l'écran Synchronisation l'indique explicitement.
 - Le pont iOS utilise un `RCTBridgeModule` qui exécute Rust sur une file série et résout la promesse sur le thread principal ; un wrapper Swift typé (`DepotCoreSwift.swift`) et un bridging header sont fournis. La spec TurboModule est générée par `scripts/codegen.sh`. Voir `docs/FFI_AND_PROTOTYPE.md`.
-- Les écrans « Achats, Fournisseurs, Caisse, Rapports, Catalogue, Reçus » sont câblés sur les commandes Rust correspondantes ; la confirmation des paiements Mobile Money et l'impression/partage des reçus restent à brancher sur des services natifs.
+- Les écrans « Achats, Fournisseurs, Caisse, Rapports, Produits, Inventaires, Commandes clients » sont câblés sur les commandes Rust correspondantes ; la confirmation des paiements Mobile Money et l'impression/partage des reçus restent à brancher sur des services natifs.
+- Depuis le lot 49, Stock, Inventaires, Produits et Commandes clients partagent la même projection (`getProductVariants`, `getInventoryCounts`, `getSales`, `getStockMovements`) et une invalidation croisée unique (voir `docs/PART27_UNIFORMITE_STOCK.md`).
 - `npm run rust:test` nécessite un toolchain Rust absent de l'environnement de cette session ; la syntaxe des fichiers Rust a été validée par analyseur tree-sitter et la syntaxe/types TypeScript par `tsc --noEmit`.
 
 Voir `docs/PART4_OFFLINE.md` pour le fonctionnement offline-first, la réplication descendante versionnée et la gestion des conflits.

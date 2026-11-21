@@ -59,6 +59,8 @@ export interface InventoryItem {
   allow_half_case?: boolean;
   /** Emplacements du format de casier, si connu. */
   crate_capacity?: number;
+  /** Référence encore proposée à la vente (faux = archivée, stock conservé). */
+  is_active?: boolean;
 }
 
 export interface Inventory {
@@ -86,11 +88,51 @@ export interface Supplier {
 export interface SaleRecord {
   id: string;
   receipt_number: string;
+  /** Fiche de clientèle rattachée (jamais anonyme pour une vente du journal). */
+  customer_id: string | null;
   customer_name: string;
   total_fcfa: number;
   credit_fcfa: number;
+  /** Encaissé confirmé (espèces, mobile money confirmé, virement…). */
+  paid_confirmed_fcfa: number;
+  /** Mobile money encore en attente de confirmation opérateur. */
+  pending_mobile_money_fcfa: number;
+  discount_fcfa: number;
   sync_status: string;
   occurred_at: number;
+  price_tier: string;
+  /** Nombre de lignes du reçu : l'écran sait s'il doit ouvrir un détail. */
+  line_count: number;
+  /** Lignes vendues en casier incomplet / mixte. */
+  mixed_line_count: number;
+  /** Lignes de consignation (casiers facturés ou retournés). */
+  packaging_line_count: number;
+}
+
+/** Filtre des commandes clients : l'écran ne filtre jamais en mémoire. */
+export interface SalesFilter {
+  customer_id?: string;
+  from_ms?: number;
+  to_ms?: number;
+  /** Uniquement les commandes avec une part à crédit. */
+  credit_only?: boolean;
+  /** Recherche sur le numéro de reçu ou le nom du client. */
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SalesPage {
+  sales: SaleRecord[];
+  /** Nombre total de commandes correspondant au filtre (toutes pages). */
+  total_count: number;
+  totals: {
+    total_fcfa: number;
+    credit_fcfa: number;
+    paid_confirmed_fcfa: number;
+  };
+  limit: number;
+  offset: number;
 }
 
 export type CommercialUnit = 'CASE' | 'HALF_CASE' | 'CARTON' | 'PACK' | 'BOTTLE' | 'CAN' | 'UNIT';
@@ -373,6 +415,10 @@ export interface SaleReceipt {
     physical_units: number;
     unit_price_fcfa: number;
     line_total_fcfa: number;
+    /** Ligne composée en casier incomplet / mixte. */
+    is_mixed?: boolean;
+    /** Ligne de consignation (casier plein facturé, vide repris). */
+    is_packaging?: boolean;
   }>;
 }
 
@@ -495,6 +541,8 @@ export interface VariantSaveInput {
   description?: string;
   photo_path?: string;
   is_returnable?: boolean;
+  /** Statut d'activité : absent = inchangé (une édition ne réactive pas un produit archivé). */
+  is_active?: boolean;
 }
 
 export interface CrateTypeInput {
@@ -581,12 +629,112 @@ export interface StockMovement {
   movement_id: string;
   variant_id: string;
   movement_type: string;
+  /** Quantité signée en unités de base (négatif = sortie). */
   qty: number;
   reason: string;
   document_id: string;
   user_id: string;
   device_id: string;
   occurred_at: number;
+  /** Libellés joints par le moteur : l'écran n'a pas à recroiser les références. */
+  variant_name?: string;
+  volume_label?: string;
+  user_name?: string;
+}
+
+/** Filtre de l'historique des mouvements (pagination côté moteur). */
+export interface StockMovementFilter {
+  variant_id?: string;
+  movement_type?: string;
+  from_ms?: number;
+  to_ms?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface StockMovementPage {
+  movements: StockMovement[];
+  total_count: number;
+  limit: number;
+  offset: number;
+}
+
+/** Écriture d'inventaire physique déjà enregistrée. */
+export interface InventoryCountRecord {
+  inventory_id: string;
+  variant_id: string;
+  variant_name: string;
+  volume_label: string;
+  counted_qty: number;
+  difference_qty: number;
+  previous_qty: number;
+  reason: string;
+  user_id: string;
+  user_name: string;
+  occurred_at: number;
+}
+
+export interface InventoryCountFilter {
+  variant_id?: string;
+  from_ms?: number;
+  to_ms?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface InventoryCountPage {
+  counts: InventoryCountRecord[];
+  total_count: number;
+  totals: {
+    absolute_difference_units: number;
+    discrepancy_count: number;
+  };
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Projection unique produit + stock de l'écran Produits : catalogue, prix,
+ * statut et stock physique lus ensemble, sans recalcul côté interface.
+ */
+export interface ProductVariantSummary {
+  variant_id: string;
+  sku: string;
+  name: string;
+  brand: string;
+  volume_label: string;
+  container_type: string;
+  material: string;
+  pack_size: number;
+  retail_case_fcfa: number;
+  wholesale_case_fcfa: number;
+  retail_bottle_fcfa: number;
+  category: string | null;
+  bottle_profile_id: string | null;
+  crate_type_id: string | null;
+  is_active: boolean;
+  price_revision: number;
+  is_returnable: boolean;
+  stock_units: number;
+  min_alert_units: number;
+}
+
+export interface ProductVariantFilter {
+  include_inactive?: boolean;
+  search?: string;
+  category?: string;
+  low_stock_only?: boolean;
+}
+
+export interface ProductVariantList {
+  variants: ProductVariantSummary[];
+  total_count: number;
+  archived_count: number;
+  low_stock_count: number;
+  stock_units: number;
+  /** Valorisation indicative au prix bouteille (jamais un engagement comptable). */
+  stock_value_fcfa: number;
+  stock_value_is_indicative: boolean;
 }
 
 

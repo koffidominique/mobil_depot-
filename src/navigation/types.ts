@@ -9,9 +9,11 @@ export type RootStackParamList = {
   Cash: undefined;
   Reports: undefined;
   Catalog: undefined;
+  Inventories: undefined;
   MixedOrder: undefined;
   CustomerMerge: undefined;
-  Receipts: undefined;
+  /** Commandes clients : filtre optionnel sur une fiche de clientèle. */
+  Receipts: { customer_id?: string } | undefined;
   Statement: undefined;
   Desktop: undefined;
 };

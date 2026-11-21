@@ -1,3 +1,5 @@
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
@@ -7,9 +9,11 @@ import { formatFcfa, formatQuantity } from '../core/format';
 import { newRequestKey } from '../core/requestKey';
 import type { CustomerAccount } from '../core/types';
 import { useCustomerCrateBalance, useCustomers } from '../hooks/useCore';
+import type { RootStackParamList } from '../navigation/types';
 
 export function CustomersScreen() {
   const c = useColors();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const queryClient = useQueryClient();
   const customers = useCustomers();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -97,6 +101,24 @@ export function CustomersScreen() {
             <Field label="Règlement espèces (FCFA)" value={amount} keyboardType="numeric" onChangeText={setAmount} />
             <PrimaryButton label="Enregistrer le paiement" loading={pay.isPending} onPress={() => pay.mutate()} />
           </View>
+        </Card>
+      ) : null}
+
+      {selectedId ? (
+        <Card>
+          <Text style={{ color: c.text, fontWeight: '800' }}>Commandes de ce client</Text>
+          <Text style={{ color: c.subtitle }}>
+            Le journal des commandes s&apos;ouvre filtré sur cette fiche : reçus, encaissements, crédits et
+            emballages attendus restent lisibles d&apos;un seul geste.
+          </Text>
+          <Pressable
+            onPress={() => navigation.navigate('Receipts', { customer_id: selectedId })}
+            accessibilityRole="button"
+          >
+            <Text style={{ color: c.primary, fontWeight: '700' }}>
+              Voir les commandes de {account.data?.name ?? 'ce client'}
+            </Text>
+          </Pressable>
         </Card>
       ) : null}
 
