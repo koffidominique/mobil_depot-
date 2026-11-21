@@ -615,6 +615,309 @@ pub const MIGRATION_10: &str = r#"
         ALTER TABLE users ADD COLUMN pin_kdf TEXT NOT NULL DEFAULT 'SHA256_LEGACY';
         "#;
 
+/// Migration 11 — modèle physique des casiers plastiques.
+///
+/// Contexte : l'ancien module d'emballages (colonnes `packaging_expectations`,
+/// `partner_packaging_ledger`, `crate_stock`, héritées de la logique 0014/0015 du
+/// dépôt parent) enregistrait des « obligations attendues/reçues » et ne mettait
+/// jamais à jour le stock physique lors des ventes ou des remises fournisseur.
+/// La présente migration :
+///   1. ajoute un journal physique immuable `crate_movements` (idempotent) ;
+///   2. ajoute les valeurs financières distinctes du casier (acquisition,
+///      référence, prix de vente vide) et leur historique ;
+///   3. **neutralise** les anciens moteurs pour les nouvelles opérations par des
+///      déclencheurs : plus aucune écriture implicite dans
+///      `packaging_expectations` ou `partner_packaging_ledger` ;
+///   4. **conserve** intégralement les données historiques et les reprend dans le
+///      nouveau journal comme soldes d'ouverture, avec provenance ;
+///   5. produit un rapport de rapprochement `crate_migration_review` pour les
+///      situations ambiguës à valider par l'OWNER.
+///
+/// Aucun `DROP`, aucun `DELETE`, aucune réécriture de document validé.
+/// Migration 12 — catalogue multi-brasseries administrable par l'OWNER.
+///
+/// Tables nouvelles uniquement : les référentiels existants (`products`, `brands`,
+/// `product_categories`, `product_variants`) sont étendus par
+/// `ensure_catalog_columns`, jamais dupliqués.
+pub const MIGRATION_12: &str = r#"
+        CREATE TABLE IF NOT EXISTS producers (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL,
+          country TEXT, city TEXT, logo_path TEXT, source TEXT, source_url TEXT, notes TEXT,
+          status TEXT NOT NULL DEFAULT 'ACTIVE',
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_producers_code ON producers(tenant_id, code);
+
+        CREATE TABLE IF NOT EXISTS brewery_catalogs (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, producer_id TEXT NOT NULL,
+          external_catalog_id TEXT, name TEXT NOT NULL, format TEXT, schema_version TEXT,
+          status TEXT NOT NULL DEFAULT 'ACTIVE', last_import_at INTEGER,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_brewery_catalogs_ext
+          ON brewery_catalogs(tenant_id, producer_id, external_catalog_id);
+
+        CREATE TABLE IF NOT EXISTS catalog_imports (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, branch_id TEXT NOT NULL,
+          request_key TEXT NOT NULL, format TEXT NOT NULL, producer_id TEXT, catalog_id TEXT,
+          checksum TEXT NOT NULL, status TEXT NOT NULL,
+          created_count INTEGER NOT NULL DEFAULT 0, updated_count INTEGER NOT NULL DEFAULT 0,
+          skipped_count INTEGER NOT NULL DEFAULT 0, error_count INTEGER NOT NULL DEFAULT 0,
+          report TEXT NOT NULL DEFAULT '{}', user_id TEXT NOT NULL, device_id TEXT,
+          occurred_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_imports_key
+          ON catalog_imports(tenant_id, request_key);
+
+        CREATE TABLE IF NOT EXISTS catalog_sources (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, producer_id TEXT, catalog_id TEXT,
+          label TEXT, url TEXT, retrieved_at INTEGER
+        );
+
+        INSERT OR IGNORE INTO producers
+          (id, tenant_id, code, name, country, city, source, status, created_at, updated_at)
+        VALUES
+          ('prod_solibra', 'tenant_ci_01', 'SOLIBRA', 'SOLIBRA', 'Côte d''Ivoire', 'Abidjan', 'SEED', 'ACTIVE', 0, 0),
+          ('prod_brassivoire', 'tenant_ci_01', 'BRASSIVOIRE', 'BRASSIVOIRE', 'Côte d''Ivoire', 'Abidjan', 'SEED', 'ACTIVE', 0, 0);
+
+        INSERT OR IGNORE INTO permissions (code, description) VALUES
+          ('catalog.import', 'Importer et actualiser un catalogue JSON de brasserie');
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        VALUES
+          ('tenant_ci_01','*','OWNER','catalog.import',1,0),
+          ('tenant_ci_01','*','ADMIN','catalog.import',1,0);
+"#;
+
+pub const MIGRATION_11: &str = r#"
+        -- 1. Valeurs distinctes du casier (jamais confondues avec le prix boisson)
+        ALTER TABLE crate_types ADD COLUMN acquisition_value_fcfa INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE crate_types ADD COLUMN reference_value_fcfa INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE crate_types ADD COLUMN empty_sale_price_fcfa INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE crate_types ADD COLUMN producer_id TEXT;
+        ALTER TABLE crate_types ADD COLUMN is_physical_crate INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE crate_types ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE';
+        UPDATE crate_types
+           SET reference_value_fcfa = replacement_value_fcfa
+         WHERE reference_value_fcfa = 0 AND replacement_value_fcfa > 0;
+
+        CREATE TABLE IF NOT EXISTS crate_value_history (
+          id TEXT PRIMARY KEY,
+          crate_id TEXT NOT NULL,
+          acquisition_fcfa INTEGER NOT NULL DEFAULT 0,
+          reference_fcfa INTEGER NOT NULL DEFAULT 0,
+          empty_sale_fcfa INTEGER NOT NULL DEFAULT 0,
+          effective_from INTEGER NOT NULL,
+          effective_to INTEGER,
+          changed_by TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          CHECK (acquisition_fcfa >= 0 AND reference_fcfa >= 0 AND empty_sale_fcfa >= 0)
+        );
+        CREATE INDEX IF NOT EXISTS idx_crate_value_history_type
+          ON crate_value_history(crate_id, effective_from DESC);
+
+        -- 2. Journal physique immuable des casiers
+        CREATE TABLE IF NOT EXISTS crate_movements (
+          id TEXT PRIMARY KEY,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          branch_id TEXT NOT NULL,
+          crate_id TEXT NOT NULL,
+          movement_type TEXT NOT NULL CHECK (movement_type IN (
+            'initial_balance','purchase_receipt_full_in','sale_full_out',
+            'customer_empty_return_in','supplier_empty_exchange_out',
+            'supplier_crate_receipt_in','empty_case_sale_out','empty_case_purchase_in',
+            'adjustment_in','adjustment_out','damaged','lost','writeoff')),
+          qty INTEGER NOT NULL CHECK (qty > 0),
+          direction TEXT NOT NULL CHECK (direction IN ('IN','OUT','NEUTRAL')),
+          full_before INTEGER NOT NULL DEFAULT 0,
+          full_after INTEGER NOT NULL DEFAULT 0,
+          empty_before INTEGER NOT NULL DEFAULT 0,
+          empty_after INTEGER NOT NULL DEFAULT 0,
+          untracked_qty INTEGER NOT NULL DEFAULT 0 CHECK (untracked_qty >= 0),
+          partner_type TEXT,
+          partner_id TEXT,
+          partner_delta INTEGER NOT NULL DEFAULT 0,
+          document_id TEXT NOT NULL,
+          origin TEXT NOT NULL DEFAULT '',
+          destination TEXT NOT NULL DEFAULT '',
+          reason TEXT NOT NULL,
+          unit_value_fcfa INTEGER NOT NULL DEFAULT 0 CHECK (unit_value_fcfa >= 0),
+          user_id TEXT NOT NULL,
+          device_id TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'RUNTIME',
+          legacy_reference TEXT,
+          reversal_of TEXT,
+          occurred_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_crate_movements_type
+          ON crate_movements(branch_id, crate_id, occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_crate_movements_partner
+          ON crate_movements(branch_id, partner_type, partner_id, crate_id);
+        CREATE INDEX IF NOT EXISTS idx_crate_movements_document
+          ON crate_movements(document_id);
+
+        CREATE TRIGGER IF NOT EXISTS trg_crate_movements_no_update
+          BEFORE UPDATE ON crate_movements BEGIN
+            SELECT RAISE(ABORT, 'CRATE_MOVEMENT_IMMUTABLE');
+          END;
+        CREATE TRIGGER IF NOT EXISTS trg_crate_movements_no_delete
+          BEFORE DELETE ON crate_movements BEGIN
+            SELECT RAISE(ABORT, 'CRATE_MOVEMENT_IMMUTABLE');
+          END;
+
+        -- Solde physique par partenaire : dérivé du journal, jamais saisi.
+        CREATE VIEW IF NOT EXISTS partner_crate_balances AS
+          SELECT branch_id, partner_type, partner_id, crate_id,
+                 SUM(CASE WHEN partner_delta > 0 THEN partner_delta ELSE 0 END) AS out_qty,
+                 SUM(CASE WHEN partner_delta < 0 THEN -partner_delta ELSE 0 END) AS in_qty,
+                 SUM(partner_delta) AS balance_qty,
+                 MIN(occurred_at) AS first_movement_at,
+                 MAX(occurred_at) AS last_movement_at
+          FROM crate_movements
+          WHERE partner_id IS NOT NULL
+          GROUP BY branch_id, partner_type, partner_id, crate_id;
+
+        -- 3. Neutralisation des anciens moteurs pour les nouvelles opérations
+        ALTER TABLE packaging_expectations ADD COLUMN engine TEXT NOT NULL DEFAULT 'LEGACY_0015';
+        ALTER TABLE packaging_expectations ADD COLUMN frozen_at INTEGER;
+        UPDATE packaging_expectations
+           SET frozen_at = CAST(strftime('%s','now') AS INTEGER) * 1000
+         WHERE frozen_at IS NULL;
+        ALTER TABLE partner_packaging_ledger ADD COLUMN engine TEXT NOT NULL DEFAULT 'LEGACY_0015';
+
+        CREATE TRIGGER IF NOT EXISTS trg_packaging_expectations_engine_disabled
+          BEFORE INSERT ON packaging_expectations
+          WHEN NEW.engine = 'LEGACY_0015' BEGIN
+            SELECT RAISE(ABORT, 'LEGACY_PACKAGING_ENGINE_DISABLED');
+          END;
+        CREATE TRIGGER IF NOT EXISTS trg_packaging_expectations_frozen
+          BEFORE UPDATE ON packaging_expectations
+          WHEN NEW.expected_qty <> OLD.expected_qty
+            OR NEW.received_qty <> OLD.received_qty
+            OR NEW.status <> OLD.status
+            OR NEW.engine <> OLD.engine BEGIN
+            SELECT RAISE(ABORT, 'LEGACY_PACKAGING_ENGINE_FROZEN');
+          END;
+        CREATE TRIGGER IF NOT EXISTS trg_partner_packaging_ledger_engine_disabled
+          BEFORE INSERT ON partner_packaging_ledger
+          WHEN NEW.engine = 'LEGACY_0015' BEGIN
+            SELECT RAISE(ABORT, 'LEGACY_PACKAGING_ENGINE_DISABLED');
+          END;
+
+        -- 4. Reprise des soldes historiques dans le journal physique
+        INSERT INTO crate_movements
+          (id, idempotency_key, branch_id, crate_id, movement_type, qty, direction,
+           full_before, full_after, empty_before, empty_after, untracked_qty,
+           partner_type, partner_id, partner_delta, document_id, origin, destination,
+           reason, unit_value_fcfa, user_id, device_id, source, legacy_reference,
+           reversal_of, occurred_at)
+        SELECT 'cmov_mig_depot_' || cs.branch_id || '_' || cs.crate_id,
+               'mig0011_depot_' || cs.branch_id || '_' || cs.crate_id,
+               cs.branch_id, cs.crate_id, 'initial_balance',
+               CASE WHEN cs.full_qty + cs.empty_qty > 0 THEN cs.full_qty + cs.empty_qty ELSE 1 END,
+               'IN', 0, cs.full_qty, 0, cs.empty_qty, 0,
+               NULL, NULL, 0, 'MIGRATION_0011', 'REPRISE_HISTORIQUE', 'DEPOT',
+               'Solde d''ouverture repris tel quel (stock historique déclaré)',
+               COALESCE((SELECT ct.reference_value_fcfa FROM crate_types ct WHERE ct.id = cs.crate_id), 0),
+               'system_migration', 'migration_0011', 'MIGRATION_0011',
+               'crate_stock', NULL, CAST(strftime('%s','now') AS INTEGER) * 1000
+          FROM crate_stock cs
+         WHERE cs.full_qty > 0 OR cs.empty_qty > 0;
+
+        INSERT INTO crate_movements
+          (id, idempotency_key, branch_id, crate_id, movement_type, qty, direction,
+           full_before, full_after, empty_before, empty_after, untracked_qty,
+           partner_type, partner_id, partner_delta, document_id, origin, destination,
+           reason, unit_value_fcfa, user_id, device_id, source, legacy_reference,
+           reversal_of, occurred_at)
+        SELECT 'cmov_mig_pe_' || pe.id, 'mig0011_partner_' || pe.id,
+               pe.branch_id, pe.ref_id, 'initial_balance',
+               pe.expected_qty - pe.received_qty, 'NEUTRAL', 0, 0, 0, 0, 0,
+               pe.partner_type, pe.partner_id, pe.expected_qty - pe.received_qty,
+               pe.document_id, 'MIGRATION_0015', 'COMPTE_PARTENAIRE',
+               'Solde physique historique repris depuis les obligations d''emballages',
+               COALESCE((SELECT ct.reference_value_fcfa FROM crate_types ct WHERE ct.id = pe.ref_id), 0),
+               'system_migration', 'migration_0011', 'MIGRATION_0015', pe.id,
+               NULL, CAST(strftime('%s','now') AS INTEGER) * 1000
+          FROM packaging_expectations pe
+         WHERE pe.item_kind = 'CRATE'
+           AND pe.partner_type IN ('CUSTOMER', 'SUPPLIER')
+           AND pe.expected_qty > pe.received_qty
+           AND EXISTS (SELECT 1 FROM crate_types ct WHERE ct.id = pe.ref_id);
+
+        -- 5. Rapport de rapprochement : rien n'est converti sans validation OWNER
+        CREATE TABLE IF NOT EXISTS crate_migration_review (
+          id TEXT PRIMARY KEY,
+          category TEXT NOT NULL,
+          partner_type TEXT,
+          partner_id TEXT,
+          reference TEXT NOT NULL,
+          qty INTEGER NOT NULL,
+          suggested_qty INTEGER NOT NULL DEFAULT 0,
+          detail TEXT NOT NULL,
+          resolved INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_crate_review_category
+          ON crate_migration_review(category, resolved);
+
+        INSERT INTO crate_migration_review
+          (id, category, partner_type, partner_id, reference, qty, suggested_qty, detail, resolved, created_at)
+        SELECT 'cmrev_crate_' || pe.id, 'CRATE_TYPE_UNKNOWN', pe.partner_type, pe.partner_id,
+               pe.ref_id, pe.expected_qty - pe.received_qty, 0,
+               'Casiers non retournés dont le type est inconnu du référentiel : solde non repris, à qualifier.',
+               0, CAST(strftime('%s','now') AS INTEGER) * 1000
+          FROM packaging_expectations pe
+         WHERE pe.item_kind = 'CRATE'
+           AND pe.expected_qty > pe.received_qty
+           AND NOT EXISTS (SELECT 1 FROM crate_types ct WHERE ct.id = pe.ref_id);
+
+        INSERT INTO crate_migration_review
+          (id, category, partner_type, partner_id, reference, qty, suggested_qty, detail, resolved, created_at)
+        SELECT 'cmrev_bottle_' || pe.id, 'LEGACY_BOTTLE_OBLIGATION', pe.partner_type, pe.partner_id,
+               pe.ref_id, pe.expected_qty - pe.received_qty, 0,
+               'Bouteilles consignées par l''ancien moteur : plus suivies financièrement ni physiquement, historique conservé pour consultation.',
+               0, CAST(strftime('%s','now') AS INTEGER) * 1000
+          FROM packaging_expectations pe
+         WHERE pe.item_kind = 'BOTTLE_PROFILE'
+           AND pe.expected_qty > pe.received_qty;
+
+        INSERT INTO crate_migration_review
+          (id, category, partner_type, partner_id, reference, qty, suggested_qty, detail, resolved, created_at)
+        SELECT 'cmrev_sup_' || l.ref_id, 'SUPPLIER_OUT_NOT_DEDUCTED', 'SUPPLIER', l.partner_id,
+               l.ref_id, SUM(l.qty), 0,
+               'Casiers vides remis au fournisseur par l''ancien moteur sans décrément du stock : stock vide possiblement surévalué, à confirmer par inventaire.',
+               0, CAST(strftime('%s','now') AS INTEGER) * 1000
+          FROM partner_packaging_ledger l
+         WHERE l.item_kind = 'CRATE' AND l.partner_type = 'SUPPLIER'
+           AND l.direction = 'OUT_TO_PARTNER'
+         GROUP BY l.ref_id, l.partner_id
+        HAVING SUM(l.qty) > 0;
+
+        -- 6. Lignes commerciales de casiers vides (circuit de vente normal).
+        --    Les colonnes sont ajoutées par `ensure_sale_crate_columns` : un
+        --    `ALTER TABLE` nu casserait une base où elles existent déjà.
+
+        -- 7. Permissions explicites des opérations sur casiers
+        INSERT OR IGNORE INTO permissions (code, description) VALUES
+          ('crate.adjust', 'Ajuster ou corriger un stock de casiers'),
+          ('crate.loss', 'Déclarer une perte ou une casse de casier'),
+          ('crate.sell', 'Vendre un casier vide');
+        INSERT OR IGNORE INTO role_permissions
+          (tenant_id, branch_id, role, permission, allowed, updated_at)
+        VALUES
+          ('tenant_ci_01','*','OWNER','crate.adjust',1,0),
+          ('tenant_ci_01','*','OWNER','crate.loss',1,0),
+          ('tenant_ci_01','*','OWNER','crate.sell',1,0),
+          ('tenant_ci_01','*','ADMIN','crate.adjust',1,0),
+          ('tenant_ci_01','*','ADMIN','crate.loss',1,0),
+          ('tenant_ci_01','*','ADMIN','crate.sell',1,0),
+          ('tenant_ci_01','*','MANAGER','crate.adjust',1,0),
+          ('tenant_ci_01','*','MANAGER','crate.sell',1,0),
+          ('tenant_ci_01','*','CASHIER','crate.sell',1,0);
+        "#;
+
 /// Applique les migrations ordonnées et enregistre leur version dans la base locale.
 pub fn migrate(conn: &Connection) -> CoreResult<()> {
     conn.execute_batch(
@@ -624,10 +927,10 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
          INSERT OR IGNORE INTO schema_meta (version, applied_at) VALUES (0, 0);",
     )?;
     let current: i64 = conn.query_row("SELECT MAX(version) FROM schema_meta", [], |r| r.get(0))?;
-    let migrations: [(i64, &str); 10] = [
+    let migrations: [(i64, &str); 12] = [
         (1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3), (4, MIGRATION_4),
         (5, MIGRATION_5), (6, MIGRATION_6), (7, MIGRATION_7), (8, MIGRATION_8),
-        (9, MIGRATION_9), (10, MIGRATION_10),
+        (9, MIGRATION_9), (10, MIGRATION_10), (11, MIGRATION_11), (12, MIGRATION_12),
     ];
     for (version, sql) in migrations {
         if version <= current {
@@ -643,7 +946,67 @@ pub fn migrate(conn: &Connection) -> CoreResult<()> {
     }
     ensure_security_columns(conn)?;
     ensure_desktop_columns(conn)?;
+    ensure_sale_crate_columns(conn)?;
+    ensure_catalog_columns(conn)?;
     Ok(())
+}
+
+/// Colonnes du catalogue multi-brasseries ajoutées de façon rejouable : ces
+/// tables existent depuis la migration 4, seule leur extension est nouvelle.
+fn ensure_catalog_columns(conn: &Connection) -> CoreResult<()> {
+    for (column, definition) in [
+        ("tenant_id", "tenant_id TEXT"),
+        ("code", "code TEXT"),
+        ("producer_id", "producer_id TEXT"),
+        ("status", "status TEXT NOT NULL DEFAULT 'ACTIVE'"),
+        ("created_at", "created_at INTEGER NOT NULL DEFAULT 0"),
+        ("updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "brands", column, definition)?;
+    }
+    for (column, definition) in [
+        ("tenant_id", "tenant_id TEXT"),
+        ("code", "code TEXT"),
+        ("parent_id", "parent_id TEXT"),
+        ("description", "description TEXT"),
+        ("is_alcoholic", "is_alcoholic INTEGER NOT NULL DEFAULT 0"),
+        ("sort_order", "sort_order INTEGER NOT NULL DEFAULT 0"),
+        ("status", "status TEXT NOT NULL DEFAULT 'ACTIVE'"),
+        ("created_at", "created_at INTEGER NOT NULL DEFAULT 0"),
+        ("updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "product_categories", column, definition)?;
+    }
+    for (column, definition) in [
+        ("code", "code TEXT"),
+        ("producer_id", "producer_id TEXT"),
+        ("source", "source TEXT"),
+        ("status", "status TEXT NOT NULL DEFAULT 'ACTIVE'"),
+        ("updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "products", column, definition)?;
+    }
+    ensure_column(conn, "crate_types", "capacity_to_verify", "capacity_to_verify INTEGER NOT NULL DEFAULT 0")?;
+    for (column, definition) in [
+        ("product_id", "product_id TEXT"),
+        ("producer_id", "producer_id TEXT"),
+        ("category_id", "category_id TEXT"),
+        ("brand_id", "brand_id TEXT"),
+        ("source", "source TEXT"),
+        ("to_verify", "to_verify INTEGER NOT NULL DEFAULT 0"),
+        ("updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "product_variants", column, definition)?;
+    }
+    Ok(())
+}
+
+/// Colonnes de vente propres aux casiers vides, ajoutées de façon rejouable :
+/// une base créée avant la migration 11 peut déjà les posséder.
+fn ensure_sale_crate_columns(conn: &Connection) -> CoreResult<()> {
+    ensure_column(conn, "sale_lines", "is_packaging", "is_packaging INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "sale_lines", "crate_type_id", "crate_type_id TEXT")?;
+    ensure_column(conn, "sales", "packaging_sales_fcfa", "packaging_sales_fcfa INTEGER NOT NULL DEFAULT 0")
 }
 
 fn insert_if_absent<P: rusqlite::Params>(conn: &Connection, sql: &str, values: P) -> CoreResult<()> {
@@ -691,12 +1054,49 @@ pub fn seed(conn: &mut Connection) -> CoreResult<()> {
 
     for spec in CRATE_TYPES.iter() {
         tx.execute(
-            "INSERT OR IGNORE INTO crate_types (id, code, capacity, compatibility_group_id, allow_half_case, replacement_value_fcfa, is_reusable) VALUES (?1,?2,?3,?4,?5,?6,1)",
-            params![spec.id, spec.code, spec.capacity, spec.group, spec.allow_half, spec.replacement_fcfa],
+            "INSERT OR IGNORE INTO crate_types
+               (id, code, capacity, compatibility_group_id, allow_half_case,
+                replacement_value_fcfa, is_reusable, name, compartments,
+                acquisition_value_fcfa, reference_value_fcfa, empty_sale_price_fcfa)
+             VALUES (?1,?2,?3,?4,?5,?6,1,?7,?3,?8,?9,0)",
+            params![
+                spec.id, spec.code, spec.capacity, spec.group, spec.allow_half,
+                spec.replacement_fcfa, spec.code,
+                spec.replacement_fcfa, spec.replacement_fcfa
+            ],
+        )?;
+        // Jeu pilote : un stock initial explicite et tracé, jamais déduit des boissons.
+        tx.execute(
+            "INSERT OR IGNORE INTO crate_stock (branch_id, crate_id, full_qty, empty_qty) VALUES (?1,?2,30,24)",
+            params![BRANCH_ID, spec.id],
         )?;
         tx.execute(
-            "INSERT OR IGNORE INTO crate_stock (branch_id, crate_id, full_qty, empty_qty) VALUES (?1,?2,0,0)",
-            params![BRANCH_ID, spec.id],
+            "INSERT OR IGNORE INTO crate_movements
+               (id, idempotency_key, branch_id, crate_id, movement_type, qty, direction,
+                full_before, full_after, empty_before, empty_after, untracked_qty,
+                partner_type, partner_id, partner_delta, document_id, origin, destination,
+                reason, unit_value_fcfa, user_id, device_id, source, legacy_reference,
+                reversal_of, occurred_at)
+             VALUES (?1,?2,?3,?4,'initial_balance',54,'IN',0,30,0,24,0,
+                     NULL,NULL,0,'SEED_DEMO','DEPOT','DEPOT',
+                     'Stock initial de démonstration (casiers pleins et vides)',
+                     ?5,'usr_owner',?6,'SEED_DEMO',NULL,NULL,?7)",
+            params![
+                format!("cmov_seed_{}", spec.id),
+                format!("seed0011_{}", spec.id),
+                BRANCH_ID, spec.id, spec.replacement_fcfa, DEVICE_ID, now
+            ],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO crate_value_history
+               (id, crate_id, acquisition_fcfa, reference_fcfa, empty_sale_fcfa,
+                effective_from, effective_to, changed_by, reason, created_at)
+             VALUES (?1,?2,?3,?4,0,?5,NULL,'usr_owner',
+                     'Valeur pilote à la création du format',?5)",
+            params![
+                format!("cvh_seed_{}", spec.id),
+                spec.id, spec.replacement_fcfa, spec.replacement_fcfa, now
+            ],
         )?;
     }
 
@@ -818,6 +1218,28 @@ pub fn audit(conn: &Connection, branch: &str, user: &str, action: &str, details:
     conn.execute(
         "INSERT INTO audit_logs (id, branch_id, user_id, action, details, occurred_at) VALUES (?1,?2,?3,?4,?5,?6)",
         params![new_id("aud"), branch, user, action, details, now_ms()],
+    )?;
+    Ok(())
+}
+
+/// Variante idempotente : une requête rejouée avec la même clé ne crée pas de
+/// seconde opération d'outbox.
+pub fn enqueue_once(
+    conn: &Connection,
+    tenant: &str,
+    branch: &str,
+    device: &str,
+    user: &str,
+    command: &str,
+    summary: &str,
+    payload: &str,
+    base_revision: i64,
+    idempotency_key: &str,
+) -> CoreResult<()> {
+    let next: i64 = conn.query_row("SELECT COALESCE(MAX(local_sequence), 0) + 1 FROM sync_outbox", [], |r| r.get(0))?;
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_outbox (operation_id, tenant_id, branch_id, device_id, user_id, local_sequence, schema_version, command_type, summary, payload_json, base_revision, idempotency_key, status, created_at) VALUES (?1,?2,?3,?4,?5,?6,1,?7,?8,?9,?10,?11,'PENDING',?12)",
+        params![new_id("op"), tenant, branch, device, user, next, command, summary, payload, base_revision, idempotency_key, now_ms()],
     )?;
     Ok(())
 }

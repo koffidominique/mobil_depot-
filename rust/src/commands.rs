@@ -123,19 +123,47 @@ fn permission_for_command(command: &str) -> Option<&'static str> {
         | "getCrateTypes" | "get_crate_types" | "getPackagingStock" | "get_packaging_stock"
         | "getPartnerStatement" | "get_partner_statement" | "getPackagingAccount"
         | "get_packaging_account" | "getSyncHistory" | "get_sync_history"
+        | "getCrateStock" | "get_crate_stock" | "getCrateStockByType" | "get_crate_stock_by_type"
+        | "getCustomerCrateBalance" | "get_customer_crate_balance"
+        | "getSupplierCrateBalance" | "get_supplier_crate_balance"
+        | "getCrateMovementHistory" | "get_crate_movement_history"
+        | "getCrateValuationHistory" | "get_crate_valuation_history"
+        | "getCrateMigrationReview" | "get_crate_migration_review"
         | "getSynchronizationStatus" | "get_synchronization_status" | "getPendingOperations"
         | "get_pending_operations" | "startSynchronization" | "start_synchronization"
         | "backupDatabase" | "backup_database" | "getAuditLog" | "listBranches" | "list_branches"
         | "listStockTransfers" | "list_stock_transfers" | "exportDesktopSnapshot"
         | "export_desktop_snapshot" | "importDesktopUpdates" => Some("read"),
         "createSale" | "create_sale" | "validateSale" | "validate_sale" | "createMixedOrder"
-        | "create_mixed_order" => Some("sales.write"),
+        | "create_mixed_order" | "createCustomer" | "create_customer" => Some("sales.write"),
+        // Fusion de fiches : opération de gestion (le rôle est revérifié dans la commande).
+        "mergeCustomers" | "merge_customers" => Some("catalog.write"),
         "recordPayment" | "record_payment" | "recordCashMovement" | "record_cash_movement"
         | "openCashSession" | "open_cash_session" | "closeCashSession" | "close_cash_session" => Some("cash.write"),
         "createPurchaseOrder" | "create_purchase_order" | "receivePurchase" | "receive_purchase"
         | "recordSupplierReturn" | "record_supplier_return"
-        | "registerPackagingReturn" | "register_packaging_return"
-        | "correctPackagingMovement" | "correct_packaging_movement" => Some("purchase.write"),
+        | "recordSupplierCrateExchange" | "record_supplier_crate_exchange" => Some("purchase.write"),
+        // Retours physiques de casiers : accessibles au comptoir.
+        "registerPackagingReturn" | "register_packaging_return"
+        | "recordCustomerCrateReturn" | "record_customer_crate_return" => Some("sales.write"),
+        "recordCrateAdjustment" | "record_crate_adjustment"
+        | "resolveCrateMigrationReview" | "resolve_crate_migration_review"
+        | "correctPackagingMovement" | "correct_packaging_movement" => Some("crate.adjust"),
+        "recordCrateLoss" | "record_crate_loss" => Some("crate.loss"),
+        "recordEmptyCrateSale" | "record_empty_crate_sale" => Some("crate.sell"),
+        "configureCrateValuation" | "configure_crate_valuation" => Some("catalog.write"),
+        "createCatalogProducer" | "create_catalog_producer"
+        | "updateCatalogProducer" | "update_catalog_producer"
+        | "createCatalogCategory" | "create_catalog_category"
+        | "createCatalogBrand" | "create_catalog_brand"
+        | "createCatalogProduct" | "create_catalog_product"
+        | "activateCatalogProduct" | "activate_catalog_product"
+        | "deactivateCatalogProduct" | "deactivate_catalog_product"
+        | "updateCatalogVariant" | "update_catalog_variant"
+        | "createBreweryCatalog" | "create_brewery_catalog"
+        | "updateBreweryCatalog" | "update_brewery_catalog" => Some("catalog.write"),
+        "previewCatalogImport" | "preview_catalog_import"
+        | "importCatalogJson" | "import_catalog_json" => Some("catalog.import"),
         "recordInventoryCount" | "record_inventory_count" | "createStockTransfer"
         | "create_stock_transfer" => Some("inventory.write"),
         "saveProductVariant" | "save_product_variant" | "updateVariantPrices"
@@ -299,7 +327,24 @@ fn prepare_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     )?;
     enriched["offline_policy"] = json!(policy);
 
-    if let Some(customer_id) = field_str_opt(payload, "customer_id") {
+    // Fiche de clientèle : une vente sans identifiant peut désigner un client
+    // par son nom (et éventuellement son téléphone). On retrouve alors sa fiche
+    // pour appliquer son plafond ; sinon le client sera créé à l'écriture.
+    if field_str_opt(&enriched, "customer_id").is_none() {
+        if let Some(raw_name) = field_str_opt(&enriched, "customer_name") {
+            let name = display_name(raw_name)?;
+            let phone = phone_key(field_str_opt(&enriched, "customer_phone"))?;
+            match find_customer(conn, &a.tenant_id, &name, &phone)? {
+                Some(id) => enriched["customer_id"] = json!(id),
+                None => {
+                    enriched["credit_limit_fcfa"] = json!(0);
+                    enriched["outstanding_balance_fcfa"] = json!(0);
+                }
+            }
+        }
+    }
+
+    if let Some(customer_id) = field_str_opt(&enriched, "customer_id") {
         let customer: Option<(i64, i64, i64)> = conn
             .query_row(
                 "SELECT credit_limit_fcfa, financial_balance_fcfa, is_archived FROM customers WHERE id = ?1",
@@ -316,6 +361,27 @@ fn prepare_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
         enriched["outstanding_balance_fcfa"] = json!(balance);
     }
 
+    // Stock disponible par boisson : lignes normales ET lignes des casiers
+    // mixtes, pour que les alertes de stock portent sur la vraie référence.
+    if let Some(cases) = enriched["mixed_cases"].as_array_mut() {
+        for case in cases.iter_mut() {
+            if let Some(lines) = case.get_mut("lines").and_then(Value::as_array_mut) {
+                for line in lines.iter_mut() {
+                    let variant = field_str(line, "variant_id")?.to_string();
+                    let stock: i64 = conn
+                        .query_row(
+                            "SELECT full_units_qty FROM stock_balances WHERE branch_id = ?1 AND variant_id = ?2",
+                            params![a.branch_id, variant],
+                            |r| r.get(0),
+                        )
+                        .optional()?
+                        .unwrap_or(0);
+                    line["available_stock_units"] = json!(stock);
+                }
+            }
+        }
+    }
+
     if let Some(lines) = enriched["lines"].as_array_mut() {
         for line in lines.iter_mut() {
             let variant = field_str(line, "variant_id")?.to_string();
@@ -330,6 +396,46 @@ fn prepare_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
             line["available_stock_units"] = json!(stock);
         }
     }
+
+    // Capacité de casier et autorisation de demi-casier : relues en base pour
+    // chaque ligne, jamais reprises du client.
+    if let Some(lines) = enriched["lines"].as_array_mut() {
+        for line in lines.iter_mut() {
+            let unit = line.get("unit").and_then(Value::as_str).unwrap_or_default();
+            if unit != "CASE" && unit != "HALF_CASE" {
+                continue;
+            }
+            if let Some(spec) = crate::crates::crate_spec_owned_for_line(conn, line) {
+                line["crate_type_id"] = json!(spec.id);
+                line["crate_capacity"] = json!(spec.capacity);
+                line["allow_half_case"] = json!(spec.allow_half);
+            }
+        }
+    }
+
+    // Formats de casiers mixtes : résolus en base (catalogues, formats créés par
+    // l'OWNER), puis transmis au domaine qui reste pur. Un format inconnu est
+    // simplement absent : le domaine le refusera explicitement (CRATE_NOT_FOUND).
+    if let Some(cases) = enriched.get("mixed_cases").and_then(Value::as_array) {
+        let mut specs = Vec::new();
+        for case in cases {
+            if let Some(id) = case.get("crate_type_id").and_then(Value::as_str) {
+                if let Ok(spec) = crate::crates::crate_spec_owned_from_db(conn, id) {
+                    specs.push(json!({
+                        "id": spec.id,
+                        "code": spec.code,
+                        "capacity": spec.capacity,
+                        "group": spec.group,
+                        "allow_half": spec.allow_half,
+                        "replacement_fcfa": spec.replacement_fcfa
+                    }));
+                }
+            }
+        }
+        if !specs.is_empty() {
+            enriched["resolved_crate_specs"] = json!(specs);
+        }
+    }
     Ok(enriched)
 }
 
@@ -341,17 +447,72 @@ pub fn validate_sale(conn: &Connection, payload: &Value) -> CoreResult<Value> {
 pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let now = now_ms();
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let enriched = prepare_sale(&tx, payload)?;
-    let result = validate_sale_rules(&enriched)?;
     let a = actor(&tx, payload)?;
-    let customer_id = field_str_opt(payload, "customer_id").map(str::to_string);
-    let sale_id = new_id("sale");
-    let receipt = format!(
-        "RC-{}",
-        now
-    );
 
-    record_sale_packaging_expectations(&tx, &a, &sale_id, payload)?;
+    // Idempotence : la vente écrit plusieurs tables (vente, lignes, paiements,
+    // stock, casiers, caisse, audit, outbox). Un rejeu avec la même clé — double
+    // appui, nouvelle tentative après coupure réseau — renvoie la vente déjà
+    // enregistrée au lieu d'en créer une seconde.
+    let request_key = field_str_opt(payload, "request_key").map(str::to_string);
+    if let Some(key) = request_key.as_deref() {
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT payload_json FROM sync_outbox WHERE branch_id = ?1 AND idempotency_key = ?2",
+                params![a.branch_id, key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(stored_json) = previous {
+            let stored: Value = serde_json::from_str(&stored_json).unwrap_or(Value::Null);
+            return Ok(json!({
+                "sale_id": stored.get("sale_id").cloned().unwrap_or(Value::Null),
+                "receipt_number": stored.get("receipt_number").cloned().unwrap_or(Value::Null),
+                "total_fcfa": stored.get("total_fcfa").cloned().unwrap_or(json!(0)),
+                "credit_fcfa": stored.get("credit_fcfa").cloned().unwrap_or(json!(0)),
+                "customer_id": stored.get("customer_id").cloned().unwrap_or(Value::Null),
+                "customer_name": stored.get("customer_name").cloned().unwrap_or(Value::Null),
+                "customer_created": false,
+                "outbox_status": "PENDING",
+                "idempotent": true,
+                "crate_movements": [],
+                "crate_balance_is_physical": true
+            }));
+        }
+    }
+
+    let mut enriched = prepare_sale(&tx, payload)?;
+    let result = validate_sale_rules(&enriched)?;
+    // Fiche de clientèle obligatoire : un client inconnu est enregistré dans la
+    // même transaction que la vente, puis rattaché à la vente, aux mouvements de
+    // casiers et au suivi (achats, crédit, soldes).
+    let mut customer_created = false;
+    let customer_id = match field_str_opt(&enriched, "customer_id") {
+        Some(id) => Some(id.to_string()),
+        None => {
+            let raw_name = field_str(&enriched, "customer_name")?.to_string();
+            let phone = field_str_opt(&enriched, "customer_phone").map(str::to_string);
+            let (id, created) = ensure_customer(
+                &tx, &a, &raw_name, phone.as_deref(), field_str_opt(&enriched, "customer_neighborhood"),
+            )?;
+            customer_created = created;
+            if created {
+                db::audit(
+                    &tx, &a.branch_id, &a.user_id, "CUSTOMER_CREATED",
+                    &format!("Fiche client {} ouverte à la vente", display_name(&raw_name)?),
+                )?;
+            }
+            Some(id)
+        }
+    };
+    if let Some(id) = customer_id.as_deref() {
+        // Les mouvements de casiers de la vente s'imputent à ce client.
+        enriched["customer_id"] = json!(id);
+    }
+    let sale_id = new_id("sale");
+    // Deux ventes dans la même milliseconde ne doivent pas partager un numéro.
+    let suffix = sale_id.rsplit('_').next().unwrap_or("0000");
+    let receipt = format!("RC-{}-{}", now, &suffix[..suffix.len().min(4)]);
+
     let total = field_i64(&result, "total_fcfa")?;
     let paid = field_i64(&result, "confirmed_paid_fcfa")?;
     let pending = field_i64(&result, "pending_mobile_money_fcfa")?;
@@ -373,7 +534,7 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
         ],
     )?;
 
-    for line in field_array(payload, "lines")? {
+    for line in field_array(&enriched, "lines")? {
         let count = field_i64(line, "unit_count")?;
         let physical = physical_units(
             field_str(line, "unit")?, count, field_i64(line, "crate_capacity")?,
@@ -384,44 +545,60 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
             "INSERT INTO sale_lines (id, sale_id, variant_id, variant_name, unit_code, unit_count, physical_units, unit_price_fcfa, line_total_fcfa, is_mixed) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,0)",
             params![new_id("sline"), sale_id, field_str(line, "variant_id")?, field_str(line, "variant_name")?, field_str(line, "unit")?, count, physical, field_i64(line, "unit_price_fcfa")?, line_total],
         )?;
-        let current: i64 = tx.query_row(
-            "SELECT full_units_qty FROM stock_balances WHERE branch_id = ?1 AND variant_id = ?2",
-            params![a.branch_id, field_str(line, "variant_id")?],
-            |r| r.get(0),
-        )?;
-        let next = current - physical;
+        // Sortie de stock réelle : la quantité physique quitte le dépôt, même si
+        // la vente est à crédit. Un variant jamais approvisionné reçoit une ligne
+        // négative plutôt qu'une erreur SQL (le décalage reste visible).
         tx.execute(
-            "UPDATE stock_balances SET full_units_qty = ?1 WHERE branch_id = ?2 AND variant_id = ?3",
-            params![next, a.branch_id, field_str(line, "variant_id")?],
+            "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units, server_revision)
+             VALUES (?1,?2,?3,12,1)
+             ON CONFLICT(branch_id,variant_id) DO UPDATE SET
+               full_units_qty = stock_balances.full_units_qty - ?4,
+               server_revision = server_revision + 1",
+            params![a.branch_id, field_str(line, "variant_id")?, -physical, physical],
         )?;
+        // Journal de stock : c'est ici que la sortie se lit (le journal de caisse
+        // ne doit contenir que des montants).
         tx.execute(
-            "INSERT INTO cash_movements (id, branch_id, movement_type, signed_amount_fcfa, label, occurred_at) VALUES (?1,?2,'STOCK_OUT',0,?3,?4)",
-            params![new_id("cmov"), a.branch_id, format!("Sortie vente {receipt}"), now],
+            "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+             VALUES (?1,?2,?3,'SALE_OUT',?4,?5,?6,?7,?8,?9)",
+            params![
+                new_id("smov"), a.branch_id, field_str(line, "variant_id")?, -physical,
+                format!("Vente {receipt}"), sale_id, a.user_id, a.device_id, now
+            ],
         )?;
     }
 
-    let mixed_cases: Vec<Value> = payload
+    let mixed_cases: Vec<Value> = enriched
         .get("mixed_cases")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     for case in &mixed_cases {
-        let validated = validate_mixed_case(case)?;
+        let crate_id = field_str(case, "crate_type_id")?.to_string();
+        let spec = resolved_crate_spec(&enriched, &crate_id)?;
+        let validated = validate_mixed_case_with(case, &spec)?;
         for line in field_array(case, "lines")? {
             let qty = field_i64(line, "quantity_bottles")?;
             let variant = field_str(line, "variant_id")?;
-            let current: i64 = tx.query_row(
-                "SELECT full_units_qty FROM stock_balances WHERE branch_id = ?1 AND variant_id = ?2",
-                params![a.branch_id, variant],
-                |r| r.get(0),
-            )?;
             tx.execute(
-                "UPDATE stock_balances SET full_units_qty = ?1 WHERE branch_id = ?2 AND variant_id = ?3",
-                params![current - qty, a.branch_id, variant],
+                "INSERT INTO stock_balances (branch_id, variant_id, full_units_qty, min_alert_units, server_revision)
+                 VALUES (?1,?2,?3,12,1)
+                 ON CONFLICT(branch_id,variant_id) DO UPDATE SET
+                   full_units_qty = stock_balances.full_units_qty - ?4,
+                   server_revision = server_revision + 1",
+                params![a.branch_id, variant, -qty, qty],
             )?;
             tx.execute(
                 "INSERT INTO sale_lines (id, sale_id, variant_id, variant_name, unit_code, unit_count, physical_units, unit_price_fcfa, line_total_fcfa, is_mixed) VALUES (?1,?2,?3,?4,'BOTTLE',?5,?6,?7,?8,1)",
                 params![new_id("sline"), sale_id, variant, field_str(line, "variant_name")?, qty, qty, field_i64(line, "unit_price_fcfa")?, checked_mul(field_i64(line, "unit_price_fcfa")?, qty, "mixte")?],
+            )?;
+            tx.execute(
+                "INSERT INTO stock_movements (id, branch_id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at)
+                 VALUES (?1,?2,?3,'SALE_OUT',?4,?5,?6,?7,?8,?9)",
+                params![
+                    new_id("smov"), a.branch_id, variant, -qty,
+                    format!("Vente {receipt} (casier mixte)"), sale_id, a.user_id, a.device_id, now
+                ],
             )?;
         }
         let _ = field_i64(&validated, "total_drinks_fcfa")?;
@@ -450,6 +627,15 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
                     "UPDATE cash_sessions SET expected_closing_fcfa = expected_closing_fcfa + ?1 WHERE id = ?2",
                     params![amount, session],
                 )?;
+                // Traçabilité : les rapports somment les mouvements de caisse
+                // positifs, une vente en espèces doit donc y figurer.
+                tx.execute(
+                    "INSERT INTO cash_movements (id, session_id, branch_id, movement_type, signed_amount_fcfa, label, occurred_at) VALUES (?1,?2,?3,'IN',?4,?5,?6)",
+                    params![
+                        new_id("cmv"), session, a.branch_id, amount,
+                        format!("Encaissement vente {receipt}"), now
+                    ],
+                )?;
             }
         }
     }
@@ -459,8 +645,11 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
             "UPDATE customers SET total_purchases_fcfa = total_purchases_fcfa + ?1, total_paid_fcfa = total_paid_fcfa + ?2, financial_balance_fcfa = financial_balance_fcfa + ?3 WHERE id = ?4",
             params![total, paid, credit, id],
         )?;
-        register_sale_packaging(&tx, &a, &sale_id, &receipt, payload, customer_id.as_deref())?;
     }
+
+    // Casiers plastiques : journal physique séparé, dans la même transaction.
+    // Aucune attente d'emballage, aucune bouteille, aucune dette n'est créée ici.
+    let crate_outcome = crates::apply_sale_crate_movements(&tx, &a, &sale_id, &receipt, &enriched)?;
 
     let command = if !mixed_cases.is_empty() {
         "MIXED_SALE_CREATE"
@@ -468,16 +657,32 @@ pub fn create_sale(conn: &mut Connection, payload: &Value) -> CoreResult<Value> 
         "SALE_CREATE"
     };
     let summary = format!("{receipt} • {customer_name} ({total} FCFA)");
-    let outbox_payload = json!({"sale_id": sale_id, "receipt_number": receipt, "total_fcfa": total, "credit_fcfa": credit});
+    let outbox_payload = json!({
+        "sale_id": sale_id, "receipt_number": receipt, "total_fcfa": total, "credit_fcfa": credit,
+        "customer_id": customer_id, "customer_created": customer_created,
+        "customer_name": customer_name
+    });
     let base = base_revision(&tx, &a.branch_id)?;
     db::enqueue(
         &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, command, &summary,
-        &outbox_payload.to_string(), base, &format!("idem_{sale_id}"),
+        &outbox_payload.to_string(), base,
+        &request_key.clone().unwrap_or_else(|| format!("idem_{sale_id}")),
     )?;
     db::audit(&tx, &a.branch_id, &a.user_id, command, &summary)?;
     tx.commit()?;
 
-    Ok(json!({"sale_id": sale_id, "receipt_number": receipt, "total_fcfa": total, "credit_fcfa": credit, "outbox_status": "PENDING"}))
+    Ok(json!({
+        "sale_id": sale_id,
+        "receipt_number": receipt,
+        "total_fcfa": total,
+        "credit_fcfa": credit,
+        "customer_id": customer_id,
+        "customer_name": customer_name,
+        "customer_created": customer_created,
+        "outbox_status": "PENDING",
+        "crate_movements": crate_outcome["crate_movements"].clone(),
+        "crate_balance_is_physical": true
+    }))
 }
 
 fn conn_query_customer_name(conn: &Connection, id: &str) -> CoreResult<String> {
@@ -490,7 +695,107 @@ fn actor_full_name(conn: &Connection, id: &str) -> CoreResult<String> {
         .map_err(|_| CoreError::new("USER_NOT_FOUND", "Utilisateur introuvable."))
 }
 
-fn open_cash_session(conn: &Connection, branch: &str) -> CoreResult<Option<String>> {
+/// Téléphone réduit à ses chiffres : « 07 07 12 34 56 » et « +2250707123456 »
+/// désignent la même fiche client.
+pub(crate) fn normalized_phone(raw: &str) -> String {
+    let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+    // Indicatif ivoirien : « +225 07 07 12 34 56 » et « 07 07 12 34 56 » sont le
+    // même numéro, donc la même fiche.
+    for prefix in ["00225", "225"] {
+        if let Some(rest) = digits.strip_prefix(prefix) {
+            if rest.chars().count() == 10 {
+                return rest.to_string();
+            }
+        }
+    }
+    digits
+}
+
+/// Nom réduit à une forme comparable : espaces compactés, casse ignorée.
+pub(crate) fn normalized_name(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ").to_uppercase()
+}
+
+/// Nom tel qu'il sera enregistré : espaces compactés, casse d'origine conservée.
+pub(crate) fn display_name(raw: &str) -> CoreResult<String> {
+    let clean = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if clean.chars().count() < 2 {
+        return Err(CoreError::new(
+            "CUSTOMER_NAME_REQUIRED",
+            "Le nom du client est obligatoire pour ouvrir une fiche de clientèle.",
+        ));
+    }
+    Ok(clean)
+}
+
+/// Téléphone utilisable comme clé d'identité : vide accepté, sinon au moins 8 chiffres.
+pub(crate) fn phone_key(raw: Option<&str>) -> CoreResult<String> {
+    let digits = raw.map(normalized_phone).unwrap_or_default();
+    if !digits.is_empty() && digits.chars().count() < 8 {
+        return Err(CoreError::new(
+            "INVALID_PHONE",
+            "Téléphone trop court : saisissez le numéro complet ou laissez vide.",
+        ));
+    }
+    Ok(digits)
+}
+
+/// Cherche la fiche existante : téléphone d'abord (identité forte), puis nom exact.
+/// Aucune fiche n'est dupliquée pour un même client.
+pub(crate) fn find_customer(
+    conn: &Connection,
+    tenant: &str,
+    name: &str,
+    phone: &str,
+) -> CoreResult<Option<String>> {
+    let wanted_name = normalized_name(name);
+    let mut stmt = conn.prepare(
+        "SELECT id, name, phone FROM customers WHERE tenant_id = ?1
+         ORDER BY is_archived ASC, rowid ASC",
+    )?;
+    let mut rows = stmt.query(params![tenant])?;
+    let mut same_name: Option<String> = None;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let existing_name: String = row.get(1)?;
+        let existing_phone: String = row.get(2)?;
+        if !phone.is_empty() && normalized_phone(&existing_phone) == phone {
+            return Ok(Some(id));
+        }
+        if same_name.is_none() && !wanted_name.is_empty() && normalized_name(&existing_name) == wanted_name {
+            same_name = Some(id);
+        }
+    }
+    Ok(same_name)
+}
+
+/// Fiche de clientèle unique : retrouve le client ou l'ouvre.
+/// Retourne `(customer_id, created)`.
+pub(crate) fn ensure_customer(
+    conn: &Connection,
+    a: &Actor,
+    raw_name: &str,
+    raw_phone: Option<&str>,
+    neighborhood: Option<&str>,
+) -> CoreResult<(String, bool)> {
+    let name = display_name(raw_name)?;
+    let phone = phone_key(raw_phone)?;
+    if let Some(id) = find_customer(conn, &a.tenant_id, &name, &phone)? {
+        return Ok((id, false));
+    }
+    let id = new_id("cust");
+    // Un nouveau comptoir n'obtient aucun crédit tant que l'OWNER ne l'a pas
+    // autorisé : la fiche sert au suivi, pas à l'endettement automatique.
+    conn.execute(
+        "INSERT INTO customers (id, tenant_id, name, phone, neighborhood, customer_type, default_price_tier,
+            credit_limit_fcfa, total_purchases_fcfa, total_paid_fcfa, financial_balance_fcfa, is_archived)
+         VALUES (?1,?2,?3,?4,?5,'DEPOT','RETAIL',0,0,0,0,0)",
+        params![id, a.tenant_id, name, phone, neighborhood.unwrap_or("").trim()],
+    )?;
+    Ok((id, true))
+}
+
+pub(crate) fn open_cash_session(conn: &Connection, branch: &str) -> CoreResult<Option<String>> {
     Ok(conn
         .query_row(
             "SELECT id FROM cash_sessions WHERE branch_id = ?1 AND status = 'OPEN' LIMIT 1",
@@ -509,205 +814,531 @@ fn base_revision(conn: &Connection, branch: &str) -> i64 {
     .unwrap_or(1)
 }
 
-fn register_sale_packaging(
-    conn: &Connection,
-    a: &Actor,
-    sale_id: &str,
-    receipt: &str,
-    payload: &Value,
-    customer_id: Option<&str>,
-) -> CoreResult<()> {
-    let mut bottles = std::collections::BTreeMap::new();
-    let mut crates = std::collections::BTreeMap::new();
-    for line in field_array(payload, "lines")? {
-        let count = field_i64(line, "unit_count")?;
-        let unit = field_str(line, "unit")?;
-        if let Some(profile) = field_str_opt(line, "bottle_profile_id") {
-            let reusable: i64 = conn.query_row(
-                "SELECT is_reusable FROM bottle_profiles WHERE id = ?1",
-                params![profile],
-                |r| r.get(0),
-            ).unwrap_or(0);
-            if reusable == 1 {
-                let qty = physical_units(unit, count, field_i64(line, "crate_capacity")?, field_i64(line, "pack_size")?, field_bool(line, "allow_half_case", false))?;
-                *bottles.entry(profile.to_string()).or_insert(0i64) += qty;
-            }
-        }
-        if let Some(crate_id) = field_str_opt(line, "crate_type_id") {
-            if unit == "CASE" || unit == "HALF_CASE" {
-                *crates.entry(crate_id.to_string()).or_insert(0i64) += 1;
-            }
-        }
-    }
-    if let Some(cid) = customer_id {
-        for (profile, qty) in bottles {
-            conn.execute(
-                "INSERT INTO partner_packaging_ledger (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at) VALUES (?1,?2,'CUSTOMER',?3,'BOTTLE',?4,'OUT_TO_PARTNER',?5,?6,?7,?8)",
-                params![new_id("pkg"), a.branch_id, cid, profile, qty, sale_id, format!("Bouteilles vides attendues ({receipt})"), now_ms()],
-            )?;
-        }
-        for (crate_id, qty) in crates {
-            conn.execute(
-                "INSERT INTO partner_packaging_ledger (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at) VALUES (?1,?2,'CUSTOMER',?3,'CRATE',?4,'OUT_TO_PARTNER',?5,?6,?7,?8)",
-                params![new_id("pkg"), a.branch_id, cid, crate_id, qty, sale_id, format!("Casiers sortis ({receipt})"), now_ms()],
-            )?;
-        }
-    }
-    Ok(())
-}
-
 pub fn create_mixed_order(conn: &Connection, payload: &Value) -> CoreResult<Value> {
-    let _ = actor(conn, payload)?;
-    validate_mixed_case(payload)
-}
-
-/// Une attente d'emballage est créée au moment de la vente, jamais déduite
-/// d'une lecture du stock courant.
-fn insert_packaging_expectation(
-    tx: &Connection,
-    a: &Actor,
-    partner_type: &str,
-    partner_id: &str,
-    document_id: &str,
-    item_kind: &str,
-    ref_id: &str,
-    qty: i64,
-) -> CoreResult<()> {
-    if qty <= 0 {
-        return Ok(());
-    }
-    tx.execute(
-        "INSERT INTO packaging_expectations
-         (id, branch_id, partner_type, partner_id, document_id, item_kind, ref_id, expected_qty, received_qty, status, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,'EXPECTED',?9)",
-        params![new_id("pe"), a.branch_id, partner_type, partner_id, document_id,
-            item_kind, ref_id, qty, now_ms()],
-    )?;
-    Ok(())
-}
-
-/// Consigne attendue par une vente : bouteilles vides par profil exact et
-/// casiers plastique. Aucune dette n'est créée pour un produit jetable.
-fn record_sale_packaging_expectations(
-    tx: &Connection,
-    a: &Actor,
-    sale_id: &str,
-    payload: &Value,
-) -> CoreResult<()> {
-    let partner_type = "CUSTOMER";
-    let partner_id = field_str_opt(payload, "customer_id").unwrap_or("WALK_IN");
-    let lines = payload.get("lines").and_then(Value::as_array).cloned().unwrap_or_default();
-    for line in &lines {
-        let unit = field_str(line, "unit")?;
-        if unit != "CASE" && unit != "HALF_CASE" {
-            continue;
-        }
-        let variant_id = field_str(line, "variant_id")?;
-        let row: Option<(Option<String>, Option<String>, i64)> = tx.query_row(
-            "SELECT bottle_profile_id, crate_type_id, is_returnable FROM product_variants WHERE id = ?1",
-            params![variant_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        ).optional()?;
-        let (profile, crate_id, returnable) = row.unwrap_or((None, None, 0));
-        if returnable != 1 {
-            continue;
-        }
-        let bottles = physical_units(
-            unit, field_i64(line, "unit_count")?,
-            field_i64(line, "crate_capacity")?, field_i64(line, "pack_size")?,
-            field_bool(line, "allow_half_case", false),
-        )?;
-        if let Some(profile_id) = profile {
-            insert_packaging_expectation(tx, a, partner_type, partner_id, sale_id,
-                "BOTTLE_PROFILE", &profile_id, bottles)?;
-        }
-        if let Some(crate_id) = crate_id {
-            insert_packaging_expectation(tx, a, partner_type, partner_id, sale_id,
-                "CRATE", &crate_id, 1)?;
-        }
-    }
-    for case in payload.get("mixed_cases").and_then(Value::as_array).cloned().unwrap_or_default() {
-        let validated = validate_mixed_case(&case)?;
-        if let Some(profiles) = validated.get("expected_empty_bottles_by_profile").and_then(Value::as_object) {
-            for (profile, qty) in profiles {
-                if let Some(qty) = qty.as_i64() {
-                    insert_packaging_expectation(tx, a, partner_type, partner_id, sale_id,
-                        "BOTTLE_PROFILE", profile, qty)?;
+    let a = actor(conn, payload)?;
+    // Commande de **vérification** : le casier mixte n'est enregistré qu'au
+    // moment de la vente (`createSale`), qui revalide et écrit tout dans une
+    // seule transaction. Rien n'est créé ici : ni vente, ni stock, ni mouvement.
+    let crate_id = field_str(payload, "crate_type_id")?.to_string();
+    let spec = crate::crates::crate_spec_owned_from_db(conn, &crate_id)?;
+    let mut validated = validate_mixed_case_with(payload, &spec)?;
+    // Compose-t-on ou commande-t-on ? La composition ne crée rien : la fiche de
+    // clientèle est exigée et ouverte au moment de la vente (`createSale`). On
+    // annonce simplement ce que la vente fera de l'identité fournie.
+    let (customer_id, will_create, required) = match field_str_opt(payload, "customer_id") {
+        Some(id) => (Some(id.to_string()), false, false),
+        None => match field_str_opt(payload, "customer_name") {
+            Some(raw_name) => {
+                let name = display_name(raw_name)?;
+                let phone = phone_key(field_str_opt(payload, "customer_phone"))?;
+                match find_customer(conn, &a.tenant_id, &name, &phone)? {
+                    Some(id) => (Some(id), false, false),
+                    None => (None, true, false),
                 }
             }
-        }
-        if let Some(crate_id) = case.get("crate_type_id").and_then(Value::as_str) {
-            insert_packaging_expectation(tx, a, partner_type, partner_id, sale_id,
-                "CRATE", crate_id, 1)?;
-        }
-    }
-    Ok(())
+            None => (None, false, true),
+        },
+    };
+    validated["customer_id"] = json!(customer_id);
+    validated["customer_will_be_created"] = json!(will_create);
+    validated["customer_required"] = json!(required);
+    Ok(validated)
 }
 
-pub fn register_packaging_return(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+/// Ouverture (ou récupération) explicite d'une fiche de clientèle.
+///
+/// L'identité est unique : le téléphone, s'il est fourni, sert de clé ; sinon le
+/// nom exact départage. Un client déjà connu n'obtient jamais une seconde fiche.
+pub fn create_customer(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
+    let raw_name = field_str(payload, "name")
+        .or_else(|_| field_str(payload, "customer_name"))?
+        .to_string();
+    let phone = field_str_opt(payload, "phone")
+        .or_else(|| field_str_opt(payload, "customer_phone"))
+        .map(str::to_string);
+    let neighborhood = field_str_opt(payload, "neighborhood").map(str::to_string);
+    let name = display_name(&raw_name)?;
+    let phone_key_value = phone_key(phone.as_deref())?;
+
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let partner_type = field_str(payload, "partner_type")?;
-    let partner_id = field_str(payload, "partner_id")?;
-    let item_kind = field_str(payload, "item_kind")?;
-    let ref_id = field_str(payload, "ref_id")?;
-    let qty = field_i64(payload, "qty")?;
-    if qty <= 0 {
-        return Err(CoreError::new("INVALID_QUANTITY", "Quantité de retour positive requise."));
-    }
-    let reusable: i64 = if item_kind == "CRATE" {
-        tx.query_row("SELECT is_reusable FROM crate_types WHERE id = ?1", params![ref_id], |r| r.get(0))
-            .optional()?.unwrap_or(0)
-    } else {
-        tx.query_row("SELECT is_reusable FROM bottle_profiles WHERE id = ?1", params![ref_id], |r| r.get(0))
-            .optional()?.unwrap_or(0)
-    };
-    if reusable != 1 {
-        return Err(CoreError::new("DISPOSABLE_NOT_RETURNABLE", "Un emballage jetable ne crée ni dette ni retour consigné."));
-    }
-    // Retour reçu du partenaire : le stock vide du dépôt augmente.
-    if item_kind == "CRATE" {
-        tx.execute(
-            "INSERT INTO crate_stock (branch_id, crate_id, full_qty, empty_qty) VALUES (?1,?2,0,?3)
-             ON CONFLICT(branch_id, crate_id) DO UPDATE SET empty_qty = empty_qty + excluded.empty_qty",
-            params![a.branch_id, ref_id, qty],
-        )?;
-    } else {
-        tx.execute(
-            "INSERT INTO empty_bottle_stock (branch_id, profile_id, qty) VALUES (?1,?2,?3)
-             ON CONFLICT(branch_id, profile_id) DO UPDATE SET qty = qty + excluded.qty",
-            params![a.branch_id, ref_id, qty],
-        )?;
-    }
-    let document_id = field_str_opt(payload, "document_id").map(str::to_string)
-        .unwrap_or_else(|| new_id("doc"));
-    tx.execute(
-        "INSERT INTO partner_packaging_ledger (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at, user_id, device_id)
-         VALUES (?1,?2,?3,?4,?5,?6,'IN_FROM_PARTNER',?7,?8,?9,?10,?11,?12)",
-        params![new_id("pkg"), a.branch_id, partner_type, partner_id, item_kind, ref_id, qty,
-            document_id, field_str(payload, "reason").unwrap_or("Retour emballage"), now_ms(),
-            a.user_id, a.device_id],
+    let (customer_id, created) = ensure_customer(
+        &tx, &a, &name, phone.as_deref(), neighborhood.as_deref(),
     )?;
-    if let Some((expected, received)) = tx.query_row(
-        "SELECT expected_qty, received_qty FROM packaging_expectations
-         WHERE branch_id=?1 AND document_id=?2 AND item_kind=?3 AND ref_id=?4 LIMIT 1",
-        params![a.branch_id, document_id, item_kind, ref_id],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
-    ).optional()? {
-        let next = (received + qty).min(expected);
-        let status = if next >= expected { "RETURNED" } else { "PARTIAL" };
-        tx.execute(
-            "UPDATE packaging_expectations SET received_qty=?1, status=?2
-             WHERE branch_id=?3 AND document_id=?4 AND item_kind=?5 AND ref_id=?6",
-            params![next, status, a.branch_id, document_id, item_kind, ref_id],
+    if created {
+        db::audit(
+            &tx, &a.branch_id, &a.user_id, "CUSTOMER_CREATED",
+            &format!("Fiche client {name} ouverte"),
+        )?;
+        let outbox_payload = json!({
+            "entity_type": "customer", "customer_id": customer_id,
+            "name": name, "phone": phone_key_value, "neighborhood": neighborhood
+        });
+        db::enqueue(
+            &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "createCustomer",
+            &format!("Fiche client {name}"), &outbox_payload.to_string(),
+            base_revision(&tx, &a.branch_id), &format!("customer_{customer_id}"),
         )?;
     }
-    db::enqueue(
-        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "PACKAGING_RETURN",
-        &format!("Retour {item_kind} {ref_id} x{qty}"), &payload.to_string(), 1, &new_id("idem"),
+    let (stored_name, stored_phone, credit_limit, balance): (String, String, i64, i64) = tx.query_row(
+        "SELECT name, phone, credit_limit_fcfa, financial_balance_fcfa FROM customers WHERE id = ?1",
+        params![customer_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
-    db::audit(&tx, &a.branch_id, &a.user_id, "PACKAGING_RETURN", &format!("{item_kind} {ref_id} x{qty}"))?;
     tx.commit()?;
-    Ok(json!({"status": "RECORDED", "qty": qty, "document_id": document_id}))
+    Ok(json!({
+        "customer_id": customer_id,
+        "created": created,
+        "name": stored_name,
+        "phone": stored_phone,
+        "credit_limit_fcfa": credit_limit,
+        "outstanding_fcfa": balance
+    }))
+}
+
+/// Rôle autorisé à fusionner des fiches de clientèle : opération de gestion.
+fn assert_merge_role(role: &str) -> CoreResult<()> {
+    if matches!(role, "OWNER" | "ADMIN" | "MANAGER") {
+        Ok(())
+    } else {
+        Err(CoreError::new(
+            "ROLE_FORBIDDEN",
+            "Seul un gérant, un administrateur ou le propriétaire peut fusionner des fiches clients.",
+        ))
+    }
+}
+
+/// Récapitulatif d'une fiche : ce qui sera déplacé vers la fiche conservée.
+fn customer_merge_summary(conn: &Connection, branch: &str, customer_id: &str) -> CoreResult<Value> {
+    let (name, phone, credit_limit, purchases, paid, balance, archived): (String, String, i64, i64, i64, i64, i64) =
+        conn.query_row(
+            "SELECT name, phone, credit_limit_fcfa, total_purchases_fcfa, total_paid_fcfa,
+                    financial_balance_fcfa, is_archived
+             FROM customers WHERE id = ?1",
+            params![customer_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        )
+        .optional()?
+        .ok_or_else(|| CoreError::new("CUSTOMER_NOT_FOUND", "Client introuvable."))?;
+
+    let sales_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sales WHERE branch_id = ?1 AND customer_id = ?2",
+        params![branch, customer_id],
+        |r| r.get(0),
+    )?;
+    let sales_total: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(total_fcfa), 0) FROM sales WHERE branch_id = ?1 AND customer_id = ?2",
+        params![branch, customer_id],
+        |r| r.get(0),
+    )?;
+    let sales_credit: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(credit_fcfa), 0) FROM sales WHERE branch_id = ?1 AND customer_id = ?2",
+        params![branch, customer_id],
+        |r| r.get(0),
+    )?;
+    let (payments_count, payments_total): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(amount_fcfa), 0) FROM payments
+         WHERE branch_id = ?1 AND partner_type = 'CUSTOMER' AND partner_id = ?2",
+        params![branch, customer_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let crate_movements_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM crate_movements
+         WHERE branch_id = ?1 AND partner_type = 'CUSTOMER' AND partner_id = ?2",
+        params![branch, customer_id],
+        |r| r.get(0),
+    )?;
+    let legacy_expectations: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM packaging_expectations
+         WHERE branch_id = ?1 AND partner_type = 'CUSTOMER' AND partner_id = ?2",
+        params![branch, customer_id],
+        |r| r.get(0),
+    )?;
+    let legacy_ledger: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM partner_packaging_ledger
+         WHERE branch_id = ?1 AND partner_type = 'CUSTOMER' AND partner_id = ?2",
+        params![branch, customer_id],
+        |r| r.get(0),
+    )?;
+    let open_reviews: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM crate_migration_review
+         WHERE partner_type = 'CUSTOMER' AND partner_id = ?1 AND resolved = 0",
+        params![customer_id],
+        |r| r.get(0),
+    )?;
+    let other_branch_rows: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM sales WHERE branch_id <> ?1 AND customer_id = ?2)
+              + (SELECT COUNT(*) FROM payments
+                 WHERE branch_id <> ?1 AND partner_type = 'CUSTOMER' AND partner_id = ?2)
+              + (SELECT COUNT(*) FROM crate_movements
+                 WHERE branch_id <> ?1 AND partner_type = 'CUSTOMER' AND partner_id = ?2)",
+        params![branch, customer_id],
+        |r| r.get(0),
+    )?;
+
+    let mut stmt = conn.prepare(
+        "SELECT partner_crate_balances.crate_id, COALESCE(ct.code, partner_crate_balances.crate_id),
+                partner_crate_balances.balance_qty
+         FROM partner_crate_balances
+         LEFT JOIN crate_types ct ON ct.id = partner_crate_balances.crate_id
+         WHERE partner_crate_balances.branch_id = ?1
+           AND partner_crate_balances.partner_type = 'CUSTOMER'
+           AND partner_crate_balances.partner_id = ?2
+           AND partner_crate_balances.balance_qty <> 0
+         ORDER BY partner_crate_balances.crate_id",
+    )?;
+    let balances = stmt
+        .query_map(params![branch, customer_id], |r| {
+            Ok(json!({
+                "crate_type_id": r.get::<_, String>(0)?,
+                "crate_code": r.get::<_, String>(1)?,
+                "balance_qty": r.get::<_, i64>(2)?
+            }))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(json!({
+        "customer_id": customer_id,
+        "name": name,
+        "phone": phone,
+        "is_archived": archived == 1,
+        "credit_limit_fcfa": credit_limit,
+        "total_purchases_fcfa": purchases,
+        "total_paid_fcfa": paid,
+        "financial_balance_fcfa": balance,
+        "sales_count": sales_count,
+        "sales_total_fcfa": sales_total,
+        "sales_credit_fcfa": sales_credit,
+        "payments_count": payments_count,
+        "payments_total_fcfa": payments_total,
+        "crate_movements_count": crate_movements_count,
+        "crate_balances": balances,
+        "legacy_expectations_count": legacy_expectations,
+        "legacy_ledger_count": legacy_ledger,
+        "open_reviews_count": open_reviews,
+        "other_branch_rows": other_branch_rows
+    }))
+}
+
+/// Fusionne deux fiches de clientèle du même client.
+///
+/// Cas d'usage : la synchronisation desktop a poussé le même client sous un
+/// second identifiant, ou le comptoir a ouvert une fiche qui existait déjà.
+/// La fiche `source` est **vidée au profit** de `target` : ventes, paiements,
+/// obligations historiques et soldes de casiers sont ré-attribués, puis la
+/// source est archivée. Rien n'est supprimé et rien n'est inventé.
+///
+/// Le journal des casiers étant immuable, le solde physique du client est
+/// re-attribué par deux mouvements **neutres** (sortie sur la source, entrée
+/// sur la cible) : le stock du dépôt n'est pas touché, seule la dette de
+/// casiers change de fiche.
+///
+/// `dry_run = true` renvoie le même récapitulatif sans écrire.
+pub fn merge_customers(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    assert_merge_role(&a.role)?;
+    let source_id = field_str(payload, "source_customer_id")?.to_string();
+    let target_id = field_str(payload, "target_customer_id")?.to_string();
+    if source_id == target_id {
+        return Err(CoreError::new(
+            "CUSTOMER_MERGE_SAME",
+            "La fiche à fusionner et la fiche à conserver sont identiques.",
+        ));
+    }
+    let dry_run = field_bool(payload, "dry_run", false);
+    let request_key = field_str_opt(payload, "request_key").map(str::to_string);
+
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+    // Rejeu : une fusion déjà appliquée avec la même clé renvoie son résultat.
+    if let Some(key) = request_key.as_deref() {
+        // La clé est namespacée : elle ne peut pas entrer en collision avec la
+        // clé d'idempotence d'une vente.
+        let namespaced = format!("merge_{key}");
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT payload_json FROM sync_outbox WHERE branch_id = ?1 AND idempotency_key = ?2",
+                params![a.branch_id, namespaced],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(stored_json) = previous {
+            let stored: Value = serde_json::from_str(&stored_json).unwrap_or(Value::Null);
+            return Ok(json!({
+                "merge_id": stored.get("merge_id").cloned().unwrap_or(Value::Null),
+                "customer_id": target_id,
+                "dry_run": false,
+                "idempotent": true
+            }));
+        }
+    }
+
+    let source = customer_merge_summary(&tx, &a.branch_id, &source_id)?;
+    let target = customer_merge_summary(&tx, &a.branch_id, &target_id)?;
+    if target["is_archived"].as_bool().unwrap_or(false) {
+        return Err(CoreError::new(
+            "CUSTOMER_ARCHIVED_TARGET",
+            "La fiche à conserver est archivée : choisissez une fiche active.",
+        ));
+    }
+    if source["is_archived"].as_bool().unwrap_or(false) {
+        return Err(CoreError::new(
+            "CUSTOMER_ALREADY_ARCHIVED",
+            "Cette fiche est déjà archivée (fusion ou suppression) : rien à fusionner.",
+        ));
+    }
+
+    let source_purchases = field_i64(&source, "total_purchases_fcfa")?;
+    let source_paid = field_i64(&source, "total_paid_fcfa")?;
+    let source_balance = field_i64(&source, "financial_balance_fcfa")?;
+    let source_limit = field_i64(&source, "credit_limit_fcfa")?;
+    let target_limit = field_i64(&target, "credit_limit_fcfa")?;
+    let merged_limit = target_limit.max(source_limit);
+    let merged_purchases = checked_add(field_i64(&target, "total_purchases_fcfa")?, source_purchases, "fusion achats")?;
+    let merged_paid = checked_add(field_i64(&target, "total_paid_fcfa")?, source_paid, "fusion paiements")?;
+    let merged_balance = checked_add(field_i64(&target, "financial_balance_fcfa")?, source_balance, "fusion encours")?;
+
+    let projection = json!({
+        "customer_id": target_id,
+        "total_purchases_fcfa": merged_purchases,
+        "total_paid_fcfa": merged_paid,
+        "financial_balance_fcfa": merged_balance,
+        "credit_limit_fcfa": merged_limit,
+        "credit_limit_source_fcfa": source_limit,
+        "credit_limit_before_fcfa": target_limit,
+        "sales_count": checked_add(field_i64(&target, "sales_count")?, field_i64(&source, "sales_count")?, "fusion lignes")?,
+        "sales_total_fcfa": checked_add(field_i64(&target, "sales_total_fcfa")?, field_i64(&source, "sales_total_fcfa")?, "fusion ventes")?,
+        "crate_balances": source["crate_balances"].clone()
+    });
+
+    let mut warnings: Vec<String> = Vec::new();
+    if field_i64(&source, "other_branch_rows")? > 0 || field_i64(&target, "other_branch_rows")? > 0 {
+        warnings.push(
+            "Des écritures d'autres points de vente restent rattachées à leur fiche d'origine.".to_string(),
+        );
+    }
+    if merged_limit != target_limit {
+        warnings.push(format!(
+            "Plafond de crédit porté de {target_limit} à {merged_limit} FCFA (plafond le plus élevé des deux fiches)."
+        ));
+    }
+
+    if dry_run {
+        return Ok(json!({
+            "dry_run": true,
+            "merge_id": null,
+            "idempotent": false,
+            "source": source,
+            "target": target,
+            "result": projection,
+            "warnings": warnings
+        }));
+    }
+
+    let reason = field_str(payload, "reason")
+        .ok()
+        .map(str::trim)
+        .filter(|value| value.chars().count() >= 3)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CoreError::new("REASON_REQUIRED", "Un motif est obligatoire pour fusionner deux fiches clients.")
+        })?;
+
+    let merge_id = new_id("merge");
+    let mut moved = json!({});
+
+    let sales_moved = tx.execute(
+        "UPDATE sales SET customer_id = ?1 WHERE branch_id = ?2 AND customer_id = ?3",
+        params![target_id, a.branch_id, source_id],
+    )?;
+    let payments_moved = tx.execute(
+        "UPDATE payments SET partner_id = ?1 WHERE branch_id = ?2 AND partner_type = 'CUSTOMER' AND partner_id = ?3",
+        params![target_id, a.branch_id, source_id],
+    )?;
+    let reviews_moved = tx.execute(
+        "UPDATE crate_migration_review SET partner_id = ?1
+         WHERE partner_type = 'CUSTOMER' AND partner_id = ?2 AND resolved = 0",
+        params![target_id, source_id],
+    )?;
+    // Données de l'ancien moteur : seules les références de partenaire bougent,
+    // aucune quantité, aucun statut (le moteur 0015 reste figé).
+    let expectations_moved = tx.execute(
+        "UPDATE packaging_expectations SET partner_id = ?1
+         WHERE branch_id = ?2 AND partner_type = 'CUSTOMER' AND partner_id = ?3",
+        params![target_id, a.branch_id, source_id],
+    )?;
+    let ledger_moved = tx.execute(
+        "UPDATE partner_packaging_ledger SET partner_id = ?1
+         WHERE branch_id = ?2 AND partner_type = 'CUSTOMER' AND partner_id = ?3",
+        params![target_id, a.branch_id, source_id],
+    )?;
+
+    // Casiers : ré-attribution neutre, deux mouvements immuables par format.
+    let mut crates_moved: Vec<Value> = Vec::new();
+    if let Some(balances) = source["crate_balances"].as_array() {
+        for entry in balances {
+            let crate_id = field_str(entry, "crate_type_id")?.to_string();
+            let balance = field_i64(entry, "balance_qty")?;
+            if balance == 0 {
+                continue;
+            }
+            let qty = balance.abs();
+            let reason_out = format!("Fusion de fiche {source_id} vers {target_id} : {reason}");
+            let reason_in = format!("Fusion de fiche {source_id} vers {target_id} : reprise du solde de casiers");
+            let (out, _) = crate::crates::apply_movement(
+                &tx,
+                &a,
+                &crate::crates::CrateMove {
+                    crate_id: &crate_id,
+                    movement_type: "adjustment_out",
+                    qty,
+                    full_delta: 0,
+                    empty_delta: 0,
+                    partner_type: Some("CUSTOMER"),
+                    partner_id: Some(&source_id),
+                    partner_delta: -balance,
+                    document_id: &merge_id,
+                    idempotency_key: &format!("merge:{merge_id}:{crate_id}:out"),
+                    reason: &reason_out,
+                    origin: "CLIENT",
+                    destination: "CLIENT",
+                    source: "RUNTIME",
+                    reversal_of: None,
+                },
+            )?;
+            let (entry_in, _) = crate::crates::apply_movement(
+                &tx,
+                &a,
+                &crate::crates::CrateMove {
+                    crate_id: &crate_id,
+                    movement_type: "adjustment_in",
+                    qty,
+                    full_delta: 0,
+                    empty_delta: 0,
+                    partner_type: Some("CUSTOMER"),
+                    partner_id: Some(&target_id),
+                    partner_delta: balance,
+                    document_id: &merge_id,
+                    idempotency_key: &format!("merge:{merge_id}:{crate_id}:in"),
+                    reason: &reason_in,
+                    origin: "CLIENT",
+                    destination: "CLIENT",
+                    source: "RUNTIME",
+                    reversal_of: None,
+                },
+            )?;
+            crates_moved.push(json!({
+                "crate_type_id": crate_id,
+                "balance_qty": balance,
+                "movement_out_id": out["movement_id"].clone(),
+                "movement_in_id": entry_in["movement_id"].clone()
+            }));
+        }
+    }
+
+    tx.execute(
+        "UPDATE customers SET total_purchases_fcfa = ?1, total_paid_fcfa = ?2,
+                financial_balance_fcfa = ?3, credit_limit_fcfa = ?4
+         WHERE id = ?5",
+        params![merged_purchases, merged_paid, merged_balance, merged_limit, target_id],
+    )?;
+    tx.execute(
+        "UPDATE customers SET total_purchases_fcfa = 0, total_paid_fcfa = 0,
+                financial_balance_fcfa = 0, is_archived = 1
+         WHERE id = ?1",
+        params![source_id],
+    )?;
+
+    moved["sales"] = json!(sales_moved);
+    moved["payments"] = json!(payments_moved);
+    moved["crate_movements_review"] = json!(reviews_moved);
+    moved["legacy_expectations"] = json!(expectations_moved);
+    moved["legacy_ledger"] = json!(ledger_moved);
+    moved["crate_balances"] = json!(crates_moved);
+
+    let summary = format!(
+        "Fusion de fiche {} dans {} : {} vente(s), {} paiement(s), {} solde(s) de casiers",
+        field_str(&source, "name")?,
+        field_str(&target, "name")?,
+        sales_moved,
+        payments_moved,
+        crates_moved.len()
+    );
+    db::audit(&tx, &a.branch_id, &a.user_id, "CUSTOMER_MERGED", &format!("{summary} — motif : {reason}"))?;
+    let outbox_payload = json!({
+        "merge_id": merge_id,
+        "source_customer_id": source_id,
+        "target_customer_id": target_id,
+        "moved": moved,
+        "reason": reason,
+        "credit_limit_fcfa": merged_limit
+    });
+    db::enqueue(
+        &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "mergeCustomers", &summary,
+        &outbox_payload.to_string(), base_revision(&tx, &a.branch_id),
+        &request_key
+            .as_ref()
+            .map(|key| format!("merge_{key}"))
+            .unwrap_or_else(|| format!("merge_{merge_id}")),
+    )?;
+    tx.commit()?;
+
+    Ok(json!({
+        "dry_run": false,
+        "idempotent": false,
+        "merge_id": merge_id,
+        "customer_id": target_id,
+        "source": source,
+        "target": target,
+        "result": projection,
+        "moved": moved,
+        "warnings": warnings
+    }))
+}
+
+/// Compatibilité de l'ancienne commande `registerPackagingReturn`.
+///
+/// Depuis la migration 11, seuls les **casiers plastiques** circulent :
+/// - un retour client passe par le journal physique des casiers ;
+/// - une remise fournisseur passe par le compte physique fournisseur ;
+/// - une bouteille n'est plus suivie et la commande est refusée explicitement
+///   (aucune dette, aucun stock, aucun retour de bouteille n'est créé).
+pub fn register_packaging_return(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
+    let partner_type = field_str(payload, "partner_type")?.to_string();
+    let item_kind = field_str(payload, "item_kind")?.to_string();
+    if item_kind != "CRATE" {
+        return Err(CoreError::new(
+            "BOTTLE_PACKAGING_NOT_TRACKED",
+            "Les bouteilles, canettes et PET ne sont plus suivis : seul le casier plastique possède un stock et un solde physique. Utilisez la référence d'un type de casier.",
+        ));
+    }
+    let partner_id = field_str(payload, "partner_id")?.to_string();
+    let ref_id = field_str(payload, "ref_id")?.to_string();
+    let qty = field_i64(payload, "qty")?;
+    let key = field_str_opt(payload, "request_key")
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("legacy_return:{partner_type}:{partner_id}:{ref_id}:{qty}"));
+    let mut delegated = payload.clone();
+    delegated["request_key"] = json!(key);
+    let result = if partner_type == "CUSTOMER" {
+        crate::crates::record_customer_crate_return(conn, &delegated)?
+    } else if partner_type == "SUPPLIER" {
+        delegated["supplier_id"] = json!(partner_id);
+        delegated["lines"] = json!([{
+            "crate_type_id": ref_id,
+            "empty_returned_qty": qty,
+            "reason": field_str_opt(payload, "reason").unwrap_or("Casiers remis au fournisseur")
+        }]);
+        crate::crates::record_supplier_crate_exchange(conn, &delegated)?
+    } else {
+        return Err(CoreError::new("INVALID_PARTNER", "Type de partenaire inconnu."));
+    };
+    Ok(json!({
+        "status": "RECORDED",
+        "deprecated_command": true,
+        "engine": "PHYSICAL_CRATES",
+        "result": result
+    }))
 }
 
 pub fn create_purchase_order(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
@@ -825,35 +1456,10 @@ pub fn receive_purchase(conn: &mut Connection, payload: &Value) -> CoreResult<Va
             )?;
         }
     }
-    // Emballages vides remis au fournisseur : dette physique explicite, distincte du montant.
-    if let Some(packaging) = payload.get("packaging") {
-        let crate_id = field_str_opt(packaging, "crate_type_id");
-        let bottle_profile = field_str_opt(packaging, "bottle_profile_id");
-        if let Some(crate_id) = crate_id {
-            let qty = field_i64(packaging, "crate_qty")?;
-            if qty > 0 {
-                tx.execute(
-                    "INSERT INTO partner_packaging_ledger (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at, user_id, device_id)
-                     VALUES (?1,?2,'SUPPLIER',?3,'CRATE',?4,'OUT_TO_PARTNER',?5,?6,?7,?8,?9,?10)",
-                    params![new_id("pkg"), a.branch_id, supplier, crate_id, qty, receipt_id,
-                        "Casiers remis au fournisseur", now_ms(), a.user_id, a.device_id],
-                )?;
-                db::audit(&tx, &a.branch_id, &a.user_id, "PURCHASE_PACKAGING_OUT", &format!("{crate_id}: {qty}"))?;
-            }
-        }
-        if let Some(profile) = bottle_profile {
-            let qty = field_i64(packaging, "bottle_qty")?;
-            if qty > 0 {
-                tx.execute(
-                    "INSERT INTO partner_packaging_ledger (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at, user_id, device_id)
-                     VALUES (?1,?2,'SUPPLIER',?3,'BOTTLE_PROFILE',?4,'OUT_TO_PARTNER',?5,?6,?7,?8,?9,?10)",
-                    params![new_id("pkg"), a.branch_id, supplier, profile, qty, receipt_id,
-                        "Bouteilles vides remises au fournisseur", now_ms(), a.user_id, a.device_id],
-                )?;
-                db::audit(&tx, &a.branch_id, &a.user_id, "PURCHASE_PACKAGING_OUT", &format!("{profile}: {qty}"))?;
-            }
-        }
-    }
+    // Casiers physiques de la réception : pleins reçus et vides remis au
+    // fournisseur sont deux mouvements distincts. Les bouteilles ne sont plus
+    // suivies (aucun stock, aucune dette).
+    let crate_exchange = crates::apply_purchase_crate_exchange(&tx, &a, &supplier, &receipt_id, payload)?;
     tx.execute(
         "UPDATE suppliers SET financial_debt_fcfa = financial_debt_fcfa + ?1, total_purchased_fcfa = total_purchased_fcfa + ?1 WHERE id = ?2",
         params![received_total, supplier],
@@ -878,7 +1484,14 @@ pub fn receive_purchase(conn: &mut Connection, payload: &Value) -> CoreResult<Va
         1, &new_id("idem"),
     )?;
     tx.commit()?;
-    Ok(json!({"order_id": order_id, "received_fcfa": received_total, "status": status, "remaining_qty": (ordered - received).max(0)}))
+    Ok(json!({
+        "order_id": order_id,
+        "receipt_id": receipt_id,
+        "received_fcfa": received_total,
+        "status": status,
+        "remaining_qty": (ordered - received).max(0),
+        "crate_exchange": crate_exchange
+    }))
 }
 
 /// Retour de marchandise au fournisseur : stock et dette fournisseur ajustés dans la même transaction.
@@ -1080,8 +1693,37 @@ pub fn get_dashboard(conn: &Connection, payload: &Value) -> CoreResult<Value> {
         "SELECT COUNT(*) FROM stock_balances WHERE branch_id=?1 AND full_units_qty <= 0",
         params![a.branch_id], |r| r.get(0),
     )?;
+    // Alertes casiers : soldes physiques clients non soldés. L'ancien compteur
+    // d'obligations d'emballages est remplacé, pas simplement renommé.
     let packaging_alerts: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM packaging_expectations WHERE branch_id=?1 AND received_qty < expected_qty",
+        "SELECT COUNT(*) FROM partner_crate_balances
+         WHERE branch_id=?1 AND partner_type='CUSTOMER' AND balance_qty > 0",
+        params![a.branch_id], |r| r.get(0),
+    )?;
+    let crates_at_customers: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(partner_delta),0) FROM crate_movements
+         WHERE branch_id=?1 AND partner_type='CUSTOMER'",
+        params![a.branch_id], |r| r.get(0),
+    )?;
+    let crates_at_suppliers: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(partner_delta),0) FROM crate_movements
+         WHERE branch_id=?1 AND partner_type='SUPPLIER'",
+        params![a.branch_id], |r| r.get(0),
+    )?;
+    let (crate_full_qty, crate_empty_qty): (i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(full_qty),0), COALESCE(SUM(empty_qty),0)
+         FROM crate_stock WHERE branch_id=?1",
+        params![a.branch_id], |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let crate_stock_value: i64 = conn.query_row(
+        "SELECT COALESCE(SUM((COALESCE(cs.full_qty,0) + COALESCE(cs.empty_qty,0)) * ct.reference_value_fcfa), 0)
+         FROM crate_types ct LEFT JOIN crate_stock cs
+           ON cs.crate_id = ct.id AND cs.branch_id = ?1
+         WHERE ct.is_physical_crate = 1",
+        params![a.branch_id], |r| r.get(0),
+    )?;
+    let crate_untracked_qty: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(untracked_qty),0) FROM crate_movements WHERE branch_id=?1",
         params![a.branch_id], |r| r.get(0),
     )?;
     let confirmed_ca: i64 = conn.query_row(
@@ -1101,6 +1743,15 @@ pub fn get_dashboard(conn: &Connection, payload: &Value) -> CoreResult<Value> {
         "credits_granted_fcfa": credits_granted,
         "out_of_stock_alerts": out_of_stock,
         "packaging_alerts": packaging_alerts,
+        "crate_alerts": packaging_alerts,
+        "crate_full_qty": crate_full_qty,
+        "crate_empty_qty": crate_empty_qty,
+        "crates_at_customers_qty": crates_at_customers,
+        "crates_at_suppliers_qty": crates_at_suppliers,
+        "crate_stock_value_fcfa": crate_stock_value,
+        "crate_untracked_full_qty": crate_untracked_qty,
+        "crate_value_is_receivable": false,
+        "legacy_packaging_engine_active": false,
         "confirmed_revenue_fcfa": confirmed_ca,
         "local_revenue_fcfa": ca - confirmed_ca,
         "branch_id": a.branch_id
@@ -1151,13 +1802,27 @@ pub fn get_customer_account(conn: &Connection, payload: &Value) -> CoreResult<Va
     let mut stmt = conn.prepare("SELECT item_kind, ref_id, direction, qty, occurred_at FROM partner_packaging_ledger WHERE partner_type = 'CUSTOMER' AND partner_id = ?1 ORDER BY occurred_at DESC LIMIT 50")?;
     let ledger: Vec<Value> = stmt.query_map(params![id], |r| Ok(json!({
         "item_kind": r.get::<_, String>(0)?, "ref_id": r.get::<_, String>(1)?,
-        "direction": r.get::<_, String>(2)?, "qty": r.get::<_, i64>(3)?, "occurred_at": r.get::<_, i64>(4)?
+        "direction": r.get::<_, String>(2)?, "qty": r.get::<_, i64>(3)?, "occurred_at": r.get::<_, i64>(4)?,
+        "is_legacy": true
     })))?.collect::<Result<_, _>>()?;
+    let crate_account = crate::crates::get_customer_crate_balance(conn, &{
+        let mut scoped = payload.clone();
+        scoped["customer_id"] = json!(id);
+        scoped
+    })?;
     Ok(json!({
+        // Compte commercial : ventes, paiements, créances. Jamais de casiers.
         "customer_id": id, "name": name, "credit_limit_fcfa": limit,
         "outstanding_fcfa": balance, "available_credit_fcfa": available,
         "total_purchases_fcfa": purchases, "total_paid_fcfa": paid,
-        "packaging_ledger": ledger
+        // Compte physique des casiers : suivi séparé, valeur indicative.
+        "crate_account": crate_account,
+        "crate_balance_qty": crate_account["total_balance_qty"].clone(),
+        "crate_indicative_value_fcfa": crate_account["indicative_value_fcfa"].clone(),
+        "crate_balance_is_financial_debt": false,
+        // Historique gelé de l'ancien moteur, en lecture seule.
+        "packaging_ledger": ledger,
+        "legacy_packaging_ledger": true
     }))
 }
 
@@ -1209,7 +1874,21 @@ pub fn get_supplier_account(conn: &Connection, payload: &Value) -> CoreResult<Va
         params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     ).optional()?;
     let (name, purchased, paid, debt) = row.ok_or_else(|| CoreError::new("SUPPLIER_NOT_FOUND", "Fournisseur introuvable."))?;
-    Ok(json!({"supplier_id": id, "name": name, "total_purchased_fcfa": purchased, "total_paid_fcfa": paid, "debt_fcfa": debt}))
+    let crate_account = crate::crates::get_supplier_crate_balance(conn, &{
+        let mut scoped = payload.clone();
+        scoped["supplier_id"] = json!(id);
+        scoped
+    })?;
+    Ok(json!({
+        // Compte commercial : achats, paiements, dette. Jamais de casiers.
+        "supplier_id": id, "name": name, "total_purchased_fcfa": purchased,
+        "total_paid_fcfa": paid, "debt_fcfa": debt,
+        // Compte physique des casiers : casiers pleins reçus, vides remis, écart.
+        "crate_account": crate_account,
+        "crate_balance_qty": crate_account["total_balance_qty"].clone(),
+        "crate_indicative_value_fcfa": crate_account["indicative_value_fcfa"].clone(),
+        "crate_balance_is_financial_debt": false
+    }))
 }
 
 /// Inventaire physique : la correction est une écriture justifiée, jamais une
@@ -1663,19 +2342,24 @@ pub fn configure_device_quota(conn: &mut Connection, payload: &Value) -> CoreRes
 
 // ---- LOT 6/9/10 : catalogue, achats, caisse et rapports locaux ----
 
-/// Formats de casiers physiques et stock d'emballages du point de vente.
+/// Référentiel des casiers physiques avec leurs trois valeurs distinctes.
 pub fn get_crate_types(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
     let mut stmt = conn.prepare(
         "SELECT ct.id, ct.code, ct.capacity, ct.compatibility_group_id, ct.allow_half_case,
                 ct.replacement_value_fcfa, COALESCE(cs.empty_qty, 0),
                 ct.name, ct.compartments, ct.dimensions, ct.deposit_value_fcfa,
-                ct.physical_profile_id, ct.is_reusable
+                ct.physical_profile_id, ct.is_reusable,
+                ct.acquisition_value_fcfa, ct.reference_value_fcfa, ct.empty_sale_price_fcfa,
+                ct.status, ct.is_physical_crate, COALESCE(cs.full_qty, 0)
          FROM crate_types ct
          LEFT JOIN crate_stock cs ON cs.crate_id = ct.id AND cs.branch_id = ?1
          ORDER BY ct.code",
     )?;
     let rows = stmt.query_map(params![a.branch_id], |r| {
+        let reference: i64 = r.get(14)?;
+        let full: i64 = r.get(18)?;
+        let empty: i64 = r.get(6)?;
         Ok(json!({
             "crate_type_id": r.get::<_, String>(0)?,
             "code": r.get::<_, String>(1)?,
@@ -1683,22 +2367,36 @@ pub fn get_crate_types(conn: &Connection, payload: &Value) -> CoreResult<Value> 
             "compatibility_group_id": r.get::<_, String>(3)?,
             "allow_half_case": r.get::<_, i64>(4)? == 1,
             "replacement_value_fcfa": r.get::<_, i64>(5)?,
-            "empty_crates_qty": r.get::<_, i64>(6)?,
+            "empty_crates_qty": empty,
             "name": r.get::<_, Option<String>>(7)?.unwrap_or_default(),
             "compartments": r.get::<_, i64>(8)?,
             "dimensions": r.get::<_, Option<String>>(9)?,
             "deposit_value_fcfa": r.get::<_, i64>(10)?,
+            "deposit_value_is_legacy": true,
             "physical_profile_id": r.get::<_, Option<String>>(11)?,
-            "is_reusable": r.get::<_, i64>(12)? == 1
+            "is_reusable": r.get::<_, i64>(12)? == 1,
+            "acquisition_value_fcfa": r.get::<_, i64>(13)?,
+            "reference_value_fcfa": reference,
+            "empty_sale_price_fcfa": r.get::<_, i64>(15)?,
+            "status": r.get::<_, String>(16)?,
+            "is_physical_crate": r.get::<_, i64>(17)? == 1,
+            "full_crates_qty": full,
+            "stock_value_fcfa": (full + empty).saturating_mul(reference)
         }))
     })?;
     let mut items = Vec::new();
     for row in rows { items.push(row?); }
-    Ok(json!({ "crate_types": items }))
+    Ok(json!({
+        "crate_types": items,
+        "engine": "PHYSICAL_CRATES",
+        "note": "Le casier est un bien physique suivi. Sa valeur est distincte du prix de la boisson."
+    }))
 }
 
-/// Compte d'emballages d'un partenaire : attentes, reçus, soldes physiques et
-/// registre immuable. Aucune valeur financière n'est inventée.
+/// Compte d'un partenaire : le **solde physique des casiers** (nouveau moteur)
+/// est présenté à part de l'historique d'emballages gelé de l'ancien moteur.
+/// Aucune valeur financière n'est créée : le solde physique n'est jamais une
+/// créance et n'entre jamais dans le compte commercial.
 pub fn get_packaging_account(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
     let partner_type = field_str(payload, "partner_type")?;
@@ -1706,6 +2404,16 @@ pub fn get_packaging_account(conn: &Connection, payload: &Value) -> CoreResult<V
     if !matches!(partner_type, "CUSTOMER" | "SUPPLIER") {
         return Err(CoreError::new("INVALID_PARTNER", "Type de partenaire inconnu."));
     }
+    let physical = if partner_type == "CUSTOMER" {
+        let mut scoped = payload.clone();
+        scoped["customer_id"] = json!(partner_id);
+        crate::crates::get_customer_crate_balance(conn, &scoped)?
+    } else {
+        let mut scoped = payload.clone();
+        scoped["supplier_id"] = json!(partner_id);
+        crate::crates::get_supplier_crate_balance(conn, &scoped)?
+    };
+
     let mut stmt = conn.prepare(
         "SELECT item_kind, ref_id, SUM(expected_qty), SUM(received_qty)
          FROM packaging_expectations
@@ -1713,8 +2421,8 @@ pub fn get_packaging_account(conn: &Connection, payload: &Value) -> CoreResult<V
          GROUP BY item_kind, ref_id ORDER BY item_kind, ref_id",
     )?;
     let rows = stmt.query_map(params![a.branch_id, partner_type, partner_id], |r| {
-        let expected = r.get::<_, i64>(2)?;
-        let received = r.get::<_, i64>(3)?;
+        let expected: i64 = r.get(2)?;
+        let received: i64 = r.get(3)?;
         let status = if received >= expected { "RETURNED" } else if received > 0 { "PARTIAL" } else { "EXPECTED" };
         Ok(json!({
             "item_kind": r.get::<_, String>(0)?,
@@ -1722,15 +2430,16 @@ pub fn get_packaging_account(conn: &Connection, payload: &Value) -> CoreResult<V
             "expected_qty": expected,
             "received_qty": received,
             "outstanding_qty": expected - received,
-            "status": status
+            "status": status,
+            "financial_value_fcfa": 0
         }))
     })?;
-    let mut balances = Vec::new();
-    for row in rows { balances.push(row?); }
+    let mut legacy_balances = Vec::new();
+    for row in rows { legacy_balances.push(row?); }
 
     let mut stmt = conn.prepare(
         "SELECT id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at,
-                COALESCE(user_id,''), COALESCE(device_id,''), COALESCE(reversal_of,'')
+                COALESCE(user_id,''), COALESCE(device_id,''), COALESCE(reversal_of,''), engine
          FROM partner_packaging_ledger
          WHERE branch_id=?1 AND partner_type=?2 AND partner_id=?3
          ORDER BY occurred_at DESC LIMIT 200",
@@ -1746,38 +2455,120 @@ pub fn get_packaging_account(conn: &Connection, payload: &Value) -> CoreResult<V
         "occurred_at": r.get::<_, i64>(7)?,
         "user_id": r.get::<_, String>(8)?,
         "device_id": r.get::<_, String>(9)?,
-        "reversal_of": r.get::<_, String>(10)?
+        "reversal_of": r.get::<_, String>(10)?,
+        "engine": r.get::<_, String>(11)?
     })))?;
-    let mut movements = Vec::new();
-    for row in rows { movements.push(row?); }
+    let mut legacy_movements = Vec::new();
+    for row in rows { legacy_movements.push(row?); }
+
     Ok(json!({
         "partner_type": partner_type,
         "partner_id": partner_id,
-        "balances": balances,
-        "movements": movements,
+        "engine": "PHYSICAL_CRATES",
+        "crate_account": physical.clone(),
+        "balances": physical["balances"].clone(),
+        "movements": physical["movements"].clone(),
+        "total_balance_qty": physical["total_balance_qty"].clone(),
+        "indicative_value_fcfa": physical["indicative_value_fcfa"].clone(),
         "financial_value_fcfa": 0,
         "has_billing_rule": false,
-        "is_immutable_ledger": true
+        "is_financial_debt": false,
+        "counts_as_receivable": false,
+        "is_immutable_ledger": true,
+        "legacy": {
+            "engine": "PACKAGING_OBLIGATIONS_0015",
+            "state": "FROZEN",
+            "balances": legacy_balances,
+            "movements": legacy_movements,
+            "bottle_tracking": "DISABLED",
+            "converted_to_financial_debt": false,
+            "note": "Historique conservé en lecture seule. Aucune nouvelle obligation, aucune conversion en dette, aucun retour de bouteilles n'est possible."
+        }
     }))
 }
 
-/// Toute correction est une écriture inverse : l'ancien mouvement reste intact.
+/// Toute correction est une écriture inverse : aucun mouvement (physique ou
+/// historique) n'est réécrit ni supprimé.
 pub fn correct_packaging_movement(conn: &mut Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
     if !matches!(a.role.as_str(), "OWNER" | "ADMIN" | "MANAGER") {
         return Err(CoreError::new("ROLE_FORBIDDEN", "Correction réservée aux rôles de gestion."));
     }
     let movement_id = field_str(payload, "movement_id")?;
-    let reason = field_str(payload, "reason")?;
+    let reason = field_str(payload, "reason")?.trim().to_string();
+    if reason.len() < 3 {
+        return Err(CoreError::new("REASON_REQUIRED", "Un motif de correction est obligatoire."));
+    }
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let original: Option<(String, String, String, String, i64, String)> = tx.query_row(
+    let original = tx.query_row(
+        "SELECT crate_id, movement_type, full_before, full_after, empty_before, empty_after,
+                direction, partner_type, partner_id, partner_delta
+         FROM crate_movements WHERE id=?1 AND branch_id=?2",
+        params![movement_id, a.branch_id],
+        |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?, r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?, r.get::<_, i64>(5)?,
+            r.get::<_, String>(6)?, r.get::<_, Option<String>>(7)?,
+            r.get::<_, Option<String>>(8)?, r.get::<_, i64>(9)?,
+        )),
+    ).optional()?;
+    if let Some((crate_id, movement_type, full_before, full_after, empty_before, empty_after,
+                direction, partner_type, partner_id, partner_delta)) = original {
+        let already: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM crate_movements WHERE reversal_of=?1",
+            params![movement_id], |r| r.get(0),
+        )?;
+        if already > 0 {
+            return Err(CoreError::new("MOVEMENT_ALREADY_REVERSED", "Ce mouvement a déjà été corrigé."));
+        }
+        let full_delta = full_before - full_after;
+        let empty_delta = empty_before - empty_after;
+        let qty = full_delta.abs().max(empty_delta.abs()).max(1);
+        let inverse_type = if direction == "OUT" { "adjustment_in" } else { "adjustment_out" };
+        let document_id = new_id("crate_corr");
+        let (movement, _) = crate::crates::apply_movement(
+            &tx,
+            &a,
+            &crate::crates::CrateMove {
+                crate_id: &crate_id,
+                movement_type: inverse_type,
+                qty,
+                full_delta,
+                empty_delta,
+                partner_type: partner_type.as_deref(),
+                partner_id: partner_id.as_deref(),
+                partner_delta: -partner_delta,
+                document_id: &document_id,
+                idempotency_key: &format!("correction:{movement_id}"),
+                reason: &format!("Correction de {movement_type} : {reason}"),
+                origin: "DEPOT",
+                destination: "DEPOT",
+                source: "RUNTIME",
+                reversal_of: Some(movement_id),
+            },
+        )?;
+        db::audit(&tx, &a.branch_id, &a.user_id, "CORRECT_CRATE_MOVEMENT", movement_id)?;
+        tx.commit()?;
+        return Ok(json!({
+            "engine": "PHYSICAL_CRATES",
+            "correction_id": movement["movement_id"].clone(),
+            "reversal_of": movement_id,
+            "original_kept": true,
+            "movement": movement
+        }));
+    }
+
+    // Mouvement purement historique de l'ancien moteur : correction tracée, sans
+    // effet sur le stock physique et sans remise en route du moteur gelé.
+    let legacy: Option<(String, String, String, String, i64, String)> = tx.query_row(
         "SELECT partner_type, partner_id, item_kind, ref_id, qty, direction
          FROM partner_packaging_ledger WHERE id=?1",
         params![movement_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
     ).optional()?;
     let (partner_type, partner_id, item_kind, ref_id, qty, direction) =
-        original.ok_or_else(|| CoreError::new("MOVEMENT_NOT_FOUND", "Mouvement introuvable."))?;
+        legacy.ok_or_else(|| CoreError::new("MOVEMENT_NOT_FOUND", "Mouvement introuvable."))?;
     let already: i64 = tx.query_row(
         "SELECT COUNT(*) FROM partner_packaging_ledger WHERE reversal_of=?1",
         params![movement_id], |r| r.get(0),
@@ -1786,17 +2577,23 @@ pub fn correct_packaging_movement(conn: &mut Connection, payload: &Value) -> Cor
         return Err(CoreError::new("MOVEMENT_ALREADY_REVERSED", "Ce mouvement a déjà été corrigé."));
     }
     let inverse = if direction == "IN_FROM_PARTNER" { "OUT_TO_PARTNER" } else { "IN_FROM_PARTNER" };
-    let correction_id = new_id("pkg");
+    let correction_id = new_id("pkgcorr");
     tx.execute(
         "INSERT INTO partner_packaging_ledger
-         (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at, user_id, device_id, reversal_of)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+         (id, branch_id, partner_type, partner_id, item_kind, ref_id, direction, qty, document_id, reason, occurred_at, user_id, device_id, reversal_of, engine)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'LEGACY_CORRECTION')",
         params![correction_id, a.branch_id, partner_type, partner_id, item_kind, ref_id,
             inverse, qty, new_id("doc"), reason, now_ms(), a.user_id, a.device_id, movement_id],
     )?;
-    db::audit(&tx, &a.branch_id, &a.user_id, "CORRECT_PACKAGING", movement_id)?;
+    db::audit(&tx, &a.branch_id, &a.user_id, "CORRECT_LEGACY_PACKAGING", movement_id)?;
     tx.commit()?;
-    Ok(json!({ "correction_id": correction_id, "reversal_of": movement_id, "original_kept": true }))
+    Ok(json!({
+        "engine": "LEGACY_0015_READ_ONLY",
+        "correction_id": correction_id,
+        "reversal_of": movement_id,
+        "original_kept": true,
+        "affects_physical_stock": false
+    }))
 }
 
 /// Bons de commande fournisseur avec montant déjà réceptionné.
@@ -2016,6 +2813,7 @@ pub fn get_reports(conn: &Connection, payload: &Value) -> CoreResult<Value> {
         let mut stmt = conn.prepare(
             "SELECT variant_name, SUM(line_total_fcfa), SUM(physical_units) FROM sale_lines sl
              JOIN sales s ON s.id = sl.sale_id WHERE s.branch_id = ?1 AND s.occurred_at >= ?2 AND s.occurred_at <= ?3
+               AND sl.is_packaging = 0
              GROUP BY variant_name ORDER BY SUM(line_total_fcfa) DESC LIMIT 20",
         )?;
         stmt.query_map(params![a.branch_id, day_start, to_ms], |r| Ok(json!({
@@ -2024,10 +2822,17 @@ pub fn get_reports(conn: &Connection, payload: &Value) -> CoreResult<Value> {
             "bottles_sold": r.get::<_, i64>(2)?
         })))?.collect::<Result<_, _>>()?
     };
+    let crate_revenue: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(packaging_sales_fcfa),0) FROM sales
+         WHERE branch_id = ?1 AND occurred_at >= ?2 AND occurred_at <= ?3",
+        params![a.branch_id, day_start, to_ms], |r| r.get(0),
+    )?;
     Ok(json!({
         "from_ms": from_ms,
         "to_ms": to_ms,
         "revenue_fcfa": revenue,
+        "crate_sales_fcfa": crate_revenue,
+        "crate_sales_are_commercial": true,
         "cash_collected_fcfa": cash_collected,
         "credits_fcfa": credits,
         "expenses_fcfa": expenses,
@@ -2282,12 +3087,27 @@ pub fn create_crate_type(conn: &mut Connection, payload: &Value) -> CoreResult<V
         return Err(CoreError::new("CRATE_CODE_EXISTS", "Ce format de casier existe déjà."));
     }
     let id = new_id("crate");
+    // Trois valeurs distinctes ; aucune n'est déduite du prix d'une boisson.
+    let reference_value = field_i64_or(payload, "reference_value_fcfa", replacement);
+    let acquisition_value = field_i64_or(payload, "acquisition_value_fcfa", reference_value);
+    let empty_sale_price = field_i64_or(payload, "empty_sale_price_fcfa", 0);
+    if reference_value < 0 || acquisition_value < 0 || empty_sale_price < 0 {
+        return Err(CoreError::new("INVALID_CRATE_VALUE", "Les valeurs de casier sont des entiers FCFA positifs ou nuls."));
+    }
     tx.execute(
-        "INSERT INTO crate_types (id, code, capacity, compatibility_group_id, allow_half_case, replacement_value_fcfa, is_reusable, name, compartments, dimensions, deposit_value_fcfa, physical_profile_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        "INSERT INTO crate_types (id, code, capacity, compatibility_group_id, allow_half_case, replacement_value_fcfa, is_reusable, name, compartments, dimensions, deposit_value_fcfa, physical_profile_id, acquisition_value_fcfa, reference_value_fcfa, empty_sale_price_fcfa)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         params![id, code, capacity, group, allow_half, replacement, is_reusable,
             field_str(payload, "name").unwrap_or(&code), compartments,
-            field_str_opt(payload, "dimensions"), deposit, physical_profile],
+            field_str_opt(payload, "dimensions"), deposit, physical_profile,
+            acquisition_value, reference_value, empty_sale_price],
+    )?;
+    tx.execute(
+        "INSERT INTO crate_value_history
+           (id, crate_id, acquisition_fcfa, reference_fcfa, empty_sale_fcfa, effective_from,
+            effective_to, changed_by, reason, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,NULL,?7,'Création du format de casier',?6)",
+        params![new_id("cvh"), id, acquisition_value, reference_value, empty_sale_price, now_ms(), a.user_id],
     )?;
     tx.execute(
         "INSERT OR IGNORE INTO crate_stock (branch_id, crate_id, full_qty, empty_qty) VALUES (?1,?2,0,0)",
@@ -2347,18 +3167,59 @@ pub fn update_crate_type(conn: &mut Connection, payload: &Value) -> CoreResult<V
             payload.get("is_reusable").and_then(Value::as_bool).map(|v| if v { 1 } else { 0 }),
         ],
     )?;
+    // Valeurs financières : toute modification crée une période d'historique et
+    // ne réécrit jamais la valeur figée des mouvements passés.
+    let current_values: (i64, i64, i64) = tx.query_row(
+        "SELECT acquisition_value_fcfa, reference_value_fcfa, empty_sale_price_fcfa
+         FROM crate_types WHERE id = ?1",
+        params![crate_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let acquisition = field_i64_or(payload, "acquisition_value_fcfa", current_values.0);
+    let reference = field_i64_or(payload, "reference_value_fcfa", current_values.1);
+    let empty_sale = field_i64_or(payload, "empty_sale_price_fcfa", current_values.2);
+    if acquisition < 0 || reference < 0 || empty_sale < 0 {
+        return Err(CoreError::new("INVALID_CRATE_VALUE", "Les valeurs de casier sont des entiers FCFA positifs ou nuls."));
+    }
+    if (acquisition, reference, empty_sale) != current_values {
+        let reason = field_str_opt(payload, "reason").unwrap_or("Modification des valeurs du casier");
+        tx.execute(
+            "UPDATE crate_value_history SET effective_to = ?1 WHERE crate_id = ?2 AND effective_to IS NULL",
+            params![now_ms(), crate_id],
+        )?;
+        tx.execute(
+            "INSERT INTO crate_value_history
+               (id, crate_id, acquisition_fcfa, reference_fcfa, empty_sale_fcfa, effective_from,
+                effective_to, changed_by, reason, created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,NULL,?7,?8,?6)",
+            params![new_id("cvh"), crate_id, acquisition, reference, empty_sale, now_ms(), a.user_id, reason],
+        )?;
+        tx.execute(
+            "UPDATE crate_types SET acquisition_value_fcfa=?2, reference_value_fcfa=?3,
+                    empty_sale_price_fcfa=?4 WHERE id=?1",
+            params![crate_id, acquisition, reference, empty_sale],
+        )?;
+    }
     db::enqueue(
         &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "CRATE_TYPE_UPSERT",
         &format!("Format {crate_id}"), &payload.to_string(), 1, &new_id("idem"),
     )?;
     db::audit(&tx, &a.branch_id, &a.user_id, "CRATE_TYPE_UPSERT", crate_id)?;
     tx.commit()?;
-    Ok(json!({ "crate_type_id": crate_id, "capacity": capacity }))
+    Ok(json!({
+        "crate_type_id": crate_id,
+        "capacity": capacity,
+        "acquisition_value_fcfa": acquisition,
+        "reference_value_fcfa": reference,
+        "empty_sale_price_fcfa": empty_sale
+    }))
 }
 
-/// Stocks d'emballages vides par profil exact et par type de casier.
+/// Stocks du dépôt : les casiers proviennent du journal physique (pleins,
+/// vides, chez les clients, chez les fournisseurs). Les bouteilles ne sont plus
+/// suivies : elles restent consultables comme information historique.
 pub fn get_packaging_stock(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
+    let stock = crate::crates::get_crate_stock(conn, payload)?;
     let mut stmt = conn.prepare(
         "SELECT bp.id, bp.name, bp.volume_label, bp.compatibility_group_id, COALESCE(ebs.qty,0)
          FROM bottle_profiles bp LEFT JOIN empty_bottle_stock ebs
@@ -2370,22 +3231,23 @@ pub fn get_packaging_stock(conn: &Connection, payload: &Value) -> CoreResult<Val
         "name": r.get::<_, String>(1)?,
         "volume_label": r.get::<_, String>(2)?,
         "compatibility_group_id": r.get::<_, String>(3)?,
-        "qty": r.get::<_, i64>(4)?
+        "qty": r.get::<_, i64>(4)?,
+        "tracked": false
     })))?.collect::<Result<_, _>>()?;
-    let mut stmt = conn.prepare(
-        "SELECT ct.id, ct.code, ct.capacity, ct.compatibility_group_id, COALESCE(cs.empty_qty,0), COALESCE(cs.full_qty,0)
-         FROM crate_types ct LEFT JOIN crate_stock cs
-         ON cs.crate_id = ct.id AND cs.branch_id = ?1 ORDER BY ct.code",
-    )?;
-    let crates: Vec<Value> = stmt.query_map(params![a.branch_id], |r| Ok(json!({
-        "crate_type_id": r.get::<_, String>(0)?,
-        "code": r.get::<_, String>(1)?,
-        "capacity": r.get::<_, i64>(2)?,
-        "compatibility_group_id": r.get::<_, String>(3)?,
-        "empty_qty": r.get::<_, i64>(4)?,
-        "full_qty": r.get::<_, i64>(5)?
-    })))?.collect::<Result<_, _>>()?;
-    Ok(json!({ "empty_bottles": bottles, "crates": crates }))
+    Ok(json!({
+        "crates": stock["crates"].clone(),
+        "totals": stock["totals"].clone(),
+        "valuation": stock["valuation"].clone(),
+        "engine": stock["engine"].clone(),
+        "legacy_engine": stock["legacy_engine"].clone(),
+        "empty_bottles": bottles,
+        "bottles_tracking": {
+            "state": "INFORMATIONAL_ONLY",
+            "creates_stock": false,
+            "creates_debt": false,
+            "note": "Une bouteille, un PET ou une canette n'est pas un emballage suivi : aucun stock, aucune dette, aucun retour."
+        }
+    }))
 }
 
 /// Bordereau local : opérations financières et emballages d'un partenaire.
@@ -2902,6 +3764,41 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "archiveProductVariant" | "archive_product_variant" => archive_product_variant(conn, payload),
         "createCrateType" | "create_crate_type" => create_crate_type(conn, payload),
         "updateCrateType" | "update_crate_type" => update_crate_type(conn, payload),
+        "createCustomer" | "create_customer" => create_customer(conn, payload),
+        "mergeCustomers" | "merge_customers" => merge_customers(conn, payload),
+        "getCrateStock" | "get_crate_stock" => crate::crates::get_crate_stock(conn, payload),
+        "getCrateStockByType" | "get_crate_stock_by_type" => crate::crates::get_crate_stock_by_type(conn, payload),
+        "getCustomerCrateBalance" | "get_customer_crate_balance" => crate::crates::get_customer_crate_balance(conn, payload),
+        "getSupplierCrateBalance" | "get_supplier_crate_balance" => crate::crates::get_supplier_crate_balance(conn, payload),
+        "getCrateMovementHistory" | "get_crate_movement_history" => crate::crates::get_crate_movement_history(conn, payload),
+        "getCrateValuationHistory" | "get_crate_valuation_history" => crate::crates::get_crate_valuation_history(conn, payload),
+        "configureCrateValuation" | "configure_crate_valuation" => crate::crates::configure_crate_valuation(conn, payload),
+        "recordCustomerCrateReturn" | "record_customer_crate_return" => crate::crates::record_customer_crate_return(conn, payload),
+        "recordSupplierCrateExchange" | "record_supplier_crate_exchange" => crate::crates::record_supplier_crate_exchange(conn, payload),
+        "recordCrateAdjustment" | "record_crate_adjustment" => crate::crates::record_crate_adjustment(conn, payload),
+        "recordCrateLoss" | "record_crate_loss" => crate::crates::record_crate_loss(conn, payload),
+        "recordEmptyCrateSale" | "record_empty_crate_sale" => crate::crates::record_empty_crate_sale(conn, payload),
+        "getCatalogDashboard" | "get_catalog_dashboard" => crate::catalog::get_catalog_dashboard(conn, payload),
+        "getCatalogProducers" | "get_catalog_producers" => crate::catalog::get_catalog_producers(conn, payload),
+        "getCatalogCategories" | "get_catalog_categories" => crate::catalog::get_catalog_categories(conn, payload),
+        "getCatalogBrands" | "get_catalog_brands" => crate::catalog::get_catalog_brands(conn, payload),
+        "getCatalogProducts" | "get_catalog_products" => crate::catalog::get_catalog_products(conn, payload),
+        "getCatalogImportHistory" | "get_catalog_import_history" => crate::catalog::get_catalog_import_history(conn, payload),
+        "getBreweryCatalogs" | "get_brewery_catalogs" => crate::catalog::get_brewery_catalogs(conn, payload),
+        "previewCatalogImport" | "preview_catalog_import" => crate::catalog::preview_catalog_import(conn, payload),
+        "importCatalogJson" | "import_catalog_json" => crate::catalog::import_catalog_json(conn, payload),
+        "createCatalogProducer" | "create_catalog_producer" => crate::catalog::create_catalog_producer(conn, payload),
+        "updateCatalogProducer" | "update_catalog_producer" => crate::catalog::update_catalog_producer(conn, payload),
+        "createCatalogCategory" | "create_catalog_category" => crate::catalog::create_catalog_category(conn, payload),
+        "createCatalogBrand" | "create_catalog_brand" => crate::catalog::create_catalog_brand(conn, payload),
+        "createCatalogProduct" | "create_catalog_product" => crate::catalog::create_catalog_product(conn, payload),
+        "activateCatalogProduct" | "activate_catalog_product" => crate::catalog::activate_catalog_product(conn, payload),
+        "deactivateCatalogProduct" | "deactivate_catalog_product" => crate::catalog::deactivate_catalog_product(conn, payload),
+        "updateCatalogVariant" | "update_catalog_variant" => crate::catalog::update_catalog_variant(conn, payload),
+        "createBreweryCatalog" | "create_brewery_catalog" => crate::catalog::create_brewery_catalog(conn, payload),
+        "updateBreweryCatalog" | "update_brewery_catalog" => crate::catalog::update_brewery_catalog(conn, payload),
+        "getCrateMigrationReview" | "get_crate_migration_review" => crate::crates::get_crate_migration_review(conn, payload),
+        "resolveCrateMigrationReview" | "resolve_crate_migration_review" => crate::crates::resolve_crate_migration_review(conn, payload),
         "getPackagingStock" | "get_packaging_stock" => get_packaging_stock(conn, payload),
         "getPartnerStatement" | "get_partner_statement" => get_partner_statement(conn, payload),
         "getPackagingAccount" | "get_packaging_account" => get_packaging_account(conn, payload),

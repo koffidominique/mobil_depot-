@@ -356,3 +356,225 @@
 - **Rapport** : `docs/PART17_ACCEPTANCE.md` évalue chaque critère des sections application, métier, hors ligne, intégration et fiabilité.
 - **Décision** : **non accepté pour production pilote** ; les critères exécutables passent, mais builds natifs, E2E, sync réelle et audit crypto restent à faire.
 - **Validation locale** : 9 contrôles PASS, 6 catégories SKIP, aucune réussite annoncée sans exécution.
+
+
+## LOT 42 — CASIERS PLASTIQUE (cahier des charges `cata_product.md`)
+
+- **Modèle** : `MIGRATION_11` (`schema_version = 11`) ajoute `crate_movements`
+  (13 types, journal immuable), `crate_value_history`, `partner_crate_balances`,
+  `crate_migration_review`, les valeurs de casier et les permissions
+  `crate.adjust` / `crate.loss` / `crate.sell`.
+- **Neutralisation 0015** : `packaging_expectations` et
+  `partner_packaging_ledger` sont gelés par triggers ; les données historiques
+  sont reconstituées en `initial_balance` avec provenance et
+  `crate_migration_review` liste les cas ambigus. Aucune conversion en dette.
+- **Services** : `rust/src/crates.rs` (moteur physique) + commandes
+  `getCrateStock`, `getCustomerCrateBalance`, `recordCustomerCrateReturn`,
+  `recordSupplierCrateExchange`, `recordCrateLoss`, `recordEmptyCrateSale`,
+  `configureCrateValuation`, `getCrateMigrationReview`… ; `createSale` et
+  `receivePurchase` intègrent les mouvements de casiers dans leur transaction.
+- **Interface** : nouvel écran `CratesScreen`, refonte de `StockScreen`,
+  `CustomersScreen` et `SuppliersScreen`, entrée de menu et route dédiées.
+- **Tests** : `rust/tests/part18_crates.rs` (nouveau), `part5_model.rs` et
+  `part7_schema.rs` réalignés, `__tests__/part20-crates.test.ts` (24 tests pour
+  les cas 16 à 50 du §20).
+- **Validation exécutée** : `tsc --noEmit`, `tsc -p web/tsconfig.json`, ESLint
+  (0 erreur), Jest **18 suites / 76 tests**, parseur Rust (12 fichiers),
+  11 migrations jouées en SQLite (base neuve et base v10), préparation `EXPLAIN`
+  de toutes les requêtes SQL du cœur.
+- **Non exécuté** : `cargo test`/`cargo check` (chaîne absente), builds natifs,
+  E2E. Détail et matrice de tests : `docs/PART20_CRATES.md`.
+
+## LOT 43 — CATALOGUE MULTI-BRASSERIES (cahier des charges `cata_product.md`, §4-6 et §12-15)
+
+- **Modèle** : `MIGRATION_12` (`schema_version = 12`) ajoute `producers`,
+  `brewery_catalogs`, `catalog_imports` (idempotence par `tenant_id`,
+  `request_key`) et `catalog_sources` ; `ensure_catalog_columns` complète
+  `brands`, `product_categories`, `products`, `product_variants` et
+  `crate_types` (`capacity_to_verify`). Aucune table produit/casier dupliquée :
+  `product_variants` et `crate_types` restent les sources de vérité.
+- **Moteur** : `rust/src/catalog.rs` — détection `LEGACY` / `SOLIBRA_NEW` /
+  `BRASSIVOIRE` / `GENERIC`, normalisation (`volume_ml` entier, `plastic_crate`
+  seul emballage suivi), aperçu sans écriture, import atomique idempotent avec
+  audit et synchronisation, administration (producteurs, catégories, marques,
+  produits, variantes, catalogues) et lectures du tableau de bord.
+- **Garde-fous** : prix locaux, stocks, valeurs de casier et `is_active` jamais
+  écrasés ; aucune référence supprimée ; capacité inconnue →
+  `CRATE_CAPACITY_TO_VERIFY` + `capacity_to_verify = 1` (12/24 jamais devinés) ;
+  produits importés non vendables avant activation locale ; `DUPLICATE_SKU`.
+- **Interface** : `CatalogScreen` refondu + `CatalogImportSection` (JSON collé,
+  aperçu, confirmation physique des capacités, application, activation,
+  historique des imports), hooks `useCatalog*` et méthodes client dédiées.
+- **Tests** : `__tests__/part21-catalog.test.ts` (17 cas : §20 cas 1 à 15 +
+  aperçu sans écriture + compteurs du §15.7), `part13-audit` et
+  `part20-crates` réalignés sur `schema_version = 12`.
+- **Validation exécutée** : `tsc --noEmit`, `tsc -p web/tsconfig.json` (0),
+  ESLint (0 erreur), Jest **19 suites / 97 tests**, `vite build`, parseur Rust
+  (7 fichiers), 12 migrations jouées en SQLite sur base neuve, `EXPLAIN` de
+  toutes les requêtes de `catalog.rs`.
+- **Non exécuté** : `cargo test` / `cargo check` (chaîne Rust absente), builds
+  natifs, E2E, sync réelle. Détail : `docs/PART21_CATALOG.md`.
+
+## LOT 44 — CATALOGUES DE DÉMARRAGE DES BRASSERIES IVOIRIENNES
+
+- **Livré** : `assets/catalogs/ci_solibra_2026.json` (9 marques, 24 variantes,
+  5 formats de casiers documentés : 24×33 cl, 12×50 cl, 12×65 cl, 12×100 cl,
+  20×50 cl) et `assets/catalogs/ci_brassivoire_2026.json` (5 marques,
+  11 variantes, casier 60 cl « à vérifier »). `assets/catalogs/index.ts` expose
+  les métadonnées et le texte prêt à coller.
+- **Interface** : nouvelle carte « Catalogues de démarrage — brasseries
+  ivoiriennes » dans `CatalogImportSection` ; un appui charge le JSON et lance
+  l'aperçu, l'application reste une action explicite de l'OWNER.
+- **Règles respectées** : aucun prix livré (saisie depuis les factures, jamais
+  écrasée par un import), aucune contenance inventée (60 cl Brassivoire →
+  `capacity_to_verify`), aucun produit activé, aucune conversion automatique,
+  bouteilles/canettes/cartons = caractéristiques et non casiers, sources
+  publiques conservées dans `source_ids`.
+- **Tests** : `__tests__/part22-ci-catalogs.test.ts` (9 cas) — présence des deux
+  catalogues, absence de prix, import complet, contenances 24/12/12/20,
+  casier 60 cl à vérifier, non-confusion casier/contenant, cohabitation des deux
+  producteurs, rejeu idempotent, traçabilité des sources.
+- **Validation exécutée** : `tsc --noEmit` (0), `tsc -p web/tsconfig.json` (0),
+  ESLint (0 erreur), Jest **20 suites / 106 tests**, `vite build`.
+- **Non exécuté** : `cargo test` / `cargo check` (chaîne Rust absente), builds
+  natifs, E2E. Détail et limites : `docs/CATALOGUES_CI.md`.
+
+## LOT 44 bis — CORRECTION : CASIERS DES CATALOGUES ALIGNÉS SUR LE RÉFÉRENTIEL
+
+- **Défaut corrigé** : les catalogues de démarrage créaient `C24-33`, `C12-50`,
+  `C12-65`, `C12-100`, `C20-50` et `CI-60`, alors que le référentiel contient déjà
+  `B24-33`, `B12-50`, `B12-65`, `B12-100`, `B20-50` et `B12-60`. Deux codes pour
+  un même objet physique auraient dupliqué les formats et cassé la validation des
+  casiers mixtes (qui résout le format par identifiant du référentiel).
+- **Correction** : codes alignés sur le référentiel ; le 60 cl de Brassivoire
+  utilise `B12-60` (12 places), à confirmer physiquement. Aucun casier dupliqué.
+- **Tests** : `__tests__/part22-ci-catalogs.test.ts` vérifie l'unicité de
+  `B24-33` et de `B12-60`, l'absence de `C24-33`/`CI-60`, et la contenance 12.
+  Jest **20 suites / 106 tests**, `tsc` x2, `vite build` OK.
+
+## LOT 45 — DEMI-CASIER ET CASIER MIXTE RÉELLEMENT VENDABLES
+
+- **Constat corrigé** : le moteur savait calculer un demi-casier et valider un
+  casier mixte, mais l'écran de vente n'offrait pas `HALF_CASE`, envoyait
+  `mixed_cases: []` en dur, et l'assistant « Commande mixte » n'était pas
+  enregistré dans le navigateur ; `createMixedOrder` ne faisait que vérifier.
+- **Prix (décision OWNER)** : demi-casier = `prix bouteille × (unités du casier ÷ 2)`,
+  règle unique dans `src/core/pricing.ts`.
+- **Vente** : unité demi-casier proposée et bloquée si le format l'interdit ;
+  casiers mixtes visibles, totalisés et transmis à `createSale`, qui les valide
+  de nouveau et les écrit (lignes `is_mixed`, journal des casiers, caisse,
+  audit, outbox) dans une seule transaction.
+- **Sécurité backend** : capacité de casier et autorisation de demi-casier sont
+  relues **en base** (`prepare_sale` → `crate_spec_owned_for_line`), plus jamais
+  reprises du panier ; un format importé (absent du référentiel compilé) est
+  accepté via `resolved_crate_specs`.
+- **Physique** : casier mixte complet → `sale_full_out` imputé au client ;
+  demi-casier (simple ou mixte) → casier ouvert au dépôt, `partner_delta = 0`,
+  aucune dette, aucune caisse.
+- **Interface** : `MixedOrderScreen` enregistré (route + menu), retour au POS
+  après validation, retrait d'un casier mixte du panier.
+- **Tests** : `__tests__/part23-half-mixed.test.ts` (13 cas) + test de domaine
+  Rust `mixed_case_uses_format_resolved_by_the_database_layer`.
+- **Validation exécutée** : Jest **21 suites / 119 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 6 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Détail et
+  limites : `docs/PART23_HALF_MIXED.md`.
+
+## LOT 46 — erreurs d'implémentation et logiques métier
+
+- **Constat** : audit des commandes de vente. Trois défauts déjà identifiés
+  (vente non idempotente, deltas de casiers absents du mock, stock de casiers
+  non vérifié avant envoi) en ont révélé quatre autres, plus graves.
+- **Idempotence** : `create_sale` lit `request_key` **avant toute écriture**
+  (recherche dans `sync_outbox`, portée branche) et renvoie la vente déjà
+  enregistrée (`idempotent: true`) ; la clé devient celle de l'outbox ; le POS
+  la conserve en cas d'échec et l'invalide quand le panier change.
+- **Autorité backend** : `create_sale` écrit `sale_lines`, le stock, les
+  casiers mixtes et les mouvements de casiers depuis la charge **enrichie**
+  (`prepare_sale`), plus depuis le payload client.
+- **Journaux** : les ventes écrivent enfin un `stock_movements` `SALE_OUT` (au
+  lieu d'une ligne `STOCK_OUT` à 0 FCFA dans `cash_movements`) ; un
+  encaissement espèces confirmé écrit un `cash_movements` `IN`, y compris pour
+  la vente de casiers vides ; l'incrément de stock supporte un variant jamais
+  approvisionné (upsert, quantité négative visible).
+- **Remise** : POS aligné sur le moteur (sous-total brut, remise, **net à
+  encaisser** par défaut) ; le mock applique enfin les règles de
+  `depotpro-core` : `NEGATIVE_DISCOUNT`, `DISCOUNT_EXCEEDS_TOTAL`, plafonds de
+  rôle, `ROLE_FORBIDDEN`, `DUPLICATE_SALE_LINE`, `OVERPAYMENT`,
+  `CUSTOMER_REQUIRED_FOR_CREDIT`, `INSUFFICIENT_STOCK` strict, alertes sinon.
+- **Stock mixte** : `prepare_sale` fournit le stock des lignes de casiers
+  mixtes ; plus d'alerte de stock fantôme sur une boisson vendue uniquement en
+  mixte.
+- **Reçus** : `RC-{ms}-{suffixe}` — deux ventes dans la même milliseconde ne
+  partagent plus un numéro.
+- **Catalogue** : `PACK_SIZE_TO_VERIFY` quand le nombre d'unités par casier
+  n'est pas déclaré (1 n'est plus supposé silencieusement).
+- **Casiers** : `applyCrateMove` expose `full_delta`/`empty_delta` ; le POS
+  compare le stock de casiers pleins requis au stock réel, nomme le format
+  manquant et bloque la validation ; un panier uniquement composé de casiers
+  mixtes n'est plus considéré comme vide.
+- **Tests** : `__tests__/part24-business-integrity.test.ts` (19 cas) + test de
+  domaine Rust `mixed_case_stock_alert_uses_the_line_stock`.
+- **Validation exécutée** : Jest **22 suites / 138 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 6 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Détail des
+  défauts et des écarts assumés : `docs/PART24_INTEGRITE.md`.
+
+## LOT 47 — fiche de clientèle unique pour toute commande
+
+- **Règle appliquée** : aucune vente anonyme. Toute commande est rattachée à une
+  fiche de clientèle, retrouvée si le client est connu, ouverte dans la même
+  transaction sinon.
+- **Identité** : téléphone normalisé (indicatif ivoirien `+225`/`00225` retiré,
+  au moins 8 chiffres) comme clé forte, puis nom compacté et comparé sans casse.
+  Aucune fiche n'est créée si une fiche correspond (`CUSTOMER_REQUIRED`,
+  `CUSTOMER_NAME_REQUIRED`, `INVALID_PHONE`).
+- **Moteur** : `create_sale` accepte `customer_name`/`customer_phone` à la place
+  d'un `customer_id`, ouvre ou retrouve la fiche (`ensure_customer`), puis
+  rattache la vente, les casiers, le crédit, l'audit et l'outbox à cet
+  identifiant ; le rejeu idempotent renvoie la fiche d'origine. Nouvelle
+  commande `createCustomer` (droit `sales.write`). La vente de casier vide suit
+  la même règle.
+- **Crédit** : une fiche ouverte au comptoir a un plafond **0** — le suivi ne
+  vaut pas autorisation d'endettement.
+- **POS** : « Client comptoir » supprimé ; nom obligatoire + téléphone facultatif
+  pour un nouveau client, validation bloquée sans identité, identité vidée après
+  la vente, liste des clients rafraîchie, notification de fiche ouverte.
+- **Composition mixte** : `createMixedOrder` n'écrit rien et annonce
+  `customer_required` / `customer_will_be_created`.
+- **Tests** : `__tests__/part25-customer-identity.test.ts` (14 cas) + test de
+  domaine Rust `credit_limit_is_strict_and_every_sale_needs_a_customer` ; tests
+  d'intégration Rust alignés sur l'identité obligatoire.
+- **Validation exécutée** : Jest **23 suites / 153 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 3 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Écarts
+  (historique anonyme non réécrit, fusion de fiches absente) :
+  `docs/PART25_CLIENT_UNIQUE.md`.
+
+## LOT 48 — outil de fusion de fiches clients
+
+- **Besoin** : la synchronisation desktop peut pousser le même client sous un
+  second identifiant (ou le comptoir crée une fiche qui existe déjà).
+- **Commande** `mergeCustomers` : `dry_run` renvoie le récapitulatif sans écrire ;
+  la fusion ré-attribue ventes, paiements, obligations historiques (références
+  seulement), revues de migration, soldes de casiers et totaux ; la fiche source
+  est **archivée** (jamais supprimée). Motif obligatoire, `request_key`
+  idempotente namespacée `merge_…`.
+- **Casiers** : journal immuable ⇒ re-attribution par deux mouvements neutres
+  (`adjustment_out` sur la source, `adjustment_in` sur la cible, deltas
+  physiques à 0) ; le stock du dépôt ne bouge pas.
+- **Crédit** : plafond = le plus élevé des deux fiches (jamais de retrait
+  silencieux), signalé dans `warnings`.
+- **Droits** : permission `catalog.write` + contrôle de rôle OWNER/ADMIN/MANAGER
+  (`ROLE_FORBIDDEN` sinon), audit `CUSTOMER_MERGED`, opération d'outbox.
+- **Refus** : `CUSTOMER_MERGE_SAME`, `CUSTOMER_NOT_FOUND`,
+  `CUSTOMER_ARCHIVED_TARGET`, `CUSTOMER_ALREADY_ARCHIVED`, `REASON_REQUIRED`.
+- **Interface** : écran « Fusion de fiches clients » (recherche, choix
+  source/cible, analyse, motif, confirmation) enregistré dans la navigation et
+  le menu.
+- **Tests** : `__tests__/part26-customer-merge.test.ts` (9 cas).
+- **Validation exécutée** : Jest **24 suites / 162 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 4 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Limites
+  (fusion par point de vente, pas de dé-fusion) :
+  `docs/PART26_FUSION_CLIENTS.md`.

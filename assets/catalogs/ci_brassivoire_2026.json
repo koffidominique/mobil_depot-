@@ -1,0 +1,221 @@
+{
+  "catalog_id": "BRASSIVOIRE-CI-2026-11",
+  "producer": {
+    "code": "BRASSIVOIRE",
+    "name": "Brassivoire (Heineken · CFAO)",
+    "city": "Anyama — Zone industrielle PK 24",
+    "country": "Côte d'Ivoire"
+  },
+  "note": "Catalogue de démarrage : marques et contenances publiées au 20/11/2026. Le casier 60 cl utilise le format déjà présent au référentiel du dépôt (B12-60, 12 places) ; confirmez physiquement vos casiers avant d'y stocker, et corrigez le format si les vôtres diffèrent.",
+  "categories": [
+    {
+      "code": "BIERES",
+      "name": "Bières",
+      "is_alcoholic": true
+    },
+    {
+      "code": "MALT",
+      "name": "Boissons maltées",
+      "is_alcoholic": false
+    }
+  ],
+  "brands": [
+    {
+      "code": "IVOIRE",
+      "name": "Ivoire"
+    },
+    {
+      "code": "IVOIRE_BLACK",
+      "name": "Ivoire Black"
+    },
+    {
+      "code": "HEINEKEN",
+      "name": "Heineken"
+    },
+    {
+      "code": "DESPERADOS",
+      "name": "Desperados"
+    },
+    {
+      "code": "RHINO",
+      "name": "Rhino Energy Malt"
+    }
+  ],
+  "packaging_types": [
+    {
+      "type": "plastic_crate",
+      "code": "B12-60",
+      "name": "Casier 12 × 60 cl (format du référentiel, à confirmer physiquement)",
+      "capacity": 12
+    },
+    {
+      "type": "returnable_glass_bottle",
+      "code": "BTE-VC-60"
+    },
+    {
+      "type": "can",
+      "code": "CAN-50"
+    },
+    {
+      "type": "carton",
+      "code": "CARTON"
+    }
+  ],
+  "products": [
+    {
+      "code": "IVOIRE-CLASSIC",
+      "name": "Ivoire Classic",
+      "category": "BIERES",
+      "brand": "IVOIRE",
+      "description": "Bière blonde 5,0 % brassée avec du riz local — 33 cl et 60 cl retournable."
+    },
+    {
+      "code": "IVOIRE-BLACK",
+      "name": "Ivoire Black",
+      "category": "BIERES",
+      "brand": "IVOIRE_BLACK",
+      "description": "Bière brune 6,5 % — 33 cl et 60 cl retournable."
+    },
+    {
+      "code": "HEINEKEN",
+      "name": "Heineken",
+      "category": "BIERES",
+      "brand": "HEINEKEN",
+      "description": "Bière blonde 5,0 % brassée localement — 25 cl, 33 cl, 50 cl, canette 50 cl."
+    },
+    {
+      "code": "DESPERADOS",
+      "name": "Desperados",
+      "category": "BIERES",
+      "brand": "DESPERADOS",
+      "description": "Bière blonde aromatisée 5,9 % — 25 cl, 33 cl, canette 50 cl."
+    },
+    {
+      "code": "RHINO",
+      "name": "Rhino Energy Malt",
+      "category": "MALT",
+      "brand": "RHINO",
+      "description": "Boisson maltée énergisante sans alcool."
+    }
+  ],
+  "variants": [
+    {
+      "sku": "IVOIRE-60-CI60",
+      "name": "Ivoire Classic 60 cl",
+      "product_id": "IVOIRE-CLASSIC",
+      "brand": "IVOIRE",
+      "volume_label": "60 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "B12-60",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "IVOIRE-33",
+      "name": "Ivoire Classic 33 cl",
+      "product_id": "IVOIRE-CLASSIC",
+      "brand": "IVOIRE",
+      "volume_label": "33 cl",
+      "pack_size": null
+    },
+    {
+      "sku": "IVOIRE-BLACK-60-CI60",
+      "name": "Ivoire Black 60 cl",
+      "product_id": "IVOIRE-BLACK",
+      "brand": "IVOIRE_BLACK",
+      "volume_label": "60 cl",
+      "pack_size": 12,
+      "container_type": "returnable_glass_bottle",
+      "crate_type": "B12-60",
+      "crate_capacity": 12
+    },
+    {
+      "sku": "IVOIRE-BLACK-33",
+      "name": "Ivoire Black 33 cl",
+      "product_id": "IVOIRE-BLACK",
+      "brand": "IVOIRE_BLACK",
+      "volume_label": "33 cl",
+      "pack_size": null
+    },
+    {
+      "sku": "HEINEKEN-25",
+      "name": "Heineken 25 cl",
+      "product_id": "HEINEKEN",
+      "brand": "HEINEKEN",
+      "volume_label": "25 cl",
+      "pack_size": null
+    },
+    {
+      "sku": "HEINEKEN-33",
+      "name": "Heineken 33 cl",
+      "product_id": "HEINEKEN",
+      "brand": "HEINEKEN",
+      "volume_label": "33 cl",
+      "pack_size": null
+    },
+    {
+      "sku": "HEINEKEN-50",
+      "name": "Heineken 50 cl",
+      "product_id": "HEINEKEN",
+      "brand": "HEINEKEN",
+      "volume_label": "50 cl",
+      "pack_size": null
+    },
+    {
+      "sku": "HEINEKEN-CAN50",
+      "name": "Heineken canette 50 cl",
+      "product_id": "HEINEKEN",
+      "brand": "HEINEKEN",
+      "volume_label": "50 cl",
+      "pack_size": null,
+      "container_type": "can"
+    },
+    {
+      "sku": "DESPERADOS-25",
+      "name": "Desperados 25 cl",
+      "product_id": "DESPERADOS",
+      "brand": "DESPERADOS",
+      "volume_label": "25 cl",
+      "pack_size": null
+    },
+    {
+      "sku": "DESPERADOS-33",
+      "name": "Desperados 33 cl",
+      "product_id": "DESPERADOS",
+      "brand": "DESPERADOS",
+      "volume_label": "33 cl",
+      "pack_size": null
+    },
+    {
+      "sku": "DESPERADOS-CAN50",
+      "name": "Desperados canette 50 cl",
+      "product_id": "DESPERADOS",
+      "brand": "DESPERADOS",
+      "volume_label": "50 cl",
+      "pack_size": null,
+      "container_type": "can"
+    }
+  ],
+  "source_ids": [
+    {
+      "label": "Brassivoire — nos marques",
+      "url": "https://brassivoire.ci/nos-marques/"
+    },
+    {
+      "label": "Brassivoire — Ivoire (33 cl et 60 cl)",
+      "url": "https://brassivoire.ci/nos_marques/ivoire/"
+    },
+    {
+      "label": "Brassivoire — Heineken (25, 33, 50 cl, canette 50 cl)",
+      "url": "https://brassivoire.ci/nos_marques/heineken/"
+    },
+    {
+      "label": "Brassivoire — Black (33 cl et 60 cl)",
+      "url": "https://brassivoire.ci/nos_marques/black/"
+    },
+    {
+      "label": "Brassivoire — Desperados (25, 33 cl, canette 50 cl)",
+      "url": "https://brassivoire.ci/nos_marques/desperados/"
+    }
+  ]
+}

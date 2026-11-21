@@ -6,6 +6,8 @@ import type {
   AuthSession,
   Customer,
   CustomerAccount,
+  CreatedCustomer,
+  CustomerMergeResult,
   Dashboard,
   Inventory,
   MixedCaseInput,
@@ -30,6 +32,24 @@ import type {
   SyncConflict,
   PackagingAccount,
   PackagingStock,
+  CrateAccount,
+  CrateExchangeResult,
+  CrateMigrationReview,
+  CrateMovement,
+  CrateReturnResult,
+  CrateStockSummary,
+  CrateValuationHistory,
+  EmptyCrateSaleInput,
+  BrandRow,
+  BreweryCatalogRow,
+  CatalogDashboard,
+  CatalogFormat,
+  CatalogImportPreview,
+  CatalogImportReport,
+  CatalogImportRun,
+  CatalogVariantRow,
+  CategoryRow,
+  ProducerRow,
   StockMovement,
   PartnerStatement,
   VariantSaveInput,
@@ -188,6 +208,14 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
+    /** Client non encore fiché : sa fiche est créée (ou retrouvée) par la vente. */
+    customer_name?: string;
+    customer_phone?: string;
+    customer_neighborhood?: string;
+    /** Clé d'idempotence de la vente : le rejeu renvoie la vente déjà enregistrée. */
+    request_key?: string;
+    /** Casiers vides rendus par le client au moment de la vente (retour physique). */
+    empty_crates_returned?: Array<{ crate_type_id: string; qty: number; reason?: string }>;
   }) => {
     const valid = await validateInterface(saleSchema, input, 'Validation de vente');
     return call<SaleValidation>('validateSale', valid);
@@ -201,12 +229,41 @@ export const depot = {
     discount_fcfa: number;
     payments: PaymentInput[];
     is_online: boolean;
+    /** Client non encore fiché : sa fiche est créée (ou retrouvée) par la vente. */
+    customer_name?: string;
+    customer_phone?: string;
+    customer_neighborhood?: string;
+    /** Clé d'idempotence de la vente : le rejeu renvoie la vente déjà enregistrée. */
+    request_key?: string;
+    /** Casiers vides rendus par le client au moment de la vente (retour physique). */
+    empty_crates_returned?: Array<{ crate_type_id: string; qty: number; reason?: string }>;
   }) => {
     const valid = await validateInterface(saleSchema, input, 'Création de vente');
     return call<SaleResult>('createSale', valid);
   },
 
   createMixedOrder: (input: MixedCaseInput) => call<ValidatedMixedCase>('createMixedOrder', input),
+
+  /**
+   * Fusionne deux fiches du même client (doublon poussé par la synchronisation
+   * desktop). `dry_run` renvoie le récapitulatif sans rien écrire.
+   */
+  mergeCustomers: (input: {
+    source_customer_id: string;
+    target_customer_id: string;
+    reason?: string;
+    request_key?: string;
+    dry_run?: boolean;
+  }) => call<CustomerMergeResult>('mergeCustomers', input),
+
+  /** Ouvre (ou retrouve) la fiche de clientèle unique. */
+  createCustomer: (input: {
+    name?: string;
+    customer_name?: string;
+    phone?: string;
+    customer_phone?: string;
+    neighborhood?: string;
+  }) => call<CreatedCustomer>('createCustomer', input),
 
   registerPackagingReturn: (input: {
     partner_type: 'CUSTOMER' | 'SUPPLIER';
@@ -232,10 +289,24 @@ export const depot = {
       unit_price_fcfa?: number;
       reason?: string;
     }>;
+    /** Format historique (lecture seule côté moteur) : plus aucun suivi de bouteilles. */
     packaging?: { crate_type_id?: string; crate_qty?: number; bottle_profile_id?: string; bottle_qty?: number };
-  }) => call<{ order_id: string; received_fcfa: number; status: string; remaining_qty: number }>(
-    'receivePurchase', input,
-  ),
+    /** Échange de casiers : pleins reçus, vides remis, vides reçus, par type. */
+    crate_exchange?: Array<{
+      crate_type_id: string;
+      full_received_qty?: number;
+      empty_returned_qty?: number;
+      empty_received_qty?: number;
+      reason?: string;
+    }>;
+  }) => call<{
+    order_id: string;
+    received_fcfa: number;
+    status: string;
+    remaining_qty: number;
+    crate_movements?: CrateMovement[];
+    crate_exchange?: CrateExchangeResult;
+  }>('receivePurchase', input),
   getPurchaseVariance: (orderId: string) =>
     call<{
       order_id: string;
@@ -279,6 +350,208 @@ export const depot = {
   getPackagingAccount: (partnerType: 'CUSTOMER' | 'SUPPLIER', partnerId: string) =>
     call<PackagingAccount>('getPackagingAccount', {
       partner_type: partnerType, partner_id: partnerId,
+    }),
+  // --- Catalogue multi-brasseries (OWNER) ---------------------------------
+  getCatalogDashboard: () => call<CatalogDashboard>('getCatalogDashboard'),
+  getCatalogProducers: () => call<{ producers: ProducerRow[] }>('getCatalogProducers'),
+  getCatalogCategories: () => call<{ categories: CategoryRow[] }>('getCatalogCategories'),
+  getCatalogBrands: () => call<{ brands: BrandRow[] }>('getCatalogBrands'),
+  getCatalogProducts: (input: {
+    producer_id?: string;
+    category_id?: string;
+    brand_id?: string;
+    search?: string;
+    only_to_verify?: boolean;
+    include_inactive?: boolean;
+    limit?: number;
+  } = {}) => call<{ variants: CatalogVariantRow[] }>('getCatalogProducts', input),
+  getCatalogImportHistory: (limit = 50) =>
+    call<{ imports: CatalogImportRun[] }>('getCatalogImportHistory', { limit }),
+  getBreweryCatalogs: () => call<{ catalogs: BreweryCatalogRow[] }>('getBreweryCatalogs'),
+  previewCatalogImport: (input: { json_text?: string; catalog?: unknown; format?: CatalogFormat }) =>
+    call<CatalogImportPreview>('previewCatalogImport', input),
+  importCatalogJson: (input: {
+    json_text?: string;
+    catalog?: unknown;
+    format?: CatalogFormat;
+    request_key: string;
+  }) => call<CatalogImportReport>('importCatalogJson', input),
+  createCatalogProducer: (input: {
+    code: string;
+    name: string;
+    city?: string;
+    country?: string;
+    logo_path?: string;
+    source_url?: string;
+    notes?: string;
+  }) => call<{ producer_id: string; code: string; created: boolean }>('createCatalogProducer', input),
+  updateCatalogProducer: (input: {
+    producer_id: string;
+    name?: string;
+    city?: string;
+    country?: string;
+    logo_path?: string;
+    source_url?: string;
+    notes?: string;
+    status?: 'ACTIVE' | 'INACTIVE';
+    reason: string;
+  }) => call<{ producer_id: string; status: string }>('updateCatalogProducer', input),
+  createCatalogCategory: (input: {
+    name: string;
+    code?: string;
+    description?: string;
+    is_alcoholic?: boolean;
+    parent_id?: string;
+    sort_order?: number;
+  }) => call<{ category_id: string; code: string; created: boolean }>('createCatalogCategory', input),
+  createCatalogBrand: (input: { name: string; code?: string; producer_id: string }) =>
+    call<{ brand_id: string; code: string; created: boolean }>('createCatalogBrand', input),
+  createCatalogProduct: (input: {
+    producer_id: string;
+    name: string;
+    code?: string;
+    category_id?: string;
+    brand_id?: string;
+    description?: string;
+  }) => call<{ product_id: string; code: string; created: boolean }>('createCatalogProduct', input),
+  activateCatalogProduct: (productId: string, reason: string) =>
+    call<{ product_id: string; is_active: boolean; variants_left_untouched: boolean }>(
+      'activateCatalogProduct', { product_id: productId, reason },
+    ),
+  deactivateCatalogProduct: (productId: string, reason: string) =>
+    call<{ product_id: string; is_active: boolean; variants_left_untouched: boolean }>(
+      'deactivateCatalogProduct', { product_id: productId, reason },
+    ),
+  updateCatalogVariant: (input: {
+    variant_id: string;
+    volume_label?: string;
+    container_type?: string;
+    material?: string;
+    pack_size?: number;
+    crate_type_id?: string;
+    is_active?: boolean;
+    to_verify?: boolean;
+    brand_id?: string;
+    category_id?: string;
+    reason: string;
+  }) => call<{ variant_id: string; status: string; prices_untouched: boolean }>(
+    'updateCatalogVariant', input,
+  ),
+  createBreweryCatalog: (input: {
+    producer_id: string;
+    name: string;
+    external_catalog_id?: string;
+    format?: string;
+  }) => call<{ catalog_id: string; external_catalog_id: string; created: boolean }>(
+    'createBreweryCatalog', input,
+  ),
+  updateBreweryCatalog: (input: {
+    catalog_id: string;
+    name?: string;
+    status?: 'ACTIVE' | 'INACTIVE';
+    reason: string;
+  }) => call<{ catalog_id: string; status: string }>('updateBreweryCatalog', input),
+
+  // --- Casiers plastiques : stock, soldes physiques, valorisation ---------
+  getCrateStock: (crateTypeId?: string) =>
+    call<CrateStockSummary>('getCrateStock', crateTypeId ? { crate_type_id: crateTypeId } : {}),
+  getCrateStockByType: (crateTypeId: string) =>
+    call<CrateStockSummary>('getCrateStockByType', { crate_type_id: crateTypeId }),
+  getCustomerCrateBalance: (customerId: string) =>
+    call<CrateAccount>('getCustomerCrateBalance', { customer_id: customerId }),
+  getSupplierCrateBalance: (supplierId: string) =>
+    call<CrateAccount>('getSupplierCrateBalance', { supplier_id: supplierId }),
+  getCrateMovementHistory: (input: {
+    crate_type_id?: string;
+    partner_type?: 'CUSTOMER' | 'SUPPLIER';
+    partner_id?: string;
+    movement_type?: string;
+    limit?: number;
+  }) =>
+    call<{ movements: CrateMovement[]; is_immutable_journal: boolean }>(
+      'getCrateMovementHistory', input,
+    ),
+  getCrateValuationHistory: (crateTypeId?: string) =>
+    call<CrateValuationHistory>(
+      'getCrateValuationHistory', crateTypeId ? { crate_type_id: crateTypeId } : {},
+    ),
+  configureCrateValuation: (input: {
+    crate_type_id: string;
+    acquisition_value_fcfa: number;
+    reference_value_fcfa: number;
+    empty_sale_price_fcfa: number;
+    reason: string;
+  }) => call<{ crate_type_id: string; valuation_id: string }>('configureCrateValuation', input),
+  recordCustomerCrateReturn: (input: {
+    customer_id: string;
+    crate_type_id: string;
+    qty: number;
+    reason: string;
+    document_id?: string;
+    request_key: string;
+    allow_overflow?: boolean;
+  }) => call<CrateReturnResult>('recordCustomerCrateReturn', input),
+  recordSupplierCrateExchange: (input: {
+    supplier_id: string;
+    lines: Array<{
+      crate_type_id: string;
+      full_received_qty?: number;
+      empty_returned_qty?: number;
+      empty_received_qty?: number;
+      reason?: string;
+    }>;
+    request_key: string;
+    document_id?: string;
+  }) => call<CrateExchangeResult>('recordSupplierCrateExchange', input),
+  recordCrateAdjustment: (input: {
+    crate_type_id: string;
+    qty: number;
+    direction: 'IN' | 'OUT';
+    state?: 'FULL' | 'EMPTY';
+    reason: string;
+    request_key: string;
+  }) => call<{
+    status: string;
+    idempotent: boolean;
+    movement: CrateMovement;
+    creates_financial_debt: false;
+  }>('recordCrateAdjustment', input),
+  recordCrateLoss: (input: {
+    crate_type_id: string;
+    qty: number;
+    kind: 'LOST' | 'DAMAGED' | 'WRITEOFF';
+    state?: 'FULL' | 'EMPTY';
+    reason: string;
+    customer_id?: string;
+    request_key: string;
+  }) => call<{
+    status: string;
+    idempotent: boolean;
+    movement: CrateMovement;
+    regularised_customer_qty: number;
+    financial_impact_fcfa: 0;
+    creates_invoice: false;
+    note: string;
+  }>('recordCrateLoss', input),
+  recordEmptyCrateSale: (input: EmptyCrateSaleInput) =>
+    call<{
+      status: string;
+      idempotent: boolean;
+      sale_id: string;
+      receipt_number?: string;
+      crate_type_id: string;
+      qty: number;
+      unit_price_fcfa?: number;
+      total_fcfa?: number;
+      credit_fcfa?: number;
+      movement?: CrateMovement;
+      is_commercial_sale: true;
+    }>('recordEmptyCrateSale', input),
+  getCrateMigrationReview: (includeResolved = false) =>
+    call<CrateMigrationReview>('getCrateMigrationReview', { include_resolved: includeResolved }),
+  resolveCrateMigrationReview: (reviewId: string, note: string) =>
+    call<{ review_id: string; resolved: true }>('resolveCrateMigrationReview', {
+      review_id: reviewId, reason: note,
     }),
   correctPackagingMovement: (movementId: string, reason: string) =>
     call<{ correction_id: string; reversal_of: string; original_kept: boolean }>(

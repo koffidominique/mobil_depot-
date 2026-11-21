@@ -28,9 +28,12 @@ import { SyncScreen } from './screens/SyncScreen';
 import { DesktopScreen } from './screens/DesktopScreen';
 import { PurchasesScreen } from './screens/PurchasesScreen';
 import { SuppliersScreen } from './screens/SuppliersScreen';
+import { CratesScreen } from './screens/CratesScreen';
 import { CashScreen } from './screens/CashScreen';
 import { ReportsScreen } from './screens/ReportsScreen';
 import { CatalogScreen } from './screens/CatalogScreen';
+import { MixedOrderScreen } from './screens/MixedOrderScreen';
+import { CustomerMergeScreen } from './screens/CustomerMergeScreen';
 import { ReceiptsScreen } from './screens/ReceiptsScreen';
 import { StatementScreen } from './screens/StatementScreen';
 
@@ -193,9 +196,12 @@ function Bootstrap() {
             />
             <Stack.Screen name="Purchases" component={PurchasesScreen} options={{ headerShown: true, title: 'Achats & réceptions' }} />
             <Stack.Screen name="Suppliers" component={SuppliersScreen} options={{ headerShown: true, title: 'Fournisseurs' }} />
+            <Stack.Screen name="Crates" component={CratesScreen} options={{ headerShown: true, title: 'Casiers plastique' }} />
             <Stack.Screen name="Cash" component={CashScreen} options={{ headerShown: true, title: 'Caisse' }} />
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ headerShown: true, title: 'Rapports' }} />
             <Stack.Screen name="Catalog" component={CatalogScreen} options={{ headerShown: true, title: 'Catalogue' }} />
+            <Stack.Screen name="MixedOrder" component={MixedOrderScreen} options={{ headerShown: true, title: 'Casier mixte' }} />
+            <Stack.Screen name="CustomerMerge" component={CustomerMergeScreen} options={{ headerShown: true, title: 'Fusion de fiches' }} />
             <Stack.Screen name="Receipts" component={ReceiptsScreen} options={{ headerShown: true, title: 'Reçus' }} />
             <Stack.Screen name="Statement" component={StatementScreen} options={{ headerShown: true, title: 'Bordereaux' }} />
             <Stack.Screen name="Desktop" component={DesktopScreen} options={{ headerShown: true, title: 'Parité Desktop' }} />

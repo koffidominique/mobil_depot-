@@ -101,9 +101,56 @@ pub struct CrateSpec {
     pub replacement_fcfa: i64,
 }
 
+/// Même contenu que [`CrateSpec`], mais possédé : un format peut venir de la
+/// base (`crate_types`), donc son code et son groupe ne sont pas `'static`.
+#[derive(Debug, Clone)]
+pub struct CrateSpecOwned {
+    pub id: String,
+    pub code: String,
+    pub capacity: i64,
+    pub group: String,
+    pub allow_half: bool,
+    pub replacement_fcfa: i64,
+}
+
+impl CrateSpecOwned {
+    pub fn from_static(spec: &CrateSpec) -> Self {
+        CrateSpecOwned {
+            id: spec.id.to_string(),
+            code: spec.code.to_string(),
+            capacity: spec.capacity,
+            group: spec.group.to_string(),
+            allow_half: spec.allow_half,
+            replacement_fcfa: spec.replacement_fcfa,
+        }
+    }
+}
+
+/// Résout un format : d'abord les formats envoyés par la couche base
+/// (`resolved_crate_specs`), puis le référentiel compilé.
+pub fn resolved_crate_spec(payload: &Value, crate_id: &str) -> CoreResult<CrateSpecOwned> {
+    if let Some(list) = payload.get("resolved_crate_specs").and_then(Value::as_array) {
+        for item in list {
+            let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+            let code = item.get("code").and_then(Value::as_str).unwrap_or_default();
+            if id == crate_id || code == crate_id {
+                return Ok(CrateSpecOwned {
+                    id: id.to_string(),
+                    code: code.to_string(),
+                    capacity: item.get("capacity").and_then(Value::as_i64).unwrap_or(0),
+                    group: item.get("group").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    allow_half: item.get("allow_half").and_then(Value::as_bool).unwrap_or(false),
+                    replacement_fcfa: item.get("replacement_fcfa").and_then(Value::as_i64).unwrap_or(0),
+                });
+            }
+        }
+    }
+    crate_spec(crate_id).map(|spec| CrateSpecOwned::from_static(&spec))
+}
+
 /// Profils physiques déclarés explicitement : deux formats de même volume
 /// mais de profils différents ne sont jamais compatibles.
-pub const CRATE_TYPES: [CrateSpec; 8] = [
+pub const CRATE_TYPES: [CrateSpec; 9] = [
     CrateSpec { id: "crate_b24_33", code: "B24-33", capacity: 24, group: "G_B24_33", allow_half: true, replacement_fcfa: 3500 },
     CrateSpec { id: "crate_b12_50", code: "B12-50", capacity: 12, group: "G_B12_50", allow_half: true, replacement_fcfa: 3000 },
     CrateSpec { id: "crate_b12_60", code: "B12-60", capacity: 12, group: "G_B12_60", allow_half: true, replacement_fcfa: 3000 },
@@ -112,6 +159,8 @@ pub const CRATE_TYPES: [CrateSpec; 8] = [
     CrateSpec { id: "crate_b12_100", code: "B12-100", capacity: 12, group: "G_B12_100", allow_half: true, replacement_fcfa: 3400 },
     CrateSpec { id: "crate_b20_50", code: "B20-50", capacity: 20, group: "G_B20_50", allow_half: true, replacement_fcfa: 4500 },
     CrateSpec { id: "crate_b6_150", code: "B6-150", capacity: 6, group: "G_B6_150", allow_half: true, replacement_fcfa: 1800 },
+    // Profil ALT déclaré explicitement : même volume, casier physiquement différent.
+    CrateSpec { id: "crate_b12_50_alt", code: "B12-50-ALT", capacity: 12, group: "G_B12_50_ALT", allow_half: true, replacement_fcfa: 3000 },
 ];
 
 pub fn crate_spec(id: &str) -> CoreResult<CrateSpec> {
@@ -175,10 +224,27 @@ pub fn can_manage_purchases(role: &str) -> bool {
 /// entités entières uniquement, aucun jetable dans un casier consigné.
 pub fn validate_mixed_case(payload: &Value) -> CoreResult<Value> {
     let crate_id = field_str(payload, "crate_type_id")?;
-    let spec = crate_spec(crate_id)?;
+    let spec = resolved_crate_spec(payload, crate_id)?;
+    validate_mixed_case_with(payload, &spec)
+}
+
+/// Valide un casier mixte contre un format donné (base ou référentiel compilé).
+pub fn validate_mixed_case_with(payload: &Value, spec: &CrateSpecOwned) -> CoreResult<Value> {
     let half = field_bool(payload, "is_half_case", false);
+    if spec.capacity <= 0 {
+        return Err(CoreError::new(
+            "INVALID_CRATE_CAPACITY",
+            "Capacité du casier inconnue : renseignez le format avant de composer un casier mixte.",
+        ));
+    }
     if half && !spec.allow_half {
         return Err(CoreError::new("HALF_CASE_NOT_ALLOWED", "Demi-casier interdit sur ce format."));
+    }
+    if half && spec.capacity % 2 != 0 {
+        return Err(CoreError::new(
+            "NON_INTEGER_HALF_CASE",
+            "Le demi-casier doit contenir un nombre entier de bouteilles.",
+        ));
     }
     let lines = field_array(payload, "lines")?;
     if lines.is_empty() {
@@ -194,7 +260,7 @@ pub fn validate_mixed_case(payload: &Value) -> CoreResult<Value> {
             return Err(CoreError::new("INVALID_BOTTLE_QTY", "Quantité entière positive requise."));
         }
         let group = field_str(line, "compatibility_group_id")?;
-        if group != spec.group {
+        if group != spec.group.as_str() {
             return Err(CoreError::new(
                 "INCOMPATIBLE_CRATE_PROFILE",
                 "Profil physique incompatible avec le casier (le volume seul ne suffit pas).",
@@ -219,8 +285,9 @@ pub fn validate_mixed_case(payload: &Value) -> CoreResult<Value> {
         ));
     }
     Ok(json!({
-        "crate_type_id": spec.id,
-        "crate_code": spec.code,
+        "crate_type_id": spec.id.clone(),
+        "crate_code": spec.code.clone(),
+        "validated_only": true,
         "is_half_case": half,
         "slot_capacity": capacity,
         "total_drinks_fcfa": amount,
@@ -237,6 +304,25 @@ pub fn validate_sale(payload: &Value) -> CoreResult<Value> {
     let mixed = payload.get("mixed_cases").and_then(Value::as_array).cloned().unwrap_or_default();
     if lines.is_empty() && mixed.is_empty() {
         return Err(CoreError::new("EMPTY_CART", "Le panier est vide."));
+    }
+    // Aucune vente sans fiche de clientèle : le client est suivi par ses achats,
+    // son crédit et ses casiers. Un client inconnu est enregistré à l'écriture.
+    let has_customer = field_str_opt(payload, "customer_id").is_some();
+    match field_str_opt(payload, "customer_name") {
+        Some(name) if name.trim().chars().count() >= 2 => {}
+        Some(_) => {
+            return Err(CoreError::new(
+                "CUSTOMER_NAME_REQUIRED",
+                "Nom du client trop court : la fiche doit rester identifiable.",
+            ))
+        }
+        None if has_customer => {}
+        None => {
+            return Err(CoreError::new(
+                "CUSTOMER_REQUIRED",
+                "Chaque vente doit être rattachée à une fiche client : indiquez le nom du client.",
+            ))
+        }
     }
     let discount = field_i64_or(payload, "discount_fcfa", 0);
     if discount < 0 {
@@ -272,13 +358,21 @@ pub fn validate_sale(payload: &Value) -> CoreResult<Value> {
     }
 
     for case in &mixed {
-        let validated = validate_mixed_case(case)?;
+        let crate_id = field_str(case, "crate_type_id")?;
+        let spec = resolved_crate_spec(payload, crate_id)?;
+        let validated = validate_mixed_case_with(case, &spec)?;
         subtotal = checked_add(subtotal, field_i64(&validated, "total_drinks_fcfa")?, "casier mixte")?;
         for line in field_array(case, "lines")? {
             let variant = field_str(line, "variant_id")?;
             let qty = field_i64(line, "quantity_bottles")?;
             let entry = physical.entry(variant.to_string()).or_insert(0i64);
             *entry = checked_add(*entry, qty, "casier mixte")?;
+            // Le stock connu d'une boisson vendue uniquement en casier mixte doit
+            // venir de sa propre ligne : sinon tout mixte déclencherait une alerte
+            // de stock fantôme (stock lu = 0).
+            stock
+                .entry(variant.to_string())
+                .or_insert_with(|| field_i64_or(line, "available_stock_units", 0));
         }
     }
 
@@ -403,16 +497,23 @@ mod tests {
     }
 
     fn sale(lines: Vec<Value>, payments: Vec<Value>, customer: Option<&str>, limit: i64, outstanding: i64) -> Value {
-        json!({
+        // Sans identifiant, la vente désigne un client par son nom : la fiche
+        // correspondante est créée par la couche base au moment de l'écriture.
+        let mut payload = json!({
             "role": "OWNER",
             "offline_policy": "ALLOW_WITH_WARNING",
             "lines": lines,
             "mixed_cases": [],
             "payments": payments,
             "customer_id": customer,
+            "customer_name": null,
             "credit_limit_fcfa": limit,
             "outstanding_balance_fcfa": outstanding
-        })
+        });
+        if customer.is_none() {
+            payload["customer_name"] = json!("Client Test");
+        }
+        payload
     }
 
     fn mixed_line(profile: &str, group: &str, qty: i64) -> Value {
@@ -474,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn credit_limit_is_strict_and_requires_known_customer() {
+    fn credit_limit_is_strict_and_every_sale_needs_a_customer() {
         let line = bottle_line("l1", "var_test", 1000, 10);
         let accepted = sale(vec![line.clone()], vec![], Some("cust_palmier"), 1000, 0);
         assert_eq!(validate_sale(&accepted).expect("plafond exact")["credit_fcfa"], json!(1000));
@@ -482,8 +583,19 @@ mod tests {
         let refused = sale(vec![line.clone()], vec![], Some("cust_palmier"), 999, 0);
         assert_eq!(validate_sale(&refused).unwrap_err().code, "CREDIT_LIMIT_EXCEEDED");
 
-        let anonymous = sale(vec![line], vec![], None, 5000, 0);
-        assert_eq!(validate_sale(&anonymous).unwrap_err().code, "CUSTOMER_REQUIRED_FOR_CREDIT");
+        // Vente totalement anonyme : refusée, aucune vente sans fiche.
+        let mut anonymous = sale(vec![line.clone()], vec![], None, 5000, 0);
+        anonymous["customer_name"] = Value::Null;
+        assert_eq!(validate_sale(&anonymous).unwrap_err().code, "CUSTOMER_REQUIRED");
+
+        // Nom trop court : la fiche ne serait pas identifiable.
+        let mut too_short = sale(vec![line.clone()], vec![], None, 0, 0);
+        too_short["customer_name"] = json!("A");
+        assert_eq!(validate_sale(&too_short).unwrap_err().code, "CUSTOMER_NAME_REQUIRED");
+
+        // Fiche ouverte à la vente : aucun crédit avant autorisation de l'OWNER.
+        let new_fiche = sale(vec![line], vec![], None, 0, 0);
+        assert_eq!(validate_sale(&new_fiche).unwrap_err().code, "CREDIT_LIMIT_EXCEEDED");
     }
 
     #[test]
@@ -530,6 +642,84 @@ mod tests {
         let mut fractional = payload.clone();
         fractional["lines"][0]["quantity_bottles"] = json!(11.5);
         assert_eq!(validate_mixed_case(&fractional).unwrap_err().code, "INVALID_BOTTLE_QTY");
+    }
+
+    #[test]
+    fn mixed_case_uses_format_resolved_by_the_database_layer() {
+        // Un format créé par import (absent du référentiel compilé) est utilisable
+        // dès que la couche base l'a résolu.
+        let payload = json!({
+            "crate_type_id": "crate_ci_60",
+            "is_half_case": false,
+            "resolved_crate_specs": [{
+                "id": "crate_ci_60", "code": "CI-60", "capacity": 12,
+                "group": "G_CI_60", "allow_half": true, "replacement_fcfa": 3000
+            }],
+            "lines": [{
+                "variant_id": "a", "variant_name": "A", "quantity_bottles": 12,
+                "unit_price_fcfa": 500, "compatibility_group_id": "G_CI_60",
+                "bottle_profile_id": "a", "is_reusable": true
+            }]
+        });
+        let result = validate_mixed_case(&payload).expect("format résolu en base");
+        assert_eq!(result["crate_code"], json!("CI-60"));
+        assert_eq!(result["slot_capacity"], json!(12));
+        assert_eq!(result["validated_only"], json!(true));
+
+        // Demi-casier interdit par le format : refus même si le client demande 6.
+        let mut half = payload.clone();
+        half["is_half_case"] = json!(true);
+        half["resolved_crate_specs"][0]["allow_half"] = json!(false);
+        assert_eq!(validate_mixed_case(&half).unwrap_err().code, "HALF_CASE_NOT_ALLOWED");
+
+        // Capacité inconnue : jamais devinée, le casier mixte est refusé.
+        let mut unknown = payload.clone();
+        unknown["resolved_crate_specs"][0]["capacity"] = json!(0);
+        assert_eq!(validate_mixed_case(&unknown).unwrap_err().code, "INVALID_CRATE_CAPACITY");
+    }
+
+    #[test]
+    fn mixed_case_stock_alert_uses_the_line_stock() {
+        // Une boisson vendue uniquement en casier mixte ne doit pas produire
+        // d'alerte de stock si sa ligne porte un stock suffisant.
+        let base = json!({
+            "role": "MANAGER",
+            "offline_policy": "WARN",
+            "crate_type_id": "crate_b12_50",
+            "is_half_case": false,
+            "resolved_crate_specs": [{
+                "id": "crate_b12_50", "code": "B12-50", "capacity": 12,
+                "group": "G_B12_50", "allow_half": true, "replacement_fcfa": 3000
+            }],
+            "lines": [{
+                "variant_id": "a", "variant_name": "A", "quantity_bottles": 12,
+                "unit_price_fcfa": 500, "compatibility_group_id": "G_B12_50",
+                "bottle_profile_id": "a", "is_reusable": true,
+                "available_stock_units": 24
+            }]
+        });
+        let mut payload = json!({
+            "role": "MANAGER",
+            "offline_policy": "WARN",
+            "lines": [],
+            "mixed_cases": [base],
+            "payments": [{ "method": "CASH", "amount_fcfa": 6000 }],
+            "discount_fcfa": 0
+        });
+        let validation = validate_sale(&payload).expect("mixte valide");
+        assert_eq!(validation["total_fcfa"], json!(6000));
+        assert!(validation["offline_stock_warnings"].as_array().unwrap().is_empty());
+
+        // Stock réellement insuffisant : l'alerte cite la boisson et les quantités.
+        payload["mixed_cases"][0]["lines"][0]["available_stock_units"] = json!(6);
+        let warned = validate_sale(&payload).expect("vente autorisée avec alerte");
+        let warnings = warned["offline_stock_warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].as_str().unwrap().contains("a :"));
+
+        // Politique stricte hors ligne : refus explicite.
+        payload["offline_policy"] = json!("STRICT_LOCAL_BLOCK");
+        assert_eq!(validate_sale(&payload).unwrap_err().code, "INSUFFICIENT_STOCK");
     }
 
     #[test]

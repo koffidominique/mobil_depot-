@@ -24,6 +24,10 @@ export function PurchasesScreen() {
     enabled: Boolean(orderId),
     queryFn: () => depot.getPurchaseVariance(orderId),
   });
+  const [crateType, setCrateType] = useState('crate_b12_50');
+  const [fullReceived, setFullReceived] = useState('0');
+  const [emptyReturned, setEmptyReturned] = useState('0');
+  const [emptyReceived, setEmptyReceived] = useState('0');
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -33,6 +37,9 @@ export function PurchasesScreen() {
       queryClient.invalidateQueries({ queryKey: ['inventory'] }),
       queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
       queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      queryClient.invalidateQueries({ queryKey: ['crate-stock'] }),
+      queryClient.invalidateQueries({ queryKey: ['crate-movements'] }),
+      queryClient.invalidateQueries({ queryKey: ['supplier-crate-balance'] }),
     ]);
   };
 
@@ -61,12 +68,34 @@ export function PurchasesScreen() {
           ...(invoicePrice.trim() ? { unit_price_fcfa: Number.parseInt(invoicePrice, 10) } : {}),
           reason: 'Réception contrôlée',
         }],
+        ...(Number.parseInt(fullReceived, 10) > 0
+          || Number.parseInt(emptyReturned, 10) > 0
+          || Number.parseInt(emptyReceived, 10) > 0
+          ? {
+              crate_exchange: [{
+                crate_type_id: crateType,
+                full_received_qty: Number.parseInt(fullReceived, 10) || 0,
+                empty_returned_qty: Number.parseInt(emptyReturned, 10) || 0,
+                empty_received_qty: Number.parseInt(emptyReceived, 10) || 0,
+                reason: 'Échange de casiers à la réception',
+              }],
+            }
+          : {}),
       }),
     onSuccess: async (result) => {
       setMessage(`Réception partielle enregistrée · ${formatFcfa(result.received_fcfa)}`);
       setError(null);
       setDamagedQuantity('0');
       setInvoicePrice('');
+      setFullReceived('0');
+      setEmptyReturned('0');
+      setEmptyReceived('0');
+      if (result.crate_exchange) {
+        setMessage(
+          `Réception enregistrée · casiers : ${result.crate_exchange.full_received_qty} pleins reçus, ` +
+            `${result.crate_exchange.empty_returned_qty} vides remis (écart physique ${result.crate_exchange.physical_gap_qty}).`,
+        );
+      }
       await invalidate();
     },
     onError: (err: Error) => setError(err.message),
@@ -128,6 +157,11 @@ export function PurchasesScreen() {
         <Field label="Quantité reçue" value={receivedQuantity} keyboardType="numeric" onChangeText={setReceivedQuantity} />
         <Field label="Quantité endommagée" value={damagedQuantity} keyboardType="numeric" onChangeText={setDamagedQuantity} />
         <Field label="Prix réellement facturé (FCFA/casier)" value={invoicePrice} keyboardType="numeric" onChangeText={setInvoicePrice} />
+        <Text style={{ color: c.text, fontWeight: '700', marginTop: 6 }}>Échange de casiers à la réception</Text>
+        <Field label="Type de casier" value={crateType} onChangeText={setCrateType} />
+        <Field label="Casiers pleins reçus" value={fullReceived} keyboardType="numeric" onChangeText={setFullReceived} />
+        <Field label="Casiers vides remis au fournisseur" value={emptyReturned} keyboardType="numeric" onChangeText={setEmptyReturned} />
+        <Field label="Casiers vides reçus" value={emptyReceived} keyboardType="numeric" onChangeText={setEmptyReceived} />
         <PrimaryButton
           label="Enregistrer la réception contrôlée"
           loading={receive.isPending}
