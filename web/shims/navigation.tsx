@@ -5,10 +5,17 @@
 import React, { Children, createContext, isValidElement, useContext, useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native-web';
 
+interface StackFrame {
+  name: string;
+  /** Paramètres d'ouverture d'écran (ex. filtre client des commandes). */
+  params?: Record<string, unknown>;
+}
+
 interface StackContextValue {
   route: string;
-  stack: string[];
-  navigate: (name: string) => void;
+  params?: Record<string, unknown>;
+  stack: StackFrame[];
+  navigate: (name: string, params?: Record<string, unknown>) => void;
   goBack: () => void;
   replace: (name: string) => void;
 }
@@ -20,19 +27,21 @@ export const DarkTheme = { dark: true, colors: { primary: '#4ED8A0', background:
 
 export function NavigationContainer({ children, theme }: { children: React.ReactNode; theme?: unknown }) {
   void theme;
-  const [stack, setStack] = useState<string[]>(['Main']);
+  const [stack, setStack] = useState<StackFrame[]>([{ name: 'Main' }]);
+  const current = stack[stack.length - 1] ?? { name: 'Main' };
   const value: StackContextValue = {
-    route: stack[stack.length - 1] ?? 'Main',
+    route: current.name,
+    params: current.params,
     stack,
-    navigate: (name) => setStack((current) => [...current, name]),
-    goBack: () => setStack((current) => (current.length > 1 ? current.slice(0, -1) : current)),
-    replace: (name) => setStack([name]),
+    navigate: (name, params) => setStack((frames) => [...frames, { name, params }]),
+    goBack: () => setStack((frames) => (frames.length > 1 ? frames.slice(0, -1) : frames)),
+    replace: (name) => setStack([{ name }]),
   };
   return <StackContext.Provider value={value}>{children}</StackContext.Provider>;
 }
 
 export interface WebNavigation<T = unknown> {
-  navigate: (name: string) => void;
+  navigate: (name: string, params?: Record<string, unknown>) => void;
   goBack: () => void;
   setOptions: (options?: T) => void;
   canGoBack: () => boolean;
@@ -41,7 +50,7 @@ export interface WebNavigation<T = unknown> {
 export function useNavigation<T = unknown>(): WebNavigation<T> {
   const context = useContext(StackContext);
   return {
-    navigate: (name: string) => context?.navigate(name),
+    navigate: (name: string, params?: Record<string, unknown>) => context?.navigate(name, params),
     goBack: () => context?.goBack(),
     setOptions: (_options?: T) => undefined,
     canGoBack: () => Boolean(context && context.stack.length > 1),
@@ -52,7 +61,7 @@ export type NativeStackNavigationProp<T = unknown> = WebNavigation<T>;
 
 export function useRoute() {
   const context = useContext(StackContext);
-  return { name: context?.route ?? '', params: undefined };
+  return { name: context?.route ?? '', params: context?.params };
 }
 
 function screensOf(children: React.ReactNode): Array<{ name: string; Component?: React.ComponentType<any>; options: any }> {

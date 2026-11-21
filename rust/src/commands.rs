@@ -115,7 +115,8 @@ fn permission_for_command(command: &str) -> Option<&'static str> {
         | "renewSession" | "revokeSession" | "lockSession" | "unlockSession" | "changePin" => None,
         "getSecurityPolicy" | "checkPermission" | "getDashboard" | "get_dashboard" | "getInventory" | "get_inventory"
         | "getCustomers" | "get_customers" | "getSuppliers" | "get_suppliers" | "getSales"
-        | "get_sales" | "getCustomerAccount" | "get_customer_account" | "getSupplierAccount"
+        | "get_sales" | "getInventoryCounts" | "get_inventory_counts" | "getProductVariants"
+        | "get_product_variants" | "getCustomerAccount" | "get_customer_account" | "getSupplierAccount"
         | "get_supplier_account" | "getStockMovements" | "get_stock_movements"
         | "getPurchaseVariance" | "get_purchase_variance" | "getPurchaseOrders"
         | "get_purchase_orders" | "getSaleReceipt" | "get_sale_receipt" | "getCashSession"
@@ -1852,18 +1853,88 @@ pub fn get_suppliers(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     Ok(json!({"suppliers": items}))
 }
 
+/// Commandes clients du point de vente : filtrables (client, période, crédit,
+/// recherche) et paginées, avec les totaux de la sélection — l'écran n'affiche
+/// jamais une ligne dont il ne connaît pas le contexte.
 pub fn get_sales(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
-    let mut stmt = conn.prepare(
-        "SELECT id, receipt_number, customer_name, total_fcfa, credit_fcfa, sync_status, occurred_at FROM sales WHERE branch_id = ?1 ORDER BY occurred_at DESC LIMIT 30",
+    let customer_id = field_str_opt(payload, "customer_id").map(str::to_string);
+    let from_ms = payload.get("from_ms").and_then(Value::as_i64);
+    let to_ms = payload.get("to_ms").and_then(Value::as_i64);
+    let credit_only = field_bool(payload, "credit_only", false);
+    let search = field_str_opt(payload, "search")
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("%{term}%"));
+    let limit = field_i64_or(payload, "limit", 50).clamp(1, 200);
+    let offset = field_i64_or(payload, "offset", 0).max(0);
+
+    let where_clause = "s.branch_id = ?1
+        AND (?2 IS NULL OR s.customer_id = ?2)
+        AND (?3 IS NULL OR s.occurred_at >= ?3)
+        AND (?4 IS NULL OR s.occurred_at <= ?4)
+        AND (?5 = 0 OR s.credit_fcfa > 0)
+        AND (?6 IS NULL OR s.receipt_number LIKE ?6 OR s.customer_name LIKE ?6)";
+
+    let sql = format!(
+        "SELECT s.id, s.receipt_number, s.customer_id, s.customer_name, s.total_fcfa, s.credit_fcfa,
+                s.paid_confirmed_fcfa, s.pending_mobile_money_fcfa, s.discount_fcfa, s.sync_status,
+                s.occurred_at, s.price_tier,
+                (SELECT COUNT(*) FROM sale_lines l WHERE l.sale_id = s.id),
+                (SELECT COUNT(*) FROM sale_lines l WHERE l.sale_id = s.id AND l.is_mixed = 1),
+                (SELECT COUNT(*) FROM sale_lines l WHERE l.sale_id = s.id AND l.is_packaging = 1)
+         FROM sales s WHERE {where_clause}
+         ORDER BY s.occurred_at DESC, s.id DESC
+         LIMIT ?7 OFFSET ?8"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let items: Vec<Value> = stmt
+        .query_map(
+            params![a.branch_id, customer_id, from_ms, to_ms, if credit_only { 1 } else { 0 }, search, limit, offset],
+            |r| {
+                Ok(json!({
+                    "id": r.get::<_, String>(0)?,
+                    "receipt_number": r.get::<_, String>(1)?,
+                    "customer_id": r.get::<_, Option<String>>(2)?,
+                    "customer_name": r.get::<_, String>(3)?,
+                    "total_fcfa": r.get::<_, i64>(4)?,
+                    "credit_fcfa": r.get::<_, i64>(5)?,
+                    "paid_confirmed_fcfa": r.get::<_, i64>(6)?,
+                    "pending_mobile_money_fcfa": r.get::<_, i64>(7)?,
+                    "discount_fcfa": r.get::<_, i64>(8)?,
+                    "sync_status": r.get::<_, String>(9)?,
+                    "occurred_at": r.get::<_, i64>(10)?,
+                    "price_tier": r.get::<_, String>(11)?,
+                    "line_count": r.get::<_, i64>(12)?,
+                    "mixed_line_count": r.get::<_, i64>(13)?,
+                    "packaging_line_count": r.get::<_, i64>(14)?
+                }))
+            },
+        )?
+        .collect::<Result<_, _>>()?;
+
+    let totals_sql = format!(
+        "SELECT COUNT(*), COALESCE(SUM(s.total_fcfa), 0), COALESCE(SUM(s.credit_fcfa), 0),
+                COALESCE(SUM(s.paid_confirmed_fcfa), 0)
+         FROM sales s WHERE {where_clause}"
+    );
+    let (total_count, total_fcfa, credit_fcfa, paid_fcfa): (i64, i64, i64, i64) = conn.query_row(
+        &totals_sql,
+        params![a.branch_id, customer_id, from_ms, to_ms, if credit_only { 1 } else { 0 }, search],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
-    let items: Vec<Value> = stmt.query_map(params![a.branch_id], |r| Ok(json!({
-        "id": r.get::<_, String>(0)?, "receipt_number": r.get::<_, String>(1)?,
-        "customer_name": r.get::<_, String>(2)?, "total_fcfa": r.get::<_, i64>(3)?,
-        "credit_fcfa": r.get::<_, i64>(4)?, "sync_status": r.get::<_, String>(5)?,
-        "occurred_at": r.get::<_, i64>(6)?
-    })))?.collect::<Result<_, _>>()?;
-    Ok(json!({"sales": items}))
+
+    Ok(json!({
+        "sales": items,
+        "total_count": total_count,
+        "totals": {
+            "total_fcfa": total_fcfa,
+            "credit_fcfa": credit_fcfa,
+            "paid_confirmed_fcfa": paid_fcfa
+        },
+        "limit": limit,
+        "offset": offset
+    }))
 }
 
 pub fn get_supplier_account(conn: &Connection, payload: &Value) -> CoreResult<Value> {
@@ -1908,6 +1979,32 @@ pub fn record_inventory_count(conn: &mut Connection, payload: &Value) -> CoreRes
         return Err(CoreError::new("REASON_REQUIRED", "Un motif d'inventaire est obligatoire."));
     }
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    // Idempotence : un double appui sur « Valider l'inventaire » ne doit pas
+    // créer deux écritures d'écart. La clé d'appel rejoue le résultat précédent.
+    let request_key = field_str_opt(payload, "request_key")
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(|key| format!("inventory_{key}"));
+    if let Some(key) = request_key.as_deref() {
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT payload_json FROM sync_outbox WHERE branch_id = ?1 AND idempotency_key = ?2",
+                params![a.branch_id, key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(stored_json) = previous {
+            let stored: Value = serde_json::from_str(&stored_json).unwrap_or(Value::Null);
+            return Ok(json!({
+                "inventory_id": stored.get("inventory_id").cloned().unwrap_or(Value::Null),
+                "variant_id": stored.get("variant_id").cloned().unwrap_or(Value::Null),
+                "previous_qty": stored.get("previous_qty").cloned().unwrap_or(json!(0)),
+                "counted_qty": stored.get("counted_qty").cloned().unwrap_or(json!(0)),
+                "difference_qty": stored.get("difference_qty").cloned().unwrap_or(json!(0)),
+                "idempotent": true
+            }));
+        }
+    }
     let current: i64 = tx.query_row(
         "SELECT full_units_qty FROM stock_balances WHERE branch_id=?1 AND variant_id=?2",
         params![a.branch_id, variant_id], |r| r.get(0),
@@ -1931,40 +2028,230 @@ pub fn record_inventory_count(conn: &mut Connection, payload: &Value) -> CoreRes
          server_revision=server_revision+1",
         params![a.branch_id, variant_id, counted],
     )?;
-    db::enqueue(
+    let result = json!({
+        "inventory_id": id, "variant_id": variant_id,
+        "previous_qty": current, "counted_qty": counted, "difference_qty": difference
+    });
+    // Sans clé d'appel, on garde une clé unique : `idempotency_key` est UNIQUE
+    // en base, une chaîne vide empêcherait toute écriture ultérieure.
+    let outbox_key = request_key.clone().unwrap_or_else(|| new_id("idem"));
+    db::enqueue_once(
         &tx, &a.tenant_id, &a.branch_id, &a.device_id, &a.user_id, "INVENTORY_ADJUSTMENT",
-        &format!("{variant_id}: {current} -> {counted}"), &payload.to_string(), 1, &new_id("idem"),
+        &format!("{variant_id}: {current} -> {counted}"), &result.to_string(), 1, &outbox_key,
     )?;
     db::audit(&tx, &a.branch_id, &a.user_id, "INVENTORY_ADJUSTMENT", &format!("{variant_id}: {difference}"))?;
     tx.commit()?;
+    Ok(result)
+}
+
+/// Historique des mouvements de stock : filtrable par référence, type et
+/// période, paginé, avec le libellé du produit et l'auteur du mouvement.
+pub fn get_stock_movements(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let variant_id = field_str_opt(payload, "variant_id").map(str::to_string);
+    let movement_type = field_str_opt(payload, "movement_type").map(str::to_string);
+    let from_ms = payload.get("from_ms").and_then(Value::as_i64);
+    let to_ms = payload.get("to_ms").and_then(Value::as_i64);
+    let limit = field_i64_or(payload, "limit", 100).clamp(1, 200);
+    let offset = field_i64_or(payload, "offset", 0).max(0);
+    let where_clause = "m.branch_id = ?1
+        AND (?2 IS NULL OR m.variant_id = ?2)
+        AND (?3 IS NULL OR m.movement_type = ?3)
+        AND (?4 IS NULL OR m.occurred_at >= ?4)
+        AND (?5 IS NULL OR m.occurred_at <= ?5)";
+    let sql = format!(
+        "SELECT m.id, m.variant_id, m.movement_type, m.qty, m.reason, m.document_id, m.user_id,
+                m.device_id, m.occurred_at, COALESCE(v.name, m.variant_id), COALESCE(v.volume_label, ''),
+                COALESCE(u.full_name, m.user_id)
+         FROM stock_movements m
+         LEFT JOIN product_variants v ON v.id = m.variant_id
+         LEFT JOIN users u ON u.id = m.user_id
+         WHERE {where_clause}
+         ORDER BY m.occurred_at DESC, m.id DESC LIMIT ?6 OFFSET ?7"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let movements: Vec<Value> = stmt
+        .query_map(
+            params![a.branch_id, variant_id, movement_type, from_ms, to_ms, limit, offset],
+            |r| {
+                Ok(json!({
+                    "movement_id": r.get::<_, String>(0)?,
+                    "variant_id": r.get::<_, String>(1)?,
+                    "movement_type": r.get::<_, String>(2)?,
+                    "qty": r.get::<_, i64>(3)?,
+                    "reason": r.get::<_, String>(4)?,
+                    "document_id": r.get::<_, String>(5)?,
+                    "user_id": r.get::<_, String>(6)?,
+                    "device_id": r.get::<_, String>(7)?,
+                    "occurred_at": r.get::<_, i64>(8)?,
+                    "variant_name": r.get::<_, String>(9)?,
+                    "volume_label": r.get::<_, String>(10)?,
+                    "user_name": r.get::<_, String>(11)?
+                }))
+            },
+        )?
+        .collect::<Result<_, _>>()?;
+    let totals_sql = format!("SELECT COUNT(*) FROM stock_movements m WHERE {where_clause}");
+    let total_count: i64 = conn.query_row(
+        &totals_sql,
+        params![a.branch_id, variant_id, movement_type, from_ms, to_ms],
+        |r| r.get(0),
+    )?;
     Ok(json!({
-        "inventory_id": id, "variant_id": variant_id,
-        "previous_qty": current, "counted_qty": counted, "difference_qty": difference
+        "movements": movements,
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset
     }))
 }
 
-/// Historique des mouvements de stock, consultable par référence.
-pub fn get_stock_movements(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+/// Historique des inventaires physiques enregistrés : qui a compté, quand, quel
+/// écart et pour quel motif. L'écran Inventaires lit cette commande au lieu de
+/// déduire le passé depuis les seuls soldes courants.
+pub fn get_inventory_counts(conn: &Connection, payload: &Value) -> CoreResult<Value> {
     let a = actor(conn, payload)?;
-    let variant_id = field_str_opt(payload, "variant_id");
-    let sql = "SELECT id, variant_id, movement_type, qty, reason, document_id, user_id, device_id, occurred_at
-               FROM stock_movements WHERE branch_id=?1
-               AND (?2 IS NULL OR variant_id=?2) ORDER BY occurred_at DESC LIMIT 100";
+    let variant_id = field_str_opt(payload, "variant_id").map(str::to_string);
+    let from_ms = payload.get("from_ms").and_then(Value::as_i64);
+    let to_ms = payload.get("to_ms").and_then(Value::as_i64);
+    let limit = field_i64_or(payload, "limit", 50).clamp(1, 200);
+    let offset = field_i64_or(payload, "offset", 0).max(0);
+    let where_clause = "c.branch_id = ?1
+        AND (?2 IS NULL OR c.variant_id = ?2)
+        AND (?3 IS NULL OR c.occurred_at >= ?3)
+        AND (?4 IS NULL OR c.occurred_at <= ?4)";
+    let sql = format!(
+        "SELECT c.id, c.variant_id, c.counted_qty, c.difference_qty, c.reason, c.user_id,
+                c.occurred_at, COALESCE(v.name, c.variant_id), COALESCE(v.volume_label, ''),
+                COALESCE(u.full_name, c.user_id)
+         FROM inventory_counts c
+         LEFT JOIN product_variants v ON v.id = c.variant_id
+         LEFT JOIN users u ON u.id = c.user_id
+         WHERE {where_clause}
+         ORDER BY c.occurred_at DESC, c.id DESC LIMIT ?5 OFFSET ?6"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let counts: Vec<Value> = stmt
+        .query_map(params![a.branch_id, variant_id, from_ms, to_ms, limit, offset], |r| {
+            let counted: i64 = r.get(2)?;
+            let difference: i64 = r.get(3)?;
+            Ok(json!({
+                "inventory_id": r.get::<_, String>(0)?,
+                "variant_id": r.get::<_, String>(1)?,
+                "counted_qty": counted,
+                "difference_qty": difference,
+                "previous_qty": counted - difference,
+                "reason": r.get::<_, String>(4)?,
+                "user_id": r.get::<_, String>(5)?,
+                "occurred_at": r.get::<_, i64>(6)?,
+                "variant_name": r.get::<_, String>(7)?,
+                "volume_label": r.get::<_, String>(8)?,
+                "user_name": r.get::<_, String>(9)?
+            }))
+        })?
+        .collect::<Result<_, _>>()?;
+    let totals_sql = format!(
+        "SELECT COUNT(*), COALESCE(SUM(ABS(c.difference_qty)), 0),
+                COALESCE(SUM(CASE WHEN c.difference_qty <> 0 THEN 1 ELSE 0 END), 0)
+         FROM inventory_counts c WHERE {where_clause}"
+    );
+    let (total_count, absolute_difference, discrepancy_count): (i64, i64, i64) = conn.query_row(
+        &totals_sql,
+        params![a.branch_id, variant_id, from_ms, to_ms],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    Ok(json!({
+        "counts": counts,
+        "total_count": total_count,
+        "totals": {
+            "absolute_difference_units": absolute_difference,
+            "discrepancy_count": discrepancy_count
+        },
+        "limit": limit,
+        "offset": offset
+    }))
+}
+
+/// Catalogue produit + stock physique : une seule projection pour l'écran
+/// Produits (prix, statut, contenance, stock et seuil d'alerte), afin que
+/// l'écran ne recalcule ni ne devine l'état d'une référence.
+pub fn get_product_variants(conn: &Connection, payload: &Value) -> CoreResult<Value> {
+    let a = actor(conn, payload)?;
+    let include_inactive = field_bool(payload, "include_inactive", true);
+    let search = field_str_opt(payload, "search")
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("%{term}%"));
+    let category = field_str_opt(payload, "category").map(str::to_string);
+    let low_stock_only = field_bool(payload, "low_stock_only", false);
+    let sql = "SELECT v.id, v.sku, v.name, v.brand, v.volume_label, v.container_type, v.material,
+                      v.pack_size, v.retail_case_fcfa, v.wholesale_case_fcfa, v.retail_bottle_fcfa,
+                      v.category, v.bottle_profile_id, v.crate_type_id, v.is_active, v.price_revision,
+                      v.is_returnable, COALESCE(s.full_units_qty, 0), COALESCE(s.min_alert_units, 12)
+               FROM product_variants v
+               LEFT JOIN stock_balances s ON s.variant_id = v.id AND s.branch_id = ?1
+               WHERE v.tenant_id = ?2
+                 AND (?3 = 1 OR v.is_active = 1)
+                 AND (?4 IS NULL OR v.name LIKE ?4 OR v.sku LIKE ?4 OR COALESCE(v.brand, '') LIKE ?4)
+                 AND (?5 IS NULL OR COALESCE(v.category, '') = ?5)
+                 AND (?6 = 0 OR COALESCE(s.full_units_qty, 0) < COALESCE(s.min_alert_units, 12))
+               ORDER BY v.is_active DESC, v.name COLLATE NOCASE, v.sku";
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params![a.branch_id, variant_id], |r| Ok(json!({
-        "movement_id": r.get::<_, String>(0)?,
-        "variant_id": r.get::<_, String>(1)?,
-        "movement_type": r.get::<_, String>(2)?,
-        "qty": r.get::<_, i64>(3)?,
-        "reason": r.get::<_, String>(4)?,
-        "document_id": r.get::<_, String>(5)?,
-        "user_id": r.get::<_, String>(6)?,
-        "device_id": r.get::<_, String>(7)?,
-        "occurred_at": r.get::<_, i64>(8)?
-    })))?;
-    let mut movements = Vec::new();
-    for row in rows { movements.push(row?); }
-    Ok(json!({ "movements": movements }))
+    let variants: Vec<Value> = stmt
+        .query_map(
+            params![a.branch_id, a.tenant_id, if include_inactive { 1 } else { 0 }, search, category,
+                if low_stock_only { 1 } else { 0 }],
+            |r| {
+                Ok(json!({
+                    "variant_id": r.get::<_, String>(0)?,
+                    "sku": r.get::<_, String>(1)?,
+                    "name": r.get::<_, String>(2)?,
+                    "brand": r.get::<_, String>(3)?,
+                    "volume_label": r.get::<_, String>(4)?,
+                    "container_type": r.get::<_, String>(5)?,
+                    "material": r.get::<_, String>(6)?,
+                    "pack_size": r.get::<_, i64>(7)?,
+                    "retail_case_fcfa": r.get::<_, i64>(8)?,
+                    "wholesale_case_fcfa": r.get::<_, i64>(9)?,
+                    "retail_bottle_fcfa": r.get::<_, i64>(10)?,
+                    "category": r.get::<_, Option<String>>(11)?,
+                    "bottle_profile_id": r.get::<_, Option<String>>(12)?,
+                    "crate_type_id": r.get::<_, Option<String>>(13)?,
+                    "is_active": r.get::<_, i64>(14)? == 1,
+                    "price_revision": r.get::<_, i64>(15)?,
+                    "is_returnable": r.get::<_, i64>(16)? == 1,
+                    "stock_units": r.get::<_, i64>(17)?,
+                    "min_alert_units": r.get::<_, i64>(18)?
+                }))
+            },
+        )?
+        .collect::<Result<_, _>>()?;
+    let mut active_count = 0_i64;
+    let mut low_stock_count = 0_i64;
+    let mut stock_units = 0_i64;
+    let mut stock_value_fcfa = 0_i64;
+    for row in &variants {
+        let is_active = row.get("is_active").and_then(Value::as_bool).unwrap_or(false);
+        let units = row.get("stock_units").and_then(Value::as_i64).unwrap_or(0);
+        let alert = row.get("min_alert_units").and_then(Value::as_i64).unwrap_or(0);
+        let bottle = row.get("retail_bottle_fcfa").and_then(Value::as_i64).unwrap_or(0);
+        if is_active {
+            active_count += 1;
+        }
+        if is_active && units < alert {
+            low_stock_count += 1;
+        }
+        stock_units += units.max(0);
+        stock_value_fcfa += units.max(0) * bottle.max(0);
+    }
+    Ok(json!({
+        "variants": variants,
+        "total_count": active_count,
+        "archived_count": variants.len() as i64 - active_count,
+        "low_stock_count": low_stock_count,
+        "stock_units": stock_units,
+        "stock_value_fcfa": stock_value_fcfa,
+        "stock_value_is_indicative": true
+    }))
 }
 
 pub fn get_pending_operations(conn: &Connection, payload: &Value) -> CoreResult<Value> {
@@ -2636,7 +2923,8 @@ pub fn get_sale_receipt(conn: &Connection, payload: &Value) -> CoreResult<Value>
     let (receipt, customer, customer_id, subtotal, discount, total, paid, pending, credit, occurred_at, sync_status) =
         row.ok_or_else(|| CoreError::new("SALE_NOT_FOUND", "Vente introuvable sur cet établissement."))?;
     let mut stmt = conn.prepare(
-        "SELECT variant_name, unit_code, unit_count, physical_units, unit_price_fcfa, line_total_fcfa
+        "SELECT variant_name, unit_code, unit_count, physical_units, unit_price_fcfa, line_total_fcfa,
+                is_mixed, is_packaging
          FROM sale_lines WHERE sale_id = ?1 ORDER BY id",
     )?;
     let lines: Vec<Value> = stmt.query_map(params![sale_id], |r| {
@@ -2646,7 +2934,9 @@ pub fn get_sale_receipt(conn: &Connection, payload: &Value) -> CoreResult<Value>
             "unit_count": r.get::<_, i64>(2)?,
             "physical_units": r.get::<_, i64>(3)?,
             "unit_price_fcfa": r.get::<_, i64>(4)?,
-            "line_total_fcfa": r.get::<_, i64>(5)?
+            "line_total_fcfa": r.get::<_, i64>(5)?,
+            "is_mixed": r.get::<_, i64>(6)? == 1,
+            "is_packaging": r.get::<_, i64>(7)? == 1
         }))
     })?.collect::<Result<_, _>>()?;
     Ok(json!({
@@ -2960,6 +3250,11 @@ pub fn save_product_variant(conn: &mut Connection, payload: &Value) -> CoreResul
     let category = field_str_opt(payload, "category").map(str::to_string);
     let description = field_str_opt(payload, "description").map(str::to_string);
     let photo_path = field_str_opt(payload, "photo_path").map(str::to_string);
+    // Statut d'activité piloté par la même écriture que la fiche produit :
+    // `None` conserve l'état courant (une modification ne réactive pas un
+    // produit archivé par inadvertance).
+    let is_active = payload.get("is_active").and_then(Value::as_bool);
+    let is_active_param = is_active.map(|flag| if flag { 1_i64 } else { 0_i64 });
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let variant_id = match field_str_opt(payload, "variant_id").map(str::to_string) {
         Some(id) => {
@@ -2971,11 +3266,11 @@ pub fn save_product_variant(conn: &mut Connection, payload: &Value) -> CoreResul
                 return Err(CoreError::new("VARIANT_NOT_FOUND", "Variante introuvable."));
             }
             tx.execute(
-                "UPDATE product_variants SET name=?2, brand=?3, sku=?4, volume_label=?5, container_type=?6, material=?7, bottle_profile_id=?8, crate_type_id=?9, pack_size=?10, retail_case_fcfa=?11, wholesale_case_fcfa=?12, retail_bottle_fcfa=?13, category=?14, description=?15, photo_path=?16, is_returnable=?17, price_revision=price_revision+1 WHERE id=?1",
+                "UPDATE product_variants SET name=?2, brand=?3, sku=?4, volume_label=?5, container_type=?6, material=?7, bottle_profile_id=?8, crate_type_id=?9, pack_size=?10, retail_case_fcfa=?11, wholesale_case_fcfa=?12, retail_bottle_fcfa=?13, category=?14, description=?15, photo_path=?16, is_returnable=?17, is_active=COALESCE(?18, is_active), price_revision=price_revision+1 WHERE id=?1",
                 params![id, name, field_str(payload, "brand")?, sku, field_str(payload, "volume_label")?,
                     field_str(payload, "container_type")?, field_str(payload, "material")?, profile, crate_id,
                     pack_size, retail, wholesale, bottle, category, description, photo_path,
-                    if is_returnable { 1 } else { 0 }],
+                    if is_returnable { 1 } else { 0 }, is_active_param],
             )?;
             id
         }
@@ -3006,7 +3301,11 @@ pub fn save_product_variant(conn: &mut Connection, payload: &Value) -> CoreResul
     )?;
     db::audit(&tx, &a.branch_id, &a.user_id, "CATALOG_VARIANT_UPSERT", &format!("{variant_id} · {name}"))?;
     tx.commit()?;
-    Ok(json!({ "variant_id": variant_id, "synced": false }))
+    let is_active_now: i64 = conn.query_row(
+        "SELECT is_active FROM product_variants WHERE id = ?1",
+        params![variant_id], |r| r.get(0),
+    )?;
+    Ok(json!({ "variant_id": variant_id, "synced": false, "is_active": is_active_now == 1 }))
 }
 
 /// Mise à jour des prix avec historique immuable.
@@ -3733,6 +4032,8 @@ pub fn dispatch(conn: &mut Connection, command: &str, payload: &Value) -> CoreRe
         "getInventory" | "get_inventory" => get_inventory(conn, payload),
         "recordInventoryCount" | "record_inventory_count" => record_inventory_count(conn, payload),
         "getStockMovements" | "get_stock_movements" => get_stock_movements(conn, payload),
+        "getInventoryCounts" | "get_inventory_counts" => get_inventory_counts(conn, payload),
+        "getProductVariants" | "get_product_variants" => get_product_variants(conn, payload),
         "getCustomers" | "get_customers" => get_customers(conn, payload),
         "getSuppliers" | "get_suppliers" => get_suppliers(conn, payload),
         "getSales" | "get_sales" => get_sales(conn, payload),

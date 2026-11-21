@@ -578,3 +578,33 @@
 - **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Limites
   (fusion par point de vente, pas de dé-fusion) :
   `docs/PART26_FUSION_CLIENTS.md`.
+
+## LOT 49 — Stock, inventaires, produits et commandes clients branchés
+
+- **Besoin** : les quatre écrans doivent lire la même vérité, ne rien perdre en
+  route (mouvements anciens, inventaires passés, produits archivés, commandes
+  au-delà des 30 dernières) et se rafraîchir ensemble après toute écriture.
+- **Nouvelles lectures** `getProductVariants` (fiche + prix + stock + seuil +
+  statut) et `getInventoryCounts` (qui a compté, quand, quel écart, quel motif).
+- **Lectures refondues** : `getSales` (filtres client/période/crédit/recherche,
+  pagination, `total_count`, totaux de la sélection, `customer_id`, nombre de
+  lignes/mixtes/consignation) et `getStockMovements` (filtres type/période,
+  pagination, libellés produit et utilisateur joints).
+- **Écritures** : `recordInventoryCount` devient idempotent (`request_key`,
+  clé `inventory_…`, rejeu sans second écart) ; `saveProductVariant` accepte
+  `is_active` (absent ⇒ inchangé) et renvoie le statut ; `getSaleReceipt`
+  qualifie les lignes (`is_mixed`, `is_packaging`).
+- **Interface** : Stock (indicateurs, onglets unifiés, historique paginé,
+  passerelles), **nouvel écran Inventaires** (session multi-références motivée,
+  historique, contrôle croisé), Produits (recherche, archivées, stock par
+  référence, prix et archivage partagés), Commandes clients (filtres moteur,
+  totaux, pagination, lien depuis une fiche client).
+- **Invalidation croisée** : un seul hook rafraîchit stock, mouvements,
+  inventaires, produits, ventes et tableau de bord.
+- **Aperçu web** : mêmes contrats, y compris le shim de navigation
+  (`navigate(nom, params)`).
+- **Tests** : `__tests__/part27-stock-sync.test.ts` (9 cas).
+- **Validation exécutée** : Jest **25 suites / 171 tests**, `tsc` x2 (0), ESLint
+  (0 erreur), `vite build`, tree-sitter sur 3 fichiers Rust.
+- **Non exécuté** : `cargo test` / `cargo check`, builds natifs, E2E. Détail et
+  limites : `docs/PART27_UNIFORMITE_STOCK.md`.

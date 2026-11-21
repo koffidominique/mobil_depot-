@@ -31,7 +31,7 @@ npm run web:typecheck
 node scripts/verify-web-preview.mjs
 ```
 
-Le script bundle l'aperçu avec les mêmes alias, le rend dans JSDOM, saisit le PIN `1234`, clique sur « Se connecter » et vérifie que l'accueil s'affiche sans erreur. Il est exécuté en CI dans le job TypeScript.
+Le script bundle l'aperçu avec les mêmes alias, le rend dans JSDOM, saisit le PIN `1234`, clique sur « Se connecter », puis **parcourt les écrans Stock, Inventaires, Produits et Commandes clients** (ouverture, contenu attendu, retour) avant de vérifier que l'accueil s'affiche sans aucune erreur console. Il est exécuté en CI dans le job TypeScript : une régression d'écran ou un avertissement React fait échouer la vérification.
 
 ## Limites
 

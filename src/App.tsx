@@ -32,6 +32,7 @@ import { CratesScreen } from './screens/CratesScreen';
 import { CashScreen } from './screens/CashScreen';
 import { ReportsScreen } from './screens/ReportsScreen';
 import { CatalogScreen } from './screens/CatalogScreen';
+import { InventoryScreen } from './screens/InventoryScreen';
 import { MixedOrderScreen } from './screens/MixedOrderScreen';
 import { CustomerMergeScreen } from './screens/CustomerMergeScreen';
 import { ReceiptsScreen } from './screens/ReceiptsScreen';
@@ -199,10 +200,11 @@ function Bootstrap() {
             <Stack.Screen name="Crates" component={CratesScreen} options={{ headerShown: true, title: 'Casiers plastique' }} />
             <Stack.Screen name="Cash" component={CashScreen} options={{ headerShown: true, title: 'Caisse' }} />
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ headerShown: true, title: 'Rapports' }} />
-            <Stack.Screen name="Catalog" component={CatalogScreen} options={{ headerShown: true, title: 'Catalogue' }} />
+            <Stack.Screen name="Catalog" component={CatalogScreen} options={{ headerShown: true, title: 'Produits & catalogue' }} />
+            <Stack.Screen name="Inventories" component={InventoryScreen} options={{ headerShown: true, title: 'Inventaires physiques' }} />
             <Stack.Screen name="MixedOrder" component={MixedOrderScreen} options={{ headerShown: true, title: 'Casier mixte' }} />
             <Stack.Screen name="CustomerMerge" component={CustomerMergeScreen} options={{ headerShown: true, title: 'Fusion de fiches' }} />
-            <Stack.Screen name="Receipts" component={ReceiptsScreen} options={{ headerShown: true, title: 'Reçus' }} />
+            <Stack.Screen name="Receipts" component={ReceiptsScreen} options={{ headerShown: true, title: 'Commandes clients' }} />
             <Stack.Screen name="Statement" component={StatementScreen} options={{ headerShown: true, title: 'Bordereaux' }} />
             <Stack.Screen name="Desktop" component={DesktopScreen} options={{ headerShown: true, title: 'Parité Desktop' }} />
           </>

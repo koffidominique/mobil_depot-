@@ -3,7 +3,15 @@ import NetInfo from '@react-native-community/netinfo';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { buildSyncEnvelope } from '../core/apiContracts';
 import { depot, getAuthToken } from '../core/client';
-import type { SyncAcknowledgement, SyncUpdate } from '../core/types';
+import type {
+  InventoryCountFilter,
+  ProductVariantFilter,
+  SalesFilter,
+  StockMovementFilter,
+  SyncAcknowledgement,
+  SyncUpdate,
+} from '../core/types';
+import { newRequestKey } from '../core/requestKey';
 import {
   cursorAfterPush,
   MAX_PULL_PAGES,
@@ -30,8 +38,35 @@ export function useSuppliers() {
   return useQuery({ queryKey: ['suppliers'], queryFn: () => depot.getSuppliers() });
 }
 
-export function useSales() {
-  return useQuery({ queryKey: ['sales'], queryFn: () => depot.getSales() });
+export function useSales(filter: SalesFilter = {}) {
+  return useQuery({
+    queryKey: ['sales', filter],
+    queryFn: () => depot.getSales(filter),
+  });
+}
+
+/** Historique des mouvements de stock, filtré et paginé par le moteur. */
+export function useStockMovements(filter: StockMovementFilter = {}) {
+  return useQuery({
+    queryKey: ['stock-movements', filter],
+    queryFn: () => depot.getStockMovements(filter),
+  });
+}
+
+/** Inventaires physiques déjà enregistrés (qui, quand, quel écart, quel motif). */
+export function useInventoryCounts(filter: InventoryCountFilter = {}) {
+  return useQuery({
+    queryKey: ['inventory-counts', filter],
+    queryFn: () => depot.getInventoryCounts(filter),
+  });
+}
+
+/** Catalogue + stock physiques : projection unique de l'écran Produits. */
+export function useProductVariants(filter: ProductVariantFilter = {}) {
+  return useQuery({
+    queryKey: ['product-variants', filter],
+    queryFn: () => depot.getProductVariants(filter),
+  });
 }
 
 /** Connectivité observée en direct : l'interface ne promet jamais un état garanti. */
@@ -49,6 +84,71 @@ export function useConnectivity() {
     };
   }, []);
   return online;
+}
+
+/**
+ * Familles de données touchées par une écriture du domaine stock/catalogue.
+ * Une seule invalidation : la caisse, le stock, les inventaires, les produits et
+ * les commandes lisent ensuite la même vérité, sans recalcul local.
+ */
+export function useInvalidateStockDomain() {
+  const queryClient = useQueryClient();
+  return async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
+      queryClient.invalidateQueries({ queryKey: ['inventory-counts'] }),
+      queryClient.invalidateQueries({ queryKey: ['product-variants'] }),
+      queryClient.invalidateQueries({ queryKey: ['catalog-products'] }),
+      queryClient.invalidateQueries({ queryKey: ['catalog-dashboard'] }),
+      queryClient.invalidateQueries({ queryKey: ['sales'] }),
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      queryClient.invalidateQueries({ queryKey: ['sync-status'] }),
+    ]);
+  };
+}
+
+/** Comptage d'inventaire : écart motivé, idempotent, puis rafraîchissement global. */
+export function useRecordInventoryCount() {
+  const invalidate = useInvalidateStockDomain();
+  return useMutation({
+    mutationFn: (input: {
+      variant_id: string;
+      counted_qty: number;
+      reason: string;
+      /** Clé stable de la session : le rejeu d'une ligne ne crée pas de doublon. */
+      request_key?: string;
+    }) => depot.recordInventoryCount({ ...input, request_key: input.request_key ?? newRequestKey('inv') }),
+    onSuccess: () => invalidate(),
+  });
+}
+
+/** Enregistrement d'une fiche produit (création ou édition) partagé caisse/stock. */
+export function useSaveProductVariant() {
+  const invalidate = useInvalidateStockDomain();
+  return useMutation({
+    mutationFn: (input: Parameters<typeof depot.saveProductVariant>[0]) =>
+      depot.saveProductVariant(input),
+    onSuccess: () => invalidate(),
+  });
+}
+
+export function useUpdateVariantPrices() {
+  const invalidate = useInvalidateStockDomain();
+  return useMutation({
+    mutationFn: (input: Parameters<typeof depot.updateVariantPrices>[0]) =>
+      depot.updateVariantPrices(input),
+    onSuccess: () => invalidate(),
+  });
+}
+
+/** Archivage : la référence reste visible dans l'historique, plus proposée à la vente. */
+export function useArchiveProductVariant() {
+  const invalidate = useInvalidateStockDomain();
+  return useMutation({
+    mutationFn: (variantId: string) => depot.archiveProductVariant(variantId),
+    onSuccess: () => invalidate(),
+  });
 }
 
 export function useSyncStatus() {

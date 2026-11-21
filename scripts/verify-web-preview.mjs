@@ -74,6 +74,36 @@ try {
     button?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 2500));
   }
+  // Parcours des écrans du lot 49 : Stock, Inventaires, Produits et Commandes
+  // clients doivent s'ouvrir sans erreur, avec leurs données, dans l'aperçu.
+  const clickBy = async (selector, fragment) => {
+    const node = [...window.document.querySelectorAll(selector)]
+      .find((element) => (element.textContent ?? '').includes(fragment));
+    if (!node) return false;
+    node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    return true;
+  };
+  const walk = [];
+  const visit = async (label, selector, fragment, expected, back = false) => {
+    const clicked = await clickBy(selector, fragment);
+    const text = window.document.body.textContent ?? '';
+    walk.push({ label, ok: clicked && text.includes(expected), expected, found: text.includes(expected) });
+    if (back) await clickBy('[role="button"]', '←');
+  };
+  await visit('Stock', '[role="tab"]', 'Stock', "Vue d'ensemble");
+  await visit('Inventaires', '[role="button"]', 'Inventaires physiques : compter', 'Nouvelle session de comptage', true);
+  await visit('Menu', '[role="tab"]', 'Menu', 'Verrouiller la session');
+  await visit('Produits', '[role="button"]', 'Produits & catalogue', 'Références', true);
+  await visit('Stock (retour)', '[role="tab"]', 'Stock', "Vue d'ensemble");
+  await visit('Commandes clients', '[role="button"]', 'Commandes clients : reçus', 'Sélection', true);
+  for (const entry of walk) {
+    console.log(
+      `Écran ${entry.label} : ${entry.ok ? 'OK' : 'ÉCHEC'} (attendu « ${entry.expected} » ${entry.found ? 'présent' : 'ABSENT'})`,
+    );
+  }
+  if (walk.some((entry) => !entry.ok)) process.exitCode = 1;
+
   const signedInText = window.document.body.textContent ?? '';
   const missingSignedIn = ['Accueil', 'Ventes', 'Menu'].filter((token) => !signedInText.includes(token));
   console.log(`Après connexion : ${signedInText.length} caractères · ${errors.length} erreur(s) · ${JSON.stringify(signedInText.slice(0, 140))}`);

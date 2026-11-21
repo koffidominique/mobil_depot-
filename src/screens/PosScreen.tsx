@@ -221,6 +221,8 @@ export function PosScreen() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory'] }),
+        queryClient.invalidateQueries({ queryKey: ['product-variants'] }),
+        queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
         queryClient.invalidateQueries({ queryKey: ['sales'] }),
         queryClient.invalidateQueries({ queryKey: ['crate-stock'] }),
         queryClient.invalidateQueries({ queryKey: ['crate-movements'] }),

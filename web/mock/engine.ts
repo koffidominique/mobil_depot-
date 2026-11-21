@@ -284,9 +284,18 @@ const orders: AnyRecord[] = [
   { order_id: 'po_seed_01', reference: 'BC-2026-0041', supplier_id: 'sup_brasserie', supplier_name: "Brasseries de Côte d'Ivoire", total_fcfa: 150000, received_fcfa: 72000, status: 'PARTIAL_RECEIVED', created_at: now - 86400000 },
 ];
 
-const movements = [
+const movements: AnyRecord[] = [
   { id: 'smov_web_1', movement_type: 'SALE', qty: -12, reason: 'Vente REC-2026-0042', document_id: 'sale_web_1', occurred_at: now - 3600000, variant_id: 'var_beaufort_50' },
   { id: 'smov_web_2', movement_type: 'PURCHASE', qty: 120, reason: 'Réception BC-2026-0041', document_id: 'po_seed_01', occurred_at: now - 86400000, variant_id: 'var_drogba_50' },
+];
+
+/** Journal des inventaires physiques : même source que l'écran Inventaires. */
+const inventoryCounts: AnyRecord[] = [
+  {
+    inventory_id: 'inv_seed_01', variant_id: 'var_beaufort_50', counted_qty: 36, difference_qty: 4,
+    reason: 'Casse constatée en réserve', user_id: 'user_owner', user_name: 'Awa Koné',
+    occurred_at: now - 5400000, previous_qty: 32,
+  },
 ];
 
 const state = {
@@ -300,6 +309,7 @@ const state = {
   transfers: [] as AnyRecord[],
   saleRequests: {} as Record<string, AnyRecord>,
   mergeRequests: {} as Record<string, AnyRecord>,
+  inventoryRequests: {} as Record<string, AnyRecord>,
 };
 
 function integer(value: unknown, field: string) {
@@ -798,13 +808,55 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
     case 'getInventory': return {
       full_drinks: variants.map((item) => {
         const crate = item.crate_type_id ? crates.find((row) => row.crate_type_id === item.crate_type_id) : undefined;
-        return { ...item, allow_half_case: crate ? crate.allow_half_case !== false : false, crate_capacity: crate?.capacity ?? item.pack_size };
+        return {
+          ...item, is_active: item.is_active !== false,
+          allow_half_case: crate ? crate.allow_half_case !== false : false,
+          crate_capacity: crate?.capacity ?? item.pack_size,
+        };
       }),
       empty_bottles_qty: 48, empty_crates_qty: 18,
     };
     case 'getCustomers': return { customers: customers.map(({ total_purchases_fcfa: _total_purchases_fcfa, total_paid_fcfa: _total_paid_fcfa, ...rest }) => ({ ...rest, outstanding_fcfa: rest.financial_balance_fcfa, available_credit_fcfa: Math.max(0, rest.credit_limit_fcfa - rest.financial_balance_fcfa) })) };
     case 'getSuppliers': return { suppliers };
-    case 'getSales': return { sales: sales.map(({ id, receipt_number, customer_name, total_fcfa, credit_fcfa, sync_status, occurred_at }) => ({ id, receipt_number, customer_name, total_fcfa, credit_fcfa, sync_status, occurred_at })) };
+    case 'getSales': {
+      const term = String(payload.search ?? '').trim().toLowerCase();
+      const filtered = sales
+        .filter((sale) => !payload.customer_id || sale.customer_id === payload.customer_id)
+        .filter((sale) => payload.from_ms === undefined || sale.occurred_at >= Number(payload.from_ms))
+        .filter((sale) => payload.to_ms === undefined || sale.occurred_at <= Number(payload.to_ms))
+        .filter((sale) => !payload.credit_only || sale.credit_fcfa > 0)
+        .filter((sale) => !term
+          || String(sale.receipt_number).toLowerCase().includes(term)
+          || String(sale.customer_name).toLowerCase().includes(term))
+        .sort((left, right) => right.occurred_at - left.occurred_at);
+      const limit = Math.min(Math.max(Number(payload.limit ?? 50), 1), 200);
+      const offset = Math.max(Number(payload.offset ?? 0), 0);
+      const page = filtered.slice(offset, offset + limit).map((sale) => {
+        const lines = (sale.lines ?? []) as AnyRecord[];
+        return {
+          id: sale.id, receipt_number: sale.receipt_number,
+          customer_id: sale.customer_id ?? null, customer_name: sale.customer_name,
+          total_fcfa: sale.total_fcfa, credit_fcfa: sale.credit_fcfa,
+          paid_confirmed_fcfa: sale.paid_confirmed_fcfa ?? sale.total_fcfa - sale.credit_fcfa,
+          pending_mobile_money_fcfa: sale.pending_mobile_money_fcfa ?? 0,
+          discount_fcfa: sale.discount_fcfa ?? 0, sync_status: sale.sync_status,
+          occurred_at: sale.occurred_at, price_tier: sale.price_tier ?? 'RETAIL',
+          line_count: lines.length,
+          mixed_line_count: lines.filter((line) => line.is_mixed || line.unit === 'HALF_CASE' || line.unit === 'MIXED_CASE').length,
+          packaging_line_count: lines.filter((line) => line.is_packaging).length,
+        };
+      });
+      return {
+        sales: page,
+        total_count: filtered.length,
+        totals: {
+          total_fcfa: filtered.reduce((sum, sale) => sum + sale.total_fcfa, 0),
+          credit_fcfa: filtered.reduce((sum, sale) => sum + sale.credit_fcfa, 0),
+          paid_confirmed_fcfa: filtered.reduce((sum, sale) => sum + (sale.paid_confirmed_fcfa ?? sale.total_fcfa - sale.credit_fcfa), 0),
+        },
+        limit, offset,
+      };
+    }
     case 'getCustomerAccount': {
       const customer = customers.find((item) => item.id === payload.customer_id) ?? customers[0]!;
       const crateAccount = crateBalance('CUSTOMER', customer.id);
@@ -827,16 +879,123 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
         crate_balance_is_financial_debt: false,
       };
     }
-    case 'getStockMovements': return { movements: payload.variant_id ? movements.filter((item) => item.variant_id === payload.variant_id) : movements };
+    case 'getStockMovements': {
+      const limit = Math.min(Math.max(Number(payload.limit ?? 100), 1), 200);
+      const offset = Math.max(Number(payload.offset ?? 0), 0);
+      const filtered = movements
+        .filter((item) => !payload.variant_id || item.variant_id === payload.variant_id)
+        .filter((item) => !payload.movement_type || item.movement_type === payload.movement_type)
+        .filter((item) => payload.from_ms === undefined || item.occurred_at >= Number(payload.from_ms))
+        .filter((item) => payload.to_ms === undefined || item.occurred_at <= Number(payload.to_ms))
+        .sort((left, right) => right.occurred_at - left.occurred_at)
+        .map((item) => {
+          const variant = variants.find((row) => row.variant_id === item.variant_id);
+          // Projection alignée sur le moteur Rust : l'identifiant du mouvement
+          // est `movement_id` (le jeu pilote le stocke en `id`).
+          return {
+            movement_id: String(item.movement_id ?? item.id),
+            variant_id: item.variant_id,
+            movement_type: item.movement_type,
+            qty: item.qty,
+            reason: item.reason,
+            document_id: item.document_id ?? '',
+            user_id: item.user_id ?? 'user_owner',
+            device_id: item.device_id ?? 'dev_mobile_01',
+            occurred_at: item.occurred_at,
+            variant_name: variant?.name ?? item.variant_id,
+            volume_label: variant?.volume_label ?? '',
+            user_name: item.user_name ?? 'Awa Koné',
+          };
+        });
+      return { movements: filtered.slice(offset, offset + limit), total_count: filtered.length, limit, offset };
+    }
     case 'recordInventoryCount': {
+      const requestKey = String(payload.request_key ?? '').trim();
+      if (requestKey && state.inventoryRequests[requestKey]) return { ...state.inventoryRequests[requestKey], idempotent: true };
       const variant = variants.find((item) => item.variant_id === payload.variant_id);
       if (!variant) throw new Error('VARIANT_NOT_FOUND');
       const previous = variant.full_units_qty;
       const counted = integer(payload.counted_qty, 'counted_qty');
-      if (String(payload.reason ?? '').trim().length < 3) throw new Error('REASON_REQUIRED: motif requis');
+      if (counted < 0) throw new Error('INVALID_QUANTITY: quantité négative interdite');
+      const reason = String(payload.reason ?? '').trim();
+      if (reason.length < 3) throw new Error('REASON_REQUIRED: motif requis');
       variant.full_units_qty = counted;
-      movements.unshift({ id: nextId('smov'), variant_id: variant.variant_id, movement_type: 'INVENTORY_ADJUSTMENT', qty: counted - previous, reason: String(payload.reason), document_id: nextId('inv'), occurred_at: Date.now() });
-      return { previous_qty: previous, counted_qty: counted, difference_qty: counted - previous };
+      const inventoryId = nextId('inv');
+      const occurredAt = Date.now();
+      movements.unshift({ id: nextId('smov'), variant_id: variant.variant_id, movement_type: 'INVENTORY_ADJUSTMENT', qty: counted - previous, reason, document_id: inventoryId, occurred_at: occurredAt });
+      inventoryCounts.unshift({
+        inventory_id: inventoryId, variant_id: variant.variant_id, counted_qty: counted,
+        difference_qty: counted - previous, previous_qty: previous, reason,
+        user_id: 'user_owner', user_name: 'Awa Koné', occurred_at: occurredAt,
+      });
+      const result = { inventory_id: inventoryId, variant_id: variant.variant_id, previous_qty: previous, counted_qty: counted, difference_qty: counted - previous };
+      if (requestKey) state.inventoryRequests[requestKey] = result;
+      return result;
+    }
+    case 'getInventoryCounts': {
+      const limit = Math.min(Math.max(Number(payload.limit ?? 50), 1), 200);
+      const offset = Math.max(Number(payload.offset ?? 0), 0);
+      const filtered: AnyRecord[] = inventoryCounts
+        .filter((item) => !payload.variant_id || item.variant_id === payload.variant_id)
+        .filter((item) => payload.from_ms === undefined || item.occurred_at >= Number(payload.from_ms))
+        .filter((item) => payload.to_ms === undefined || item.occurred_at <= Number(payload.to_ms))
+        .sort((left, right) => right.occurred_at - left.occurred_at)
+        .map((item) => {
+          const variant = variants.find((row) => row.variant_id === item.variant_id);
+          return {
+            ...item,
+            variant_name: variant?.name ?? item.variant_id,
+            volume_label: variant?.volume_label ?? '',
+            previous_qty: item.previous_qty ?? item.counted_qty - item.difference_qty,
+          };
+        });
+      return {
+        counts: filtered.slice(offset, offset + limit),
+        total_count: filtered.length,
+        totals: {
+          absolute_difference_units: filtered.reduce((sum, item) => sum + Math.abs(item.difference_qty), 0),
+          discrepancy_count: filtered.filter((item) => item.difference_qty !== 0).length,
+        },
+        limit, offset,
+      };
+    }
+    case 'getProductVariants': {
+      const term = String(payload.search ?? '').trim().toLowerCase();
+      const includeInactive = payload.include_inactive !== false;
+      const rows = variants
+        .map((variant) => {
+          const catalog = catalogVariants.find((row) => row.variant_id === variant.variant_id);
+          return {
+            variant_id: variant.variant_id, sku: String(variant.sku ?? catalog?.sku ?? ''),
+            name: variant.name, brand: variant.brand ?? '', volume_label: variant.volume_label ?? '',
+            container_type: variant.container_type ?? '', material: variant.material ?? '',
+            pack_size: variant.pack_size, retail_case_fcfa: variant.retail_case_fcfa,
+            wholesale_case_fcfa: variant.wholesale_case_fcfa, retail_bottle_fcfa: variant.retail_bottle_fcfa,
+            category: (catalog?.category_name ?? variant.category ?? null) as string | null,
+            bottle_profile_id: variant.bottle_profile_id ?? null,
+            crate_type_id: variant.crate_type_id ?? null,
+            is_active: variant.is_active !== false,
+            price_revision: variant.price_revision ?? 1,
+            is_returnable: Boolean(catalog?.is_returnable ?? variant.bottle_profile_id ?? variant.crate_type_id),
+            stock_units: variant.full_units_qty,
+            min_alert_units: variant.min_alert_units,
+          };
+        })
+        .filter((row) => includeInactive || row.is_active)
+        .filter((row) => !term || `${row.name} ${row.sku} ${row.brand}`.toLowerCase().includes(term))
+        .filter((row) => !payload.category || row.category === payload.category)
+        .filter((row) => !payload.low_stock_only || row.stock_units < row.min_alert_units)
+        .sort((left, right) => Number(right.is_active) - Number(left.is_active) || left.name.localeCompare(right.name));
+      const active = rows.filter((row) => row.is_active);
+      return {
+        variants: rows,
+        total_count: active.length,
+        archived_count: rows.length - active.length,
+        low_stock_count: active.filter((row) => row.stock_units < row.min_alert_units).length,
+        stock_units: active.reduce((sum, row) => sum + Math.max(0, row.stock_units), 0),
+        stock_value_fcfa: active.reduce((sum, row) => sum + Math.max(0, row.stock_units) * row.retail_bottle_fcfa, 0),
+        stock_value_is_indicative: true,
+      };
     }
     case 'validateSale': {
       const lines = (payload.lines ?? []) as AnyRecord[];
@@ -1657,21 +1816,62 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       const sku = String(payload.sku ?? '').trim();
       const name = String(payload.name ?? '').trim();
       if (!sku || !name) throw new Error('INVALID_VARIANT: SKU et nom obligatoires');
-      const existing = catalogVariants.find((item) => item.sku === sku);
-      const variantId = payload.variant_id ?? existing?.variant_id ?? `var_${catalogSlug(sku)}`;
-      if (!existing) {
-        catalogVariants.push({
-          variant_id: variantId, sku, name, brand: String(payload.brand ?? ''),
-          volume_label: String(payload.volume_label ?? ''), container_type: String(payload.container_type ?? 'Bouteille'),
-          material: String(payload.material ?? 'Verre'), pack_size: Number(payload.pack_size ?? 1),
-          retail_case_fcfa: Number(payload.retail_case_fcfa ?? 0), wholesale_case_fcfa: Number(payload.wholesale_case_fcfa ?? 0),
-          retail_bottle_fcfa: Number(payload.retail_bottle_fcfa ?? 0),
-          crate_type_id: payload.crate_type_id ?? null, is_active: true, to_verify: false,
-          producer_id: catalogProducers[0]?.producer_id ?? null, category_id: null, brand_id: null,
-          category_name: String(payload.category ?? 'Divers'), source: 'OWNER',
-        });
+      const packSize = Number(payload.pack_size ?? 1);
+      if (!Number.isSafeInteger(packSize) || packSize <= 0) throw new Error('INVALID_PACK_SIZE: contenance positive requise');
+      const retail = integer(payload.retail_case_fcfa ?? 0, 'retail_case_fcfa');
+      const wholesale = integer(payload.wholesale_case_fcfa ?? 0, 'wholesale_case_fcfa');
+      const bottle = integer(payload.retail_bottle_fcfa ?? 0, 'retail_bottle_fcfa');
+      for (const amount of [retail, wholesale, bottle]) {
+        if (amount < 0) throw new Error('INVALID_PRICE: prix négatif interdit');
       }
-      return { variant_id: variantId, synced: false };
+      const isActive = payload.is_active === undefined ? undefined : Boolean(payload.is_active);
+      const existing = catalogVariants.find((item) => item.sku === sku || item.variant_id === payload.variant_id);
+      const variantId = payload.variant_id ?? existing?.variant_id ?? `var_${catalogSlug(sku)}`;
+      const catalogRow = existing ?? {
+        variant_id: variantId, sku, name, brand: String(payload.brand ?? ''),
+        volume_label: String(payload.volume_label ?? ''), container_type: String(payload.container_type ?? 'Bouteille'),
+        material: String(payload.material ?? 'Verre'), pack_size: packSize,
+        retail_case_fcfa: retail, wholesale_case_fcfa: wholesale, retail_bottle_fcfa: bottle,
+        crate_type_id: payload.crate_type_id ?? null, is_active: true, to_verify: false,
+        producer_id: catalogProducers[0]?.producer_id ?? null, category_id: null, brand_id: null,
+        category_name: String(payload.category ?? 'Divers'), source: 'OWNER',
+      };
+      Object.assign(catalogRow, {
+        sku, name, brand: String(payload.brand ?? catalogRow.brand ?? ''),
+        volume_label: String(payload.volume_label ?? catalogRow.volume_label ?? ''),
+        container_type: String(payload.container_type ?? catalogRow.container_type ?? 'Bouteille'),
+        material: String(payload.material ?? catalogRow.material ?? 'Verre'),
+        pack_size: packSize, retail_case_fcfa: retail, wholesale_case_fcfa: wholesale,
+        retail_bottle_fcfa: bottle, crate_type_id: payload.crate_type_id ?? catalogRow.crate_type_id ?? null,
+        category_name: String(payload.category ?? catalogRow.category_name ?? 'Divers'),
+        ...(isActive === undefined ? {} : { is_active: isActive }),
+      });
+      if (!existing) catalogVariants.push(catalogRow);
+      // La fiche produit et le stock physique sont la même référence : une
+      // création ouvre le solde à 0, une modification met à jour prix et libellés
+      // partout (caisse, stock, inventaire) sans duplication.
+      const stockRow = variants.find((item) => item.variant_id === variantId);
+      if (stockRow) {
+        Object.assign(stockRow, {
+          sku, name, brand: catalogRow.brand, volume_label: catalogRow.volume_label,
+          container_type: catalogRow.container_type, material: catalogRow.material,
+          pack_size: packSize, retail_case_fcfa: retail, wholesale_case_fcfa: wholesale,
+          retail_bottle_fcfa: bottle, crate_type_id: catalogRow.crate_type_id ?? null,
+          category: catalogRow.category_name,
+          ...(isActive === undefined ? {} : { is_active: isActive }),
+        });
+      } else {
+        variants.push({
+          variant_id: variantId, sku, name, brand: catalogRow.brand,
+          volume_label: catalogRow.volume_label, container_type: catalogRow.container_type,
+          material: catalogRow.material, category: catalogRow.category_name,
+          pack_size: packSize, retail_bottle_fcfa: bottle, retail_case_fcfa: retail,
+          wholesale_case_fcfa: wholesale, bottle_profile_id: null,
+          crate_type_id: catalogRow.crate_type_id ?? null, compatibility_group_id: '',
+          full_units_qty: 0, min_alert_units: 12, is_active: catalogRow.is_active !== false,
+        } as Variant);
+      }
+      return { variant_id: variantId, synced: false, is_active: catalogRow.is_active !== false };
     }
     case 'updateVariantPrices': {
       const row = catalogVariants.find((item) => item.variant_id === payload.variant_id);
@@ -1679,9 +1879,23 @@ function execute(command: string, payload: AnyRecord = {}): unknown {
       row.retail_case_fcfa = integer(payload.retail_case_fcfa, 'retail_case_fcfa');
       row.wholesale_case_fcfa = integer(payload.wholesale_case_fcfa, 'wholesale_case_fcfa');
       row.retail_bottle_fcfa = integer(payload.retail_bottle_fcfa, 'retail_bottle_fcfa');
-      return { variant_id: payload.variant_id, price_revision: 2 };
+      const stockRow = variants.find((item) => item.variant_id === payload.variant_id);
+      if (stockRow) {
+        stockRow.retail_case_fcfa = row.retail_case_fcfa;
+        stockRow.wholesale_case_fcfa = row.wholesale_case_fcfa;
+        stockRow.retail_bottle_fcfa = row.retail_bottle_fcfa;
+        stockRow.price_revision = Number(stockRow.price_revision ?? 1) + 1;
+      }
+      return { variant_id: payload.variant_id, price_revision: Number(stockRow?.price_revision ?? 2) };
     }
-    case 'archiveProductVariant': return { variant_id: payload.variant_id, status: 'ARCHIVED' };
+    case 'archiveProductVariant': {
+      const row = catalogVariants.find((item) => item.variant_id === payload.variant_id);
+      if (!row) throw new Error('VARIANT_NOT_FOUND: variante introuvable');
+      row.is_active = false;
+      const stockRow = variants.find((item) => item.variant_id === payload.variant_id);
+      if (stockRow) stockRow.is_active = false;
+      return { variant_id: payload.variant_id, status: 'ARCHIVED' };
+    }
     case 'createCrateType': return { crate_type_id: nextId('crate'), code: payload.code };
     case 'updateCrateType': {
       const crate = crates.find((item) => item.crate_type_id === payload.crate_type_id);
